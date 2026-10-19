@@ -426,6 +426,13 @@ end
 function AH._pump()
     local A = CA()
     if not (A and A.SendSearchQuery) or not AH.open then return end
+    -- the bag scan has a time limit (decision 322): when it ends, a bag search still waited for is dropped
+    local BUY = OMQ.AuctionBuy
+    if BUY and BUY._bagWatch and BUY._bagWatch() and asking and type(asking.key) == "string"
+        and (asking.key:find("^bags") or asking.key:find("^g%d")) then
+        asking = nil
+        AH.Refresh()
+    end
     if asking then
         if now() - askedAt < AH.QUERY_TIMEOUT then return end
         gotPrice(asking)                               -- no answer: read what is there
@@ -461,6 +468,7 @@ function AH._pump()
     end
 end
 AH._KeyString = function(k) return keyString(k) end
+AH._Asking = function() return asking, asking and (now() - askedAt) or 0 end      -- for /omq ah bags (decision 322)
 
 ----------------------------------------------------------------------
 -- Posting (from a click: the game demands one)

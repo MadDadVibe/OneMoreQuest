@@ -583,7 +583,7 @@ end
 local bagBrowse = { state = "idle" }
 local bagCands = {}
 B._bagBrowse, B._bagCands = bagBrowse, bagCands
-B.BAG_ROWS = 3
+B.BAG_ROWS = 6
 B.BAG_LABEL = { ["1/0"] = "bag", ["1/1"] = "soul bag", ["1/2"] = "herb bag", ["1/3"] = "enchanting bag", ["1/4"] = "engineering bag",
                 ["11/2"] = "quiver", ["11/3"] = "ammo pouch" }
 B.PROF_BAG = { [182] = 2, [333] = 3, [202] = 4 }       -- skill line -> bag subclass (herbs, enchanting, engineering)
@@ -657,6 +657,9 @@ end
 -- brings nothing new, or the safety limit B.BAG_PAGES, ends it early. Then every result is judged. The slot count comes from the item's tooltip; the game knows it only once the item is loaded, so
 -- unread bags are loaded and judged again (at most B.BAG_TRIES times).
 B.BAG_PAGES, B.BAG_TRIES, B.BAG_RETRY = 500, 3, 1.5
+-- decision 322: the whole bag scan (pages, loading, prices) ends after B.BAG_MAX seconds whatever happens;
+-- what was found by then is shown, a price still missing counts as "none"
+B.BAG_MAX = 45
 
 local function judgeBags()
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
@@ -680,21 +683,28 @@ local function judgeBags()
                 if k == "1/0" then ok = worn.normal ~= nil and slots > worn.normal
                 else ok = want[k] and slots > (worn.kinds[k] or 0) end
                 if not ok then st.notBetter = st.notBetter + 1 end
-                local cur = bestOf[k]
-                if ok and (not cur or slots > cur.slots or (slots == cur.slots and res.minPrice < cur.price)) then
-                    bestOf[k] = { itemKey = res.itemKey, itemID = id, slots = slots, price = res.minPrice, bagKind = k }
+                -- one row per bag type (decision 322): the kind and the slots, e.g. "herb bag 12"; the cheapest of it
+                local t = k .. ":" .. slots
+                local cur = bestOf[t]
+                if ok and (not cur or (res.minPrice or 0) < cur.price) then
+                    bestOf[t] = { itemKey = res.itemKey, itemID = id, slots = slots, price = res.minPrice or 0, bagKind = k }
                 end
             end
         end
     end
     bagBrowse.stats = st
-    for k, c in pairs(bestOf) do
-        c.key, c.state, c.anyKey = "g" .. k, "price", true
+    for t, c in pairs(bestOf) do
+        local k = c.bagKind
+        c.key, c.state, c.anyKey = "g" .. t, "price", true
         c.onResult = function(x) x.offers = readOffers(x); x.checkedAt = now(); x.state = #x.offers > 0 and "ok" or "none" end
         c.replaces = (k == "1/0") and worn.normal or (worn.kinds[k] or 0)
         bagCands[#bagCands + 1] = c
     end
-    table.sort(bagCands, function(a, b) return a.bagKind < b.bagKind end)
+    -- normal bags first, then the special kinds; within a kind the biggest first
+    table.sort(bagCands, function(a, b)
+        if a.bagKind ~= b.bagKind then return a.bagKind < b.bagKind end
+        return a.slots > b.slots
+    end)
     return unread
 end
 
@@ -751,18 +761,50 @@ function B.BagReport()
         string.format("results %d, bags %d, slots unread %d (tries %d), too dear %d, not bigger %d",
             st.results or 0, st.bags or 0, st.unread or 0, bagBrowse.tries or 0, st.tooDear or 0, st.notBetter or 0),
     }
+    local H = AH()
+    local q, age = nil, 0
+    if H and H._Asking then q, age = H._Asking() end
+    lines[#lines + 1] = string.format("running %ds%s%s; the queue waits for: %s",
+        bagBrowse.started and math.floor(now() - bagBrowse.started) or 0, bagBrowse.finished and ", finished" or "",
+        bagBrowse.timedOut and ", ended by the time limit" or "", q and (tostring(q.key) .. " since " .. math.floor(age) .. "s") or "nothing")
     for _, c in ipairs(bagCands) do
         lines[#lines + 1] = string.format("  %s: item %d, %d slots, %s (%s)", B.BAG_LABEL[c.bagKind] or c.bagKind, c.itemID, c.slots, money0(c.price or 0), tostring(c.state))
     end
     return lines
 end
 
+-- the watchdog of the bag scan (decision 322)
+local function bagWatch()
+    if not (B.want.bags and bagBrowse.started) or bagBrowse.finished then return end
+    local pricing = false
+    for _, c in ipairs(bagCands) do if c.state == "price" then pricing = true end end
+    if bagBrowse.state == "done" and not pricing then bagBrowse.finished = true; return end
+    if now() - bagBrowse.started < B.BAG_MAX then return end
+    bagBrowse.finished, bagBrowse.timedOut = true, true
+    if bagBrowse.state ~= "done" then
+        if not bagBrowse.results then
+            local A = CA()
+            local list = {}
+            for i, res in ipairs(A and A.GetBrowseResults and A.GetBrowseResults() or {}) do list[i] = res end
+            bagBrowse.results = list
+        end
+        bagBrowse.tries = B.BAG_TRIES                     -- no more loading rounds
+        judgeBags()
+        bagBrowse.state = "done"
+    end
+    for _, c in ipairs(bagCands) do if c.state == "price" then c.state = "none" end end
+    return true                                           -- just ended: the queue drops a bag search it still waits for
+end
+B._bagWatch = bagWatch
+
 function B.Bags()
+    bagWatch()
     local out = {}
     local never = (db()).never
     for _, c in ipairs(bagCands) do
         if c.state == "ok" and not never[c.itemID] and not c.bought then out[#out + 1] = c end
     end
+    B.bagsMore = math.max(0, #out - B.BAG_ROWS)
     for i = #out, B.BAG_ROWS + 1, -1 do out[i] = nil end
     return out
 end
@@ -792,6 +834,7 @@ function B.Pending()
     for _, list in ipairs({ rows, foods, alts, candidates, bagCands }) do
         for _, r in ipairs(list) do if r.state == "price" then return true end end
     end
+    bagWatch()
     return (B.want.weapons and browse.state ~= "done") or (B.want.bags and bagBrowse.state ~= "done")
 end
 -- the weapon scan, on request (decision 290)
@@ -804,6 +847,7 @@ end
 -- the bag scan, on request (decision 320, like the weapons)
 local function resetBags()
     bagBrowse.state, bagBrowse.pages, bagBrowse.tries, bagBrowse.results, bagBrowse.stats, bagBrowse.seen = "idle", 0, 0, nil, nil, 0
+    bagBrowse.started, bagBrowse.finished, bagBrowse.timedOut = nil, nil, nil
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
 end
 function B.ScanBags()
@@ -855,11 +899,13 @@ function B.NextQuery()
     for _, c in ipairs(candidates) do
         if c.state == "price" then return c end
     end
+    bagWatch()
     if B.want.bags and bagBrowse.state == "more" then
         bagBrowse.state = "asking"
         return { browse = true, more = true, key = "bagsmore", onResult = function() onBagBrowse() end }
     end
     if B.want.bags and bagBrowse.state == "idle" then
+        bagBrowse.started = bagBrowse.started or now()
         local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
         bagBrowse.state = "asking"
         return { browse = true, key = "bags", onResult = function() onBagBrowse() end,
@@ -1274,14 +1320,19 @@ function B.Render(panel, top)
         local pricing = false
         for _, c in ipairs(bagCands) do if c.state == "price" then pricing = true end end
         local st = bagBrowse.stats or {}
-        if bagBrowse.state ~= "done" or pricing then
-            gText = "Looking at the bags..."
-            if (bagBrowse.seen or 0) > 0 and bagBrowse.state ~= "loading" then
-                gText = string.format("Looking at the bags... %d so far", bagBrowse.seen)
-            end
+        if bagBrowse.state == "loading" then
+            gText = string.format("Loading %d bags...", st.unread or 0)
+        elseif bagBrowse.state ~= "done" then
+            gText = (bagBrowse.seen or 0) > 0 and string.format("Reading the containers... %d so far", bagBrowse.seen) or "Looking at the bags..."
+        elseif pricing then
+            local n, left = #bagCands, 0
+            for _, c in ipairs(bagCands) do if c.state == "price" then left = left + 1 end end
+            gText = string.format("Checking prices %d/%d...", n - left, n)
         elseif #G == 0 then
             gText = "No bigger bag on sale right now"
             if (st.unread or 0) > 0 then gText = gText .. " (" .. st.unread .. " could not be read)" end
+        elseif (B.bagsMore or 0) > 0 then
+            gText = string.format("and %d more bag types", B.bagsMore)
         end
     end
     for i, r in ipairs(ui.gRows) do
