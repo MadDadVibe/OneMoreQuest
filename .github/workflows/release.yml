@@ -1,18 +1,59 @@
-name: Release
+name: Check and release
 
+# Every push checks the addon (Lua syntax, TOC, version). A new version in OneMoreQuest.toc is
+# released as v<version> with the zip, but only when the check passed.
 on:
   push:
     branches: [main]
     paths:
-      - "OneMoreQuest/OneMoreQuest.toc"
+      - "OneMoreQuest/**"
       - ".github/workflows/release.yml"
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua 5.1
+        run: sudo apt-get update -q && sudo apt-get install -y -q lua5.1
+
+      - name: Lua syntax of every file
+        run: |
+          bad=0
+          while IFS= read -r -d '' f; do
+            luac5.1 -p "$f" || bad=1
+          done < <(find OneMoreQuest -name '*.lua' -print0)
+          exit $bad
+
+      - name: TOC and version
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          root = "OneMoreQuest"
+          toc = open(os.path.join(root, "OneMoreQuest.toc"), encoding="utf-8").read()
+          listed = [l.strip().replace("\\", "/") for l in toc.splitlines() if l.strip() and not l.startswith("#")]
+          files = sorted(os.path.relpath(os.path.join(r, f), root).replace(os.sep, "/")
+                         for r, _, fs in os.walk(root) for f in fs if f.endswith(".lua"))
+          bad = [f"TOC lists a missing file: {f}" for f in listed if f not in files]
+          bad += [f"file not in the TOC: {f}" for f in files if f not in listed]
+          v_toc = re.search(r"^## Version:\s*(\S+)", toc, re.M)
+          v_core = re.search(r'OMQ\.version\s*=\s*"([^"]+)"', open(os.path.join(root, "Core.lua"), encoding="utf-8").read())
+          if not v_toc or not v_core or v_toc.group(1) != v_core.group(1):
+              bad.append("version differs between the TOC and Core.lua")
+          for b in bad: print("::error::" + b)
+          print(f"{len(listed)} files listed, version {v_toc and v_toc.group(1)}")
+          sys.exit(1 if bad else 0)
+          PY
+
   release:
+    needs: check
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
