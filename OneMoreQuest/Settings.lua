@@ -23,6 +23,7 @@ local LABEL = {
     flightfollow = "A dad took a flight: follow him",
     clickintro = "Shift-click heals: the introduction",
     welcome = "Welcome card (guided tour)",
+    daduitwink = "Dad UI for a new character",
     buff = "Missing buffs",
     talent = "Unspent talent points",
     ammo = "Ammo below 200",

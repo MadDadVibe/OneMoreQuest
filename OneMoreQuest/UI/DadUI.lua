@@ -464,6 +464,39 @@ function D:Toggle()
     if D:IsApplied() then D:AskRestore() else D:AskApply() end
 end
 
+----------------------------------------------------------------------
+-- Alt card (decision 315): a character without the Dad UI, while another character of the account
+-- runs it, is asked once with an alert card. Left click: the switch question; right click: not on this
+-- character. Either way the card does not come back for this character; the options keep the button.
+----------------------------------------------------------------------
+function D:OthersOn() return othersApplied() end
+
+function D:TwinkCardWanted()
+    local P = OMQ.DadUIPreset
+    if not (P and P.layout and P.layout ~= "") then return false end
+    local st = state()
+    if root().chars[charKey()] ~= st then return false end      -- layouts not readable yet
+    if st.applied or st.asked then return false end
+    return othersApplied() > 0
+end
+
+if OMQ.Alerts then
+    OMQ.Alerts:Register({ id = "daduitwink", name = "Dad UI for a new character", check = function()
+        if not D:TwinkCardWanted() then return nil end
+        return { {
+            key = "daduitwink", tag = "DAD UI", title = "Dad UI for this character?",
+            sub = "Left click: switch - Right click: not on this character", text = "Dad UI for this character?",
+            icon = "Interface\\Icons\\INV_Misc_Note_01",
+            open = function() D:AskApply() end,      -- then dismissed like every card, which marks it asked
+        } }
+    end })
+    OMQ:On("ALERT_DISMISSED", function(key)
+        if key ~= "daduitwink" then return end
+        local st = state()
+        if root().chars[charKey()] == st then st.asked = true end
+    end)
+end
+
 OMQ:RegisterCommand("dadui", function(arg)
     arg = (arg or ""):lower()
     if arg == "capture" then
