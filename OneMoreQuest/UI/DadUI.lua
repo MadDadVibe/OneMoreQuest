@@ -164,14 +164,29 @@ end
 ----------------------------------------------------------------------
 -- Apply and restore. The preset (Data/DadUI.lua) is applied on a button press. Before the first
 -- apply the player's own state is saved; restoring puts everything back and removes the layout.
+-- Per character (decision 314): the active layout, most game settings and the chat font sizes belong
+-- to the character, so "Dad UI is on" and the saved old UI are kept per character. Only the layout
+-- list and the Edit Mode account settings are shared; they are taken back when the last character
+-- turns the Dad UI off.
 ----------------------------------------------------------------------
 local D = {}
 OMQ.DadUI = D
 
-local function state()
+local function root()
     OMQDB.dadUI = OMQDB.dadUI or {}
-    return OMQDB.dadUI
+    local r = OMQDB.dadUI
+    r.chars = r.chars or {}
+    -- before 0.54.7 the state was one for the whole account: keep it to recognise the characters
+    -- that really run the Dad UI (their active layout is "Dad UI")
+    if r.applied ~= nil or r.backup ~= nil then
+        r.legacy = { backup = r.backup }
+        if r.backup and r.backup.account and not r.account then r.account = r.backup.account end
+        r.applied, r.backup, r.appliedVersion = nil, nil, nil
+    end
+    return r
 end
+
+local function charKey() return (UnitGUID and UnitGUID("player")) or "?" end
 
 local function accountType() return Enum and Enum.EditModeLayoutType and Enum.EditModeLayoutType.Account or 1 end
 local MAX_ACCOUNT_LAYOUTS = 5
@@ -247,6 +262,44 @@ local function blocked()
     return false
 end
 
+-- Is "Dad UI" the active layout of this character? nil when the game does not tell.
+local function dadLayoutActive(P)
+    if not (EditModeManagerFrame and EditModeManagerFrame.GetActiveLayoutInfo) then return nil end
+    local ok, active = pcall(EditModeManagerFrame.GetActiveLayoutInfo, EditModeManagerFrame)
+    if not ok or type(active) ~= "table" or not active.layoutName then return nil end
+    return isDadLayout(active, P)
+end
+
+-- The state of this character. A character without one gets it the first time the layouts can be
+-- read: "on" only when its active layout is the Dad UI (a character of the old account-wide state),
+-- otherwise "off" - a new character never counts as having the Dad UI.
+local function state()
+    local r = root()
+    local key = charKey()
+    local st = r.chars[key]
+    if st then return st end
+    local P = OMQ.DadUIPreset or {}
+    local active = P.layoutName and dadLayoutActive(P)
+    if active == nil then return {} end                  -- not readable yet: off, decided later
+    st = { applied = active or nil }
+    if active and r.legacy and r.legacy.backup then
+        st.backup = CopyTable and CopyTable(r.legacy.backup) or r.legacy.backup
+    elseif active then
+        st.backup = { cvars = {}, chat = {} }            -- nothing saved: restore goes back to a preset layout
+    end
+    r.chars[key] = st
+    return st
+end
+
+-- Other characters of the account that run the Dad UI.
+local function othersApplied()
+    local me, n = charKey(), 0
+    for key, st in pairs(root().chars) do
+        if key ~= me and st.applied then n = n + 1 end
+    end
+    return n
+end
+
 function D:IsApplied() return state().applied == true end
 
 -- SaveLayouts stores the list but does not switch layouts; that needs SetActiveLayout. It is tried again
@@ -299,16 +352,21 @@ function D:Apply()
     local P = OMQ.DadUIPreset
     if not P or not P.layout or P.layout == "" then OMQ:Print("Dad UI: no preset in this version"); return false end
     if blocked() then return false end
-    local st = state()
+    local r = root()
+    local key = charKey()
+    local st = r.chars[key] or state()
     local info = getInfo()
-    local fresh = false
+    local fresh, freshAccount = false, false
     if not st.backup then st.backup = makeBackup(P, info); fresh = true end
+    if not r.account and othersApplied() == 0 then r.account = st.backup.account; freshAccount = true end
     local ok, err = installLayout(P)
     if not ok then
         if fresh then st.backup = nil end
+        if freshAccount then r.account = nil end
         OMQ:Print("Dad UI: " .. tostring(err) .. ". Nothing was changed.")
         return false
     end
+    r.chars[key] = st
     pcall(function()
         for _, a in ipairs(P.accountSettings or {}) do pcall(C_EditMode.SetAccountSetting, a[1], a[2]) end
     end)
@@ -332,17 +390,24 @@ function D:Restore()
     local b = st.backup
     if not b then OMQ:Print("Dad UI: there is nothing to restore"); return false end
     if blocked() then return false end
+    local r = root()
+    local last = othersApplied() == 0                     -- no other character runs the Dad UI
     for name, v in pairs(b.cvars or {}) do pcall(SetCVar, name, v) end
-    pcall(function()
-        for id, v in pairs(b.account or {}) do pcall(C_EditMode.SetAccountSetting, id, v) end
-    end)
+    if last then
+        pcall(function()
+            for id, v in pairs(r.account or b.account or {}) do pcall(C_EditMode.SetAccountSetting, id, v) end
+        end)
+        r.account = nil
+    end
     for i, size in pairs(b.chat or {}) do setChatSize(i, size) end
-    -- layouts: drop "Dad UI" and activate the old one again
+    -- layouts: activate the old one again; "Dad UI" is dropped only when no other character uses it
     local info = getInfo()
     if info then
         local presets = presetCount(info)
-        for i = #info.layouts, 1, -1 do
-            if P.layoutName and isDadLayout(info.layouts[i], P) then table.remove(info.layouts, i) end
+        if last then
+            for i = #info.layouts, 1, -1 do
+                if P.layoutName and isDadLayout(info.layouts[i], P) then table.remove(info.layouts, i) end
+            end
         end
         local target
         if b.layoutType ~= accountType() and b.layoutType ~= (Enum and Enum.EditModeLayoutType and Enum.EditModeLayoutType.Character)
@@ -359,6 +424,7 @@ function D:Restore()
         else activate(info.activeLayout) end
     end
     st.backup, st.applied = nil, false
+    if last then r.legacy = nil end
     OMQ:Print("Dad UI is off. Your old UI is back.")
     D:AskReload()
     return true
