@@ -1,5 +1,5 @@
 -- One More Quest: full options window (shift + right click on the minimap icon)
--- Drawn from the settings registry (Settings.lua); same look as the other windows.
+-- Drawn from the settings registry (Settings.lua); one tab per category (decision 318).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -25,9 +25,22 @@ end
 
 local function changed() OMQ:Fire("SETTINGS_CHANGED", "full"); F:Refresh() end
 
+-- width an option may use: the column, less the indent
+local function widthOf(item) return COL_W - (item.indent and 22 or 0) end
+
+-- lines a check label needs in its column (decision 318): long labels wrap instead of running into the
+-- next column; estimated from the length, about 5.8 pixels per character of the game font
+local CHAR_W = 5.8
+local function checkLines(item)
+    local text = type(item.label) == "function" and item.label() or tostring(item.label or "")
+    local room = widthOf(item) - 26
+    return math.max(1, math.ceil(#text * CHAR_W / room))
+end
+
 local function makeCheck(parent, item)
     local row = CreateFrame("Button", nil, parent)
-    row:SetSize(COL_W, ROW_H)
+    local lines = item.master and 1 or checkLines(item)
+    row:SetSize(widthOf(item), ROW_H + (lines - 1) * 14)
     row.box = row:CreateTexture(nil, "ARTWORK")
     row.box:SetSize(item.master and 18 or 16, item.master and 18 or 16)
     row.box:SetPoint("LEFT", 0, 0)
@@ -39,6 +52,11 @@ local function makeCheck(parent, item)
     row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     row.label:SetPoint("LEFT", row.box, "RIGHT", 8, 0)
     row.label:SetText(item.label)
+    if not item.master then
+        row.label:SetWidth(widthOf(item) - 26)
+        row.label:SetJustifyH("LEFT")
+        if row.label.SetWordWrap then row.label:SetWordWrap(true) end
+    end
     row.item = item
     function row:Refresh()
         local on = item.get()
@@ -104,7 +122,7 @@ end
 F._edged = edged
 
 local function makeButton(parent, item)
-    local b = edged(parent, COL_W, 28)
+    local b = edged(parent, widthOf(item), 28)
     b.tipText = item.tip
     b.item = item
     local function text() return type(item.label) == "function" and item.label() or item.label end
@@ -286,6 +304,87 @@ local function makeSegment(parent, item)
     return row
 end
 
+-- Tabs (decision 318): one tab per category, the tabs on top of the window. The window keeps one size
+-- (the tallest tab); a tab lays its options out in two columns.
+local TAB_H, FOOT_H = 30, 44
+local BODY = { 0.07, 0.08, 0.105 }
+local STRIP = { 0.04, 0.045, 0.06 }
+local DIM_GOLD = { 0.45, 0.36, 0.16 }
+
+local function itemHeight(item)
+    if item.type == "button" then return 36 end
+    if item.type == "edit" then return 56 end
+    if item.type == "choice" then return TILE_H + 30 end
+    if item.type == "segment" then return SEG_H + 26 end
+    if item.type == "check" then return ROW_H + (checkLines(item) - 1) * 14 end
+    return ROW_H
+end
+
+local function tabName(title) return title:sub(1, 1) .. title:sub(2):lower() end
+
+-- splits the items of a tab into two columns of about the same height; an indented item stays with the
+-- item above it
+local function splitColumns(items)
+    local total = 0
+    for _, it in ipairs(items) do total = total + itemHeight(it) end
+    local acc, cut = 0, #items
+    for i, it in ipairs(items) do
+        acc = acc + itemHeight(it)
+        if acc >= total / 2 then
+            cut = i
+            while items[cut + 1] and items[cut + 1].indent do cut = cut + 1 end
+            break
+        end
+    end
+    if #items < 4 then cut = #items end                 -- a short tab stays in one column
+    return cut
+end
+
+local function makeTab(parent, index, sec, w)
+    local t = CreateFrame("Button", nil, parent)
+    t:SetSize(w, TAB_H)
+    t.bg = t:CreateTexture(nil, "BACKGROUND"); t.bg:SetAllPoints()
+    t.top = t:CreateTexture(nil, "BORDER")                 -- gold line on top of the open tab
+    t.top:SetPoint("TOPLEFT"); t.top:SetPoint("TOPRIGHT"); t.top:SetHeight(2)
+    t.bottom = t:CreateTexture(nil, "BORDER")              -- line under the closed tabs, the open one merges with the body
+    t.bottom:SetPoint("BOTTOMLEFT"); t.bottom:SetPoint("BOTTOMRIGHT"); t.bottom:SetHeight(1)
+    t.right = t:CreateTexture(nil, "BORDER")               -- thin divider between tabs
+    t.right:SetPoint("TOPRIGHT", 0, -6); t.right:SetPoint("BOTTOMRIGHT", 0, 6); t.right:SetWidth(1)
+    t.label = t:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    t.label:SetPoint("CENTER", sec.master and -5 or 0, 0)
+    t.label:SetText(tabName(sec.title))
+    if sec.master then                                     -- a small dot: the category is on (green) or off (red)
+        t.dot = t:CreateTexture(nil, "OVERLAY")
+        t.dot:SetSize(6, 6)
+        t.dot:SetPoint("LEFT", t.label, "RIGHT", 6, 0)
+    end
+    t.index, t.master = index, sec.master
+    function t:Paint(active)
+        local hover = rawget(self, "hover")
+        if active then
+            self.bg:SetColorTexture(BODY[1], BODY[2], BODY[3], 1)
+            self.top:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1); self.top:Show()
+            self.bottom:Hide()
+            self.label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+        else
+            if hover then self.bg:SetColorTexture(0.10, 0.10, 0.12, 1) else self.bg:SetColorTexture(STRIP[1], STRIP[2], STRIP[3], 1) end
+            self.top:Hide()
+            self.bottom:SetColorTexture(DIM_GOLD[1], DIM_GOLD[2], DIM_GOLD[3], 1); self.bottom:Show()
+            if hover then self.label:SetTextColor(1, 0.88, 0.55) else self.label:SetTextColor(GREY[1], GREY[2], GREY[3]) end
+        end
+        self.right:SetColorTexture(0.16, 0.17, 0.21, 1)
+        local dot = rawget(self, "dot")
+        if dot then
+            if OMQ:Master(self.master) then dot:SetColorTexture(0.42, 0.80, 0.36, 1)
+            else dot:SetColorTexture(0.75, 0.22, 0.18, 1) end
+        end
+    end
+    t:SetScript("OnClick", function() F:SelectTab(index) end)
+    t:SetScript("OnEnter", function(self) rawset(self, "hover", true); F:PaintTabs() end)
+    t:SetScript("OnLeave", function(self) rawset(self, "hover", false); F:PaintTabs() end)
+    return t
+end
+
 local function build()
     frame = CreateFrame("Frame", "OneMoreQuestOptionsFull", UIParent)
     frame:SetFrameStrata("DIALOG")
@@ -297,49 +396,70 @@ local function build()
     frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     frame.bg = frame:CreateTexture(nil, "BACKGROUND")
     frame.bg:SetAllPoints()
-    frame.bg:SetColorTexture(0.07, 0.08, 0.105, 1)
-    frame.edge = frame:CreateTexture(nil, "BORDER")
-    frame.edge:SetPoint("TOPLEFT"); frame.edge:SetPoint("TOPRIGHT"); frame.edge:SetHeight(3)
-    frame.edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
+    frame.bg:SetColorTexture(BODY[1], BODY[2], BODY[3], 1)
+    -- a thin dim gold frame around the window
+    frame.border = {}
+    for i = 1, 4 do frame.border[i] = frame:CreateTexture(nil, "BORDER"); frame.border[i]:SetColorTexture(0.30, 0.25, 0.13, 1) end
+    local e = frame.border
+    e[1]:SetPoint("TOPLEFT"); e[1]:SetPoint("TOPRIGHT"); e[1]:SetHeight(1)
+    e[2]:SetPoint("BOTTOMLEFT"); e[2]:SetPoint("BOTTOMRIGHT"); e[2]:SetHeight(1)
+    e[3]:SetPoint("TOPLEFT"); e[3]:SetPoint("BOTTOMLEFT"); e[3]:SetWidth(1)
+    e[4]:SetPoint("TOPRIGHT"); e[4]:SetPoint("BOTTOMRIGHT"); e[4]:SetWidth(1)
 
-    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", PAD, -PAD - 4)
-    title:SetText("One More Quest - Options")
+    local width = PAD * 2 + COL_W * 2 + GAP
+    local sections = OMQ.Settings:Sections()
+
+    -- the tab strip, right at the top; the close button at its right end
+    local CLOSE_W = 34
+    local strip = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
+    strip:SetPoint("TOPLEFT", 1, -1); strip:SetPoint("TOPRIGHT", -1, -1); strip:SetHeight(TAB_H)
+    strip:SetColorTexture(STRIP[1], STRIP[2], STRIP[3], 1)
+    local tabW = math.floor((width - 2 - CLOSE_W) / #sections)
+    local tabs = {}
+    for i, sec in ipairs(sections) do
+        local t = makeTab(frame, i, sec, tabW)
+        t:SetPoint("TOPLEFT", 1 + (i - 1) * tabW, -1)
+        tabs[i] = t
+    end
+    local closeLine = frame:CreateTexture(nil, "BORDER")
+    closeLine:SetPoint("TOPLEFT", 1 + #sections * tabW, -1 - TAB_H + 1); closeLine:SetPoint("TOPRIGHT", -1, -1 - TAB_H + 1)
+    closeLine:SetHeight(1); closeLine:SetColorTexture(DIM_GOLD[1], DIM_GOLD[2], DIM_GOLD[3], 1)
     local close = CreateFrame("Button", nil, frame)
-    close:SetSize(24, 24)
-    close:SetPoint("TOPRIGHT", -6, -8)
+    close:SetSize(CLOSE_W, TAB_H)
+    close:SetPoint("TOPRIGHT", -1, -1)
     local cx = close:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    cx:SetPoint("CENTER"); cx:SetText("x"); cx:SetTextColor(0.55, 0.58, 0.63)
+    cx:SetPoint("CENTER", 0, 1); cx:SetText("x"); cx:SetTextColor(0.55, 0.58, 0.63)
+    close:SetScript("OnEnter", function() cx:SetTextColor(1, 0.88, 0.55) end)
+    close:SetScript("OnLeave", function() cx:SetTextColor(0.55, 0.58, 0.63) end)
     close:SetScript("OnClick", function() F:Hide() end)
 
-    local top = -PAD - 38
-    local ys = { top, top }
-    local heights = {}
-    for _, sec in ipairs(OMQ.Settings:Sections()) do
-        local col = sec.col
-        local x = PAD + (col - 1) * (COL_W + GAP)
-        local y = ys[col]
-        local hx = x
+    -- the content of every tab; only the open tab is shown
+    local top = -1 - TAB_H - PAD
+    local tallest = 0
+    for ti, sec in ipairs(sections) do
+        local y = top
         if sec.master then
             local id = sec.master
-            local m = makeCheck(frame, { label = "", master = true, get = function() return OMQ.Settings:MasterGet(id) end,
+            local m = makeCheck(frame, { label = "All of " .. tabName(sec.title) .. " (master switch)", master = true,
+                get = function() return OMQ.Settings:MasterGet(id) end,
                 set = function(v) OMQ.Settings:MasterSet(id, v) end,
                 tip = "Master switch: off disables this whole category, whatever the options below say." })
-            m:SetSize(22, ROW_H)
-            m:SetPoint("TOPLEFT", x, y + 2)
+            m:SetPoint("TOPLEFT", PAD, y)
+            m.label:SetFontObject("GameFontNormal")
+            m.tab = ti
             widgets[#widgets + 1] = m
-            hx = x + 24
+            local line = frame:CreateTexture(nil, "ARTWORK")
+            line:SetPoint("TOPLEFT", PAD, y - ROW_H - 6)
+            line:SetSize(width - PAD * 2, 1)
+            line:SetColorTexture(0.17, 0.18, 0.23, 1)
+            widgets[#widgets + 1] = { tab = ti, SetShown = function(_, v) if v then line:Show() else line:Hide() end end }
+            y = y - ROW_H - 16
         end
-        local h = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        h:SetPoint("TOPLEFT", hx, y - 4)
-        h:SetText(sec.title)
-        h:SetTextColor(0.72, 0.63, 0.42)
-        local line = frame:CreateTexture(nil, "BACKGROUND")
-        line:SetPoint("TOPLEFT", x + 120, y - 11)
-        line:SetSize(COL_W - 120, 1)
-        line:SetColorTexture(0.17, 0.18, 0.23, 1)
-        y = y - 22
-        for _, item in ipairs(sec.items) do
+        local cut = splitColumns(sec.items)
+        local ys = { y, y }
+        for i, item in ipairs(sec.items) do
+            local col = i <= cut and 1 or 2
+            local x = PAD + (col - 1) * (COL_W + GAP)
             local w
             if item.type == "check" then w = makeCheck(frame, item)
             elseif item.type == "step" then w = makeStep(frame, item)
@@ -347,48 +467,75 @@ local function build()
             elseif item.type == "choice" then w = makeChoice(frame, item)
             elseif item.type == "segment" then w = makeSegment(frame, item)
             else w = makeButton(frame, item) end
-            w:SetPoint("TOPLEFT", x + (item.indent and 22 or 0), y)
+            w:SetPoint("TOPLEFT", x + (item.indent and 22 or 0), ys[col])
             w.master = sec.master
+            w.tab = ti
             widgets[#widgets + 1] = w
-            y = y - (item.type == "button" and 36 or (item.type == "edit" and 56 or (item.type == "choice" and TILE_H + 30) or (item.type == "segment" and SEG_H + 26) or ROW_H))
+            ys[col] = ys[col] - itemHeight(item)
         end
-        ys[col] = y - 10
+        tallest = math.max(tallest, top - math.min(ys[1], ys[2]))
     end
 
-    local bottom = math.min(ys[1], ys[2])
-    bottom = bottom - 4
-    -- bottom right: the plain list of everything the addon does (decision 247)
-    local list = edged(frame, 180, 28)
+    -- footer: the name on the left, the list of everything the addon does on the right (decision 247)
+    local height = 1 + TAB_H + tallest + PAD + FOOT_H
+    local footLine = frame:CreateTexture(nil, "ARTWORK")
+    footLine:SetPoint("BOTTOMLEFT", PAD, FOOT_H); footLine:SetSize(width - PAD * 2, 1)
+    footLine:SetColorTexture(0.17, 0.18, 0.23, 1)
+    local name = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    name:SetPoint("BOTTOMLEFT", PAD, 15)
+    name:SetText("One More Quest " .. (OMQ.version or ""))
+    name:SetTextColor(0.55, 0.48, 0.32)
+    local list = edged(frame, 180, 26)
     list.label:SetText("List functionality")
-    list:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, bottom - 4)
+    list:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, 9)
     list:SetScript("OnClick", function() if OMQ.Features then OMQ.Features:Show() end; F:Hide() end)
     F.ui_list = list
-    bottom = bottom - 4 - 28 - 4
 
-    frame:SetSize(PAD * 2 + COL_W * 2 + GAP, -bottom + PAD)
+    frame:SetSize(width, height)
     frame.elapsed = 0
     frame:SetScript("OnUpdate", function(self, dt)
         self.elapsed = self.elapsed + dt
         if self.elapsed > 0.5 then self.elapsed = 0; F:Refresh() end
     end)
     frame:Hide()
-    F.ui = { frame = frame, widgets = widgets }
+    F.ui = { frame = frame, widgets = widgets, tabs = tabs }
     if UISpecialFrames then table.insert(UISpecialFrames, "OneMoreQuestOptionsFull") end
+    local saved = OMQ.db and OMQ.db.options and OMQ.db.options.optionsTab
+    F.tab = (type(saved) == "number" and tabs[saved]) and saved or 1
+end
+
+function F:PaintTabs()
+    if not (F.ui and F.ui.tabs) then return end
+    for i, t in ipairs(F.ui.tabs) do t:Paint(i == F.tab) end
+end
+
+-- opens a tab; the choice is remembered for the next time
+function F:SelectTab(i)
+    if not frame then build() end
+    if not F.ui.tabs[i] then return end
+    F.tab = i
+    if OMQ.db and OMQ.db.options then OMQ.db.options.optionsTab = i end
+    for _, w in ipairs(widgets) do if w.SetShown then w:SetShown(w.tab == i) end end
+    F:PaintTabs()
+    F:Refresh()
 end
 
 function F:Refresh()
     if not frame or not frame:IsShown() then return end
     for _, w in ipairs(widgets) do
-        if w.Refresh then w:Refresh() end
-        if rawget(w, "master") then w:SetAlpha(OMQ:Master(w.master) and 1 or 0.4) end
+        if w.tab == F.tab then
+            if w.Refresh then w:Refresh() end
+            if rawget(w, "master") then w:SetAlpha(OMQ:Master(w.master) and 1 or 0.4) end
+        end
     end
+    F:PaintTabs()
 end
 
 function F:Show()
     if not frame then build() end
     if not frame:GetPoint() then frame:SetPoint("CENTER", UIParent, "CENTER", 0, 40) end
     frame:Show()
-    self:Refresh()
+    self:SelectTab(F.tab or 1)
 end
 
 function F:Hide() if frame then frame:Hide() end end
