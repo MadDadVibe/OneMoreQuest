@@ -652,10 +652,11 @@ function B.WantedKinds()
 end
 
 -- The bag browse (decision 320): the game hands out the browse results in pages, cheapest first, so the
--- first page is full of small bags. More pages are asked for (at most B.BAG_PAGES), then every result is
--- judged. The slot count comes from the item's tooltip; the game knows it only once the item is loaded, so
+-- first page is full of small bags. Every page is asked for until the game has handed out all containers
+-- (decision 321: the whole list, it only runs on "Scan for bigger bags" or "Scan all"); only a page that
+-- brings nothing new, or the safety limit B.BAG_PAGES, ends it early. Then every result is judged. The slot count comes from the item's tooltip; the game knows it only once the item is loaded, so
 -- unread bags are loaded and judged again (at most B.BAG_TRIES times).
-B.BAG_PAGES, B.BAG_TRIES, B.BAG_RETRY = 5, 3, 1.5
+B.BAG_PAGES, B.BAG_TRIES, B.BAG_RETRY = 500, 3, 1.5
 
 local function judgeBags()
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
@@ -722,7 +723,10 @@ end
 local function onBagBrowse()
     local A = CA()
     local full = not A.HasFullBrowseResults or A.HasFullBrowseResults()
-    if not full and A.RequestMoreBrowseResults and (bagBrowse.pages or 0) < B.BAG_PAGES then
+    local n = #(A.GetBrowseResults and A.GetBrowseResults() or {})
+    local stalled = (bagBrowse.pages or 0) > 0 and n <= (bagBrowse.seen or 0)    -- the last page brought nothing new
+    bagBrowse.seen = n
+    if not full and not stalled and A.RequestMoreBrowseResults and (bagBrowse.pages or 0) < B.BAG_PAGES then
         bagBrowse.pages = (bagBrowse.pages or 0) + 1
         bagBrowse.state = "more"                        -- the next page is asked for by the queue
         return
@@ -799,7 +803,7 @@ function B.ScanWeapons()
 end
 -- the bag scan, on request (decision 320, like the weapons)
 local function resetBags()
-    bagBrowse.state, bagBrowse.pages, bagBrowse.tries, bagBrowse.results, bagBrowse.stats = "idle", 0, 0, nil, nil
+    bagBrowse.state, bagBrowse.pages, bagBrowse.tries, bagBrowse.results, bagBrowse.stats, bagBrowse.seen = "idle", 0, 0, nil, nil, 0
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
 end
 function B.ScanBags()
@@ -1270,7 +1274,11 @@ function B.Render(panel, top)
         local pricing = false
         for _, c in ipairs(bagCands) do if c.state == "price" then pricing = true end end
         local st = bagBrowse.stats or {}
-        if bagBrowse.state ~= "done" or pricing then gText = "Looking at the bags..."
+        if bagBrowse.state ~= "done" or pricing then
+            gText = "Looking at the bags..."
+            if (bagBrowse.seen or 0) > 0 and bagBrowse.state ~= "loading" then
+                gText = string.format("Looking at the bags... %d so far", bagBrowse.seen)
+            end
         elseif #G == 0 then
             gText = "No bigger bag on sale right now"
             if (st.unread or 0) > 0 then gText = gText .. " (" .. st.unread .. " could not be read)" end
