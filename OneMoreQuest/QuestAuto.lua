@@ -1,4 +1,4 @@
--- One More Quest: quests at the NPC (decision 305), three switches in the VENDOR section, all on by default.
+-- One More Quest: quests at the NPC (decision 305), three switches in the AUTOMATIONS tab (was VENDOR), all on by default.
 --   Accept: a quest giver's quests are accepted, one after the other, unless they are grey (trivial) for me.
 --   Turn in: finished quests are handed in; the reward is taken when there is nothing to choose.
 --   Reward hint: with a choice of rewards the best one for me (item score, LootPreview.Gain) gets a gold

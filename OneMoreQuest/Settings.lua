@@ -79,7 +79,7 @@ S.masters = {
     { id = "alerts", label = "Alerts" },
     { id = "group", label = "Group" },
     { id = "guidance", label = "Guidance" },
-    { id = "vendor", label = "Vendor" },
+    { id = "vendor", label = "Automations" },   -- shown as "Automations" since decision 319; the id stays
     { id = "chat", label = "Chat" },
 }
 
@@ -231,7 +231,7 @@ function S:Sections()
             { type = "button", label = "Recalibrate arrow", done = "Run in a few directions",
               click = function() OMQ:RunCommand("arrow", "recalibrate") end },
         } },
-        { title = "VENDOR", master = "vendor", col = 2, items = {
+        { title = "AUTOMATIONS", master = "vendor", col = 2, items = {
             { type = "check", label = "Repair gear automatically", get = qolGet("repair"), set = qolSet("repair") },
             { type = "check", label = "Sell grey items automatically", get = qolGet("junk"), set = qolSet("junk"),
               tip = "Also sells what the auction helper found not worth the auction house (under +5%), unless it can be worn." },
