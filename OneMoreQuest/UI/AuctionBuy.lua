@@ -588,12 +588,22 @@ B.BAG_LABEL = { ["1/0"] = "bag", ["1/1"] = "soul bag", ["1/2"] = "herb bag", ["1
                 ["11/2"] = "quiver", ["11/3"] = "ammo pouch" }
 B.PROF_BAG = { [182] = 2, [333] = 3, [202] = 4 }       -- skill line -> bag subclass (herbs, enchanting, engineering)
 
+-- The tooltip line with the slot count, from the game's own format CONTAINER_SLOTS (decision 327). The
+-- format may use positional arguments ("%2$s ... %1$d", common in German); they are turned into plain
+-- placeholders first, then everything else is escaped. A format that still can not be used falls back to
+-- "a number at the start of the line".
+function B.SlotPattern(f)
+    f = f or CONTAINER_SLOTS or "%d Slot %s"
+    local p = f:gsub("%%%d+%$d", "\001"):gsub("%%d", "\001"):gsub("%%%d+%$s", "\002"):gsub("%%s", "\002")
+    p = p:gsub("([%%%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
+    p = "^" .. p:gsub("\001", "(%%d+)"):gsub("\002", ".+") .. "$"
+    if not pcall(string.match, "", p) then p = "^(%d+)%s" end
+    return p
+end
 local slotPattern
+function B.ResetSlotPattern() slotPattern = nil end
 function B.BagSlots(id)
-    if not slotPattern then
-        local f = CONTAINER_SLOTS or "%d Slot %s"
-        slotPattern = "^" .. f:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1"):gsub("%%d", "(%%d+)"):gsub("%%s", ".+") .. "$"
-    end
+    if not slotPattern then slotPattern = B.SlotPattern() end
     local T = C_TooltipInfo
     if not (T and T.GetItemByID) then return nil end
     local ok, data = pcall(T.GetItemByID, id)
@@ -601,7 +611,8 @@ function B.BagSlots(id)
     for _, l in ipairs(data.lines) do
         local t = l.leftText
         if type(t) == "string" and not isSecret(t) then
-            local n = tonumber(t:match(slotPattern) or "")
+            local ok2, m = pcall(string.match, t, slotPattern)
+            local n = ok2 and tonumber(m or "")
             if n then return n end
         end
     end
@@ -665,6 +676,7 @@ local function judgeBags()
     local st = { results = 0, bags = 0, unread = 0, tooDear = 0, notBetter = 0 }
     for _, res in ipairs(bagBrowse.results or {}) do
         st.results = st.results + 1
+        local okR, errR = pcall(function()
         local id = res.itemKey and res.itemKey.itemID
         local _, _, _, _, _, classID, sub = instant(id or 0)
         if classID == 1 or classID == 11 then
@@ -688,6 +700,8 @@ local function judgeBags()
                 end
             end
         end
+        end)
+        if not okR then st.errors = (st.errors or 0) + 1; st.err = st.err or tostring(errR) end
     end
     bagBrowse.stats = st
     for t, c in pairs(bestOf) do
@@ -706,7 +720,13 @@ local function judgeBags()
 end
 
 function B.JudgeBags()
-    local unread = judgeBags()
+    local okJ, unread = pcall(judgeBags)
+    if not okJ then
+        bagBrowse.stats = bagBrowse.stats or {}
+        bagBrowse.stats.err = tostring(unread)
+        bagBrowse.state = "done"
+        return
+    end
     if #unread > 0 and (bagBrowse.tries or 0) < B.BAG_TRIES then
         -- not loaded yet: ask the game for the items and look again a moment later
         for i = #bagCands, 1, -1 do bagCands[i] = nil end
@@ -765,7 +785,9 @@ function B.BagReport()
         string.format("results %d, bags %d, slots unread %d (tries %d), too dear %d, not bigger %d",
             st.results or 0, st.bags or 0, st.unread or 0, bagBrowse.tries or 0, st.tooDear or 0, st.notBetter or 0),
         "the queue waits for: " .. (q and (tostring(q.key) .. " since " .. math.floor(age) .. "s") or "nothing"),
+        "slot line format: " .. tostring(CONTAINER_SLOTS) .. " -> " .. B.SlotPattern(),
     }
+    if st.err then lines[#lines + 1] = string.format("ERROR (%d): %s", st.errors or 1, st.err) end
     for _, l in ipairs(bagBrowse.log or {}) do lines[#lines + 1] = "  " .. l end
     for _, c in ipairs(bagCands) do
         lines[#lines + 1] = string.format("  %s: item %d, %d slots, %s (%s)", B.BAG_LABEL[c.bagKind] or c.bagKind, c.itemID, c.slots, money0(c.price or 0), tostring(c.state))
