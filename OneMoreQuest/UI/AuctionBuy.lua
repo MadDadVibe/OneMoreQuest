@@ -31,6 +31,7 @@ local function now() return GetTime() end
 local CA = function() return C_AuctionHouse end
 local function AH() return OMQ.AuctionHelper end
 local function money(c) return AH().Money(c) end
+local function money0(c) return (c and c > 0) and money(c) or "-" end
 
 local function db()
     OMQDB.ah = OMQDB.ah or {}
@@ -650,27 +651,42 @@ function B.WantedKinds()
     return want
 end
 
-local function onBagBrowse()
-    local A = CA()
-    bagBrowse.state = "done"
+-- The bag browse (decision 320): the game hands out the browse results in pages, cheapest first, so the
+-- first page is full of small bags. More pages are asked for (at most B.BAG_PAGES), then every result is
+-- judged. The slot count comes from the item's tooltip; the game knows it only once the item is loaded, so
+-- unread bags are loaded and judged again (at most B.BAG_TRIES times).
+B.BAG_PAGES, B.BAG_TRIES, B.BAG_RETRY = 5, 3, 1.5
+
+local function judgeBags()
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
     local worn, want = B.WornBags(), B.WantedKinds()
-    local bestOf = {}
-    for _, res in ipairs(A.GetBrowseResults and A.GetBrowseResults() or {}) do
+    local bestOf, unread = {}, {}
+    local st = { results = 0, bags = 0, unread = 0, tooDear = 0, notBetter = 0 }
+    for _, res in ipairs(bagBrowse.results or {}) do
+        st.results = st.results + 1
         local id = res.itemKey and res.itemKey.itemID
         local _, _, _, _, _, classID, sub = instant(id or 0)
-        local slots = id and B.BagSlots(id)
-        if slots and (res.minPrice or 0) <= budget() then
-            local k = (classID or 0) .. "/" .. (sub or 0)
-            local ok
-            if k == "1/0" then ok = worn.normal ~= nil and slots > worn.normal
-            else ok = want[k] and slots > (worn.kinds[k] or 0) end
-            local cur = bestOf[k]
-            if ok and (not cur or slots > cur.slots or (slots == cur.slots and res.minPrice < cur.price)) then
-                bestOf[k] = { itemKey = res.itemKey, itemID = id, slots = slots, price = res.minPrice, bagKind = k }
+        if classID == 1 or classID == 11 then
+            st.bags = st.bags + 1
+            local slots = id and B.BagSlots(id)
+            if not slots then
+                st.unread = st.unread + 1; unread[#unread + 1] = id
+            elseif (res.minPrice or 0) > budget() then
+                st.tooDear = st.tooDear + 1
+            else
+                local k = (classID or 0) .. "/" .. (sub or 0)
+                local ok
+                if k == "1/0" then ok = worn.normal ~= nil and slots > worn.normal
+                else ok = want[k] and slots > (worn.kinds[k] or 0) end
+                if not ok then st.notBetter = st.notBetter + 1 end
+                local cur = bestOf[k]
+                if ok and (not cur or slots > cur.slots or (slots == cur.slots and res.minPrice < cur.price)) then
+                    bestOf[k] = { itemKey = res.itemKey, itemID = id, slots = slots, price = res.minPrice, bagKind = k }
+                end
             end
         end
     end
+    bagBrowse.stats = st
     for k, c in pairs(bestOf) do
         c.key, c.state, c.anyKey = "g" .. k, "price", true
         c.onResult = function(x) x.offers = readOffers(x); x.checkedAt = now(); x.state = #x.offers > 0 and "ok" or "none" end
@@ -678,6 +694,63 @@ local function onBagBrowse()
         bagCands[#bagCands + 1] = c
     end
     table.sort(bagCands, function(a, b) return a.bagKind < b.bagKind end)
+    return unread
+end
+
+function B.JudgeBags()
+    local unread = judgeBags()
+    if #unread > 0 and (bagBrowse.tries or 0) < B.BAG_TRIES then
+        -- not loaded yet: ask the game for the items and look again a moment later
+        for i = #bagCands, 1, -1 do bagCands[i] = nil end
+        bagBrowse.state = "loading"
+        bagBrowse.tries = (bagBrowse.tries or 0) + 1
+        local I = C_Item
+        for _, id in ipairs(unread) do
+            if I and I.RequestLoadItemDataByID then pcall(I.RequestLoadItemDataByID, id) end
+        end
+        local again = function()
+            if bagBrowse.state ~= "loading" then return end
+            B.JudgeBags()
+            local H = AH(); if H then H.Refresh(); H.Pump() end
+        end
+        if C_Timer and C_Timer.After then C_Timer.After(B.BAG_RETRY, again) else again() end
+        return
+    end
+    bagBrowse.state = "done"
+end
+
+local function onBagBrowse()
+    local A = CA()
+    local full = not A.HasFullBrowseResults or A.HasFullBrowseResults()
+    if not full and A.RequestMoreBrowseResults and (bagBrowse.pages or 0) < B.BAG_PAGES then
+        bagBrowse.pages = (bagBrowse.pages or 0) + 1
+        bagBrowse.state = "more"                        -- the next page is asked for by the queue
+        return
+    end
+    local list = {}
+    for i, res in ipairs(A.GetBrowseResults and A.GetBrowseResults() or {}) do list[i] = res end
+    bagBrowse.results = list
+    B.JudgeBags()
+end
+
+-- /omq ah bags: what the bag search saw (decision 320)
+function B.BagReport()
+    local worn, want = B.WornBags(), B.WantedKinds()
+    local kinds, wk = {}, {}
+    for k, n in pairs(worn.kinds) do kinds[#kinds + 1] = (B.BAG_LABEL[k] or k) .. " " .. n end
+    for k in pairs(want) do wk[#wk + 1] = B.BAG_LABEL[k] or k end
+    local st = bagBrowse.stats or {}
+    local lines = {
+        "bags: scan " .. (B.want.bags and "requested" or "not requested") .. ", state " .. tostring(bagBrowse.state) .. ", pages " .. (bagBrowse.pages or 0) + (bagBrowse.results and 1 or 0),
+        "worn: smallest normal bag " .. tostring(worn.normal) .. (#kinds > 0 and (", " .. table.concat(kinds, ", ")) or ""),
+        "special bags for you: " .. (#wk > 0 and table.concat(wk, ", ") or "none") .. ", budget " .. money0(budget()),
+        string.format("results %d, bags %d, slots unread %d (tries %d), too dear %d, not bigger %d",
+            st.results or 0, st.bags or 0, st.unread or 0, bagBrowse.tries or 0, st.tooDear or 0, st.notBetter or 0),
+    }
+    for _, c in ipairs(bagCands) do
+        lines[#lines + 1] = string.format("  %s: item %d, %d slots, %s (%s)", B.BAG_LABEL[c.bagKind] or c.bagKind, c.itemID, c.slots, money0(c.price or 0), tostring(c.state))
+    end
+    return lines
 end
 
 function B.Bags()
@@ -724,10 +797,21 @@ function B.ScanWeapons()
     for i = #candidates, 1, -1 do candidates[i] = nil end
     AH().Refresh(); AH().Pump()
 end
+-- the bag scan, on request (decision 320, like the weapons)
+local function resetBags()
+    bagBrowse.state, bagBrowse.pages, bagBrowse.tries, bagBrowse.results, bagBrowse.stats = "idle", 0, 0, nil, nil
+    for i = #bagCands, 1, -1 do bagCands[i] = nil end
+end
+function B.ScanBags()
+    B.want.bags = true
+    resetBags()
+    AH().Refresh(); AH().Pump()
+end
 -- everything again: the stock prices, the weapons, the bags (decision 290)
 function B.ScanAll()
     B.want.weapons, B.want.bags = true, true
-    browse.state, bagBrowse.state = "idle", "idle"
+    browse.state = "idle"
+    resetBags()
     for i = #candidates, 1, -1 do candidates[i] = nil end
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
     for _, r in pairs(byId) do r.state = "price" end
@@ -766,6 +850,10 @@ function B.NextQuery()
     end
     for _, c in ipairs(candidates) do
         if c.state == "price" then return c end
+    end
+    if B.want.bags and bagBrowse.state == "more" then
+        bagBrowse.state = "asking"
+        return { browse = true, more = true, key = "bagsmore", onResult = function() onBagBrowse() end }
     end
     if B.want.bags and bagBrowse.state == "idle" then
         local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
@@ -980,7 +1068,7 @@ function B.Open()
     buying = nil
     B.want.weapons, B.want.bags = false, false
     browse.state = "idle"
-    bagBrowse.state = "idle"
+    resetBags()
     for i = #candidates, 1, -1 do candidates[i] = nil end
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
     for _, r in pairs(byId) do r.state = "price" end
@@ -993,6 +1081,7 @@ end
 -- Drawing (inside the auction helper's panel)
 ----------------------------------------------------------------------
 local ui
+B._ui = function() return ui end
 local function fs(parent, font, r, g, b)
     local t = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlight")
     t:SetJustifyH("LEFT")
@@ -1100,6 +1189,14 @@ local function build(panel)
     ui.wScan = wScan
     ui.wNote = fs(ui, "GameFontDisableSmall")
     ui.gTitle = fs(ui, "GameFontNormal", 0.95, 0.82, 0.48); ui.gTitle:SetText("Bags")
+    local gScan = CreateFrame("Button", nil, ui)
+    gScan:SetSize(348, 24)
+    gScan.bg = gScan:CreateTexture(nil, "BACKGROUND"); gScan.bg:SetAllPoints(); gScan.bg:SetColorTexture(0.165, 0.141, 0.086, 1)
+    gScan.hl = gScan:CreateTexture(nil, "HIGHLIGHT"); gScan.hl:SetAllPoints(); gScan.hl:SetColorTexture(1, 1, 1, 0.06)
+    gScan.text = fs(gScan, "GameFontNormalSmall", 0.95, 0.82, 0.48); gScan.text:SetPoint("CENTER"); gScan.text:SetText("Scan for bigger bags")
+    gScan:SetScript("OnClick", function() B.ScanBags() end)
+    ui.gScan = gScan
+    ui.gNote = fs(ui, "GameFontDisableSmall")
     ui.gRows = {}
     for i = 1, B.BAG_ROWS do
         local r = makeRow(ui, 38)
@@ -1116,7 +1213,6 @@ local function build(panel)
 end
 B._UI = function() return ui end
 
-local function money0(c) return (c and c > 0) and money(c) or "-" end
 
 -- draws the buy view below `top` and returns the height it needs
 function B.Render(panel, top)
@@ -1161,10 +1257,25 @@ function B.Render(panel, top)
     ui.wNote:SetText(wText or "")
     if wText then y = y + 18 end
     -- bags (decision 265)
+    -- the section is always there (decision 320): title, the scan button or what the scan found
     local G = B.Bags()
     ui.gTitle:ClearAllPoints(); ui.gTitle:SetPoint("TOPLEFT", 16, -(y + 4))
-    ui.gTitle:SetShown(#G > 0)
-    if #G > 0 then y = y + 24 end
+    ui.gTitle:Show()
+    y = y + 24
+    ui.gScan:SetShown(not B.want.bags)
+    ui.gScan:ClearAllPoints(); ui.gScan:SetPoint("TOPLEFT", 16, -y)
+    local gText
+    if not B.want.bags then y = y + 28
+    else
+        local pricing = false
+        for _, c in ipairs(bagCands) do if c.state == "price" then pricing = true end end
+        local st = bagBrowse.stats or {}
+        if bagBrowse.state ~= "done" or pricing then gText = "Looking at the bags..."
+        elseif #G == 0 then
+            gText = "No bigger bag on sale right now"
+            if (st.unread or 0) > 0 then gText = gText .. " (" .. st.unread .. " could not be read)" end
+        end
+    end
     for i, r in ipairs(ui.gRows) do
         local g = G[i]
         r.g = g
@@ -1181,6 +1292,9 @@ function B.Render(panel, top)
             y = y + 40
         end
     end
+    ui.gNote:ClearAllPoints(); ui.gNote:SetPoint("TOPLEFT", 16, -y)
+    ui.gNote:SetText(gText or "")
+    if gText then y = y + 18 end
     -- stock
     y = y + 6
     ui.sTitle:ClearAllPoints(); ui.sTitle:SetPoint("TOPLEFT", 16, -y)

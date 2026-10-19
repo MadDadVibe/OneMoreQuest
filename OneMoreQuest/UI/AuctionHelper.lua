@@ -451,7 +451,9 @@ function AH._pump()
     local q = AH.view == "buy" and OMQ.AuctionBuy and OMQ.AuctionBuy.NextQuery()      -- only once the buy tab is looked at (decision 290)
     if q then
         asking, askedAt = q, now()
-        if q.browse then
+        if q.more then                                    -- the next page of a browse (decision 320)
+            if A.RequestMoreBrowseResults then A.RequestMoreBrowseResults() else gotPrice(q) end
+        elseif q.browse then
             if A.SendBrowseQuery then A.SendBrowseQuery(q.query) else gotPrice(q) end
         else
             A.SendSearchQuery(q.itemKey, sorts(), true)
@@ -1039,7 +1041,8 @@ end
 local ev = CreateFrame("Frame")
 for _, e in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED",
                      "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_AUCTION_CREATED", "AUCTION_HOUSE_POST_WARNING",
-                     "AUCTION_HOUSE_POST_ERROR", "BAG_UPDATE_DELAYED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" }) do
+                     "AUCTION_HOUSE_POST_ERROR", "BAG_UPDATE_DELAYED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED",
+                     "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 ev:SetScript("OnEvent", function(_, event, a1)
@@ -1056,7 +1059,7 @@ ev:SetScript("OnEvent", function(_, event, a1)
                 or (asking.anyKey and type(a1) == "table" and a1.itemID == asking.itemID)) then
                 asking.commodity = false; gotPrice(asking)
             end
-        elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
+        elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
             if asking and asking.browse then asking.answered = true; gotPrice(asking) end
         elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then AH.Pump()
         elseif event == "AUCTION_HOUSE_AUCTION_CREATED" then
@@ -1102,7 +1105,12 @@ OMQ:RegisterCommand("ah", function(arg)
     arg = (arg or ""):lower()
     if arg == "fast" or arg == "select" then AH.SetMode(arg); OMQ:Print("auction helper: " .. arg .. " mode"); return end
     if arg == "unskip" then db().skip = {}; OMQ:Print("auction helper: no item is skipped any more"); AH.Evaluate(); AH.Refresh(); return end
+    if arg == "bags" then                                -- what the bag search saw (decision 320)
+        local B = OMQ.AuctionBuy
+        for _, l in ipairs(B and B.BagReport and B.BagReport() or { "bags: no buy mode" }) do OMQ:Print(l) end
+        return
+    end
     local n = 0
     for _ in pairs(db().skip) do n = n + 1 end
-    OMQ:Print("auction helper: " .. AH.Mode() .. " mode, " .. n .. " skipped items. " .. AH.EarnedText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. ".  /omq ah fast | select | unskip")
+    OMQ:Print("auction helper: " .. AH.Mode() .. " mode, " .. n .. " skipped items. " .. AH.EarnedText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. ".  /omq ah fast | select | unskip | bags")
 end, "auction helper: fast or select mode, forget the skipped items")
