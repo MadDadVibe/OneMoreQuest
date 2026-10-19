@@ -34,4 +34,4 @@ jobs:
           zip -qr "OneMoreQuest_v$VER.zip" OneMoreQuest
           gh release create "v$VER" "OneMoreQuest_v$VER.zip" \
             --title "One More Quest v$VER" \
-            --notes "Unzip into World of Warcraft/_classic_/Interface/AddOns (WoW Forever client) and /reload."
+            --notes "Unzip into the Interface/AddOns folder of your WoW Forever installation, then /reload in the game."
