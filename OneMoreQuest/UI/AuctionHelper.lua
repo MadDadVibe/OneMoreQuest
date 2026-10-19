@@ -426,13 +426,6 @@ end
 function AH._pump()
     local A = CA()
     if not (A and A.SendSearchQuery) or not AH.open then return end
-    -- the bag scan has a time limit (decision 322): when it ends, a bag search still waited for is dropped
-    local BUY = OMQ.AuctionBuy
-    if BUY and BUY.TakeBagDrop and BUY.TakeBagDrop() and asking and type(asking.key) == "string"
-        and (asking.key:find("^bags") or asking.key:find("^g%d")) then
-        asking = nil
-        AH.Refresh()
-    end
     if asking then
         if now() - askedAt < AH.QUERY_TIMEOUT then return end
         gotPrice(asking)                               -- no answer: read what is there
@@ -441,13 +434,6 @@ function AH._pump()
     if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
     if AH.Busy() then return end                       -- a post or a purchase goes first (decision 281)
     if now() < (AH.quietUntil or 0) then return end   -- the dad is clicking: no new search (decision 293)
-    -- the next page of the bag browse goes first: any other browse would replace its results (decision 323)
-    local first = AH.view == "buy" and BUY and BUY.BrowseFirst and BUY.BrowseFirst()
-    if first then
-        asking, askedAt = first, now()
-        if A.RequestMoreBrowseResults then A.RequestMoreBrowseResults() else gotPrice(first) end
-        return
-    end
     local bq = batchQuery()
     if bq then
         asking, askedAt = bq, now()
@@ -465,9 +451,7 @@ function AH._pump()
     local q = AH.view == "buy" and OMQ.AuctionBuy and OMQ.AuctionBuy.NextQuery()      -- only once the buy tab is looked at (decision 290)
     if q then
         asking, askedAt = q, now()
-        if q.more then                                    -- the next page of a browse (decision 320)
-            if A.RequestMoreBrowseResults then A.RequestMoreBrowseResults() else gotPrice(q) end
-        elseif q.browse then
+        if q.browse then
             if A.SendBrowseQuery then A.SendBrowseQuery(q.query) else gotPrice(q) end
         else
             A.SendSearchQuery(q.itemKey, sorts(), true)
@@ -1056,8 +1040,7 @@ end
 local ev = CreateFrame("Frame")
 for _, e in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED",
                      "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_AUCTION_CREATED", "AUCTION_HOUSE_POST_WARNING",
-                     "AUCTION_HOUSE_POST_ERROR", "BAG_UPDATE_DELAYED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED",
-                     "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" }) do
+                     "AUCTION_HOUSE_POST_ERROR", "BAG_UPDATE_DELAYED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 ev:SetScript("OnEvent", function(_, event, a1)
@@ -1074,7 +1057,7 @@ ev:SetScript("OnEvent", function(_, event, a1)
                 or (asking.anyKey and type(a1) == "table" and a1.itemID == asking.itemID)) then
                 asking.commodity = false; gotPrice(asking)
             end
-        elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
+        elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
             if asking and asking.browse then asking.answered = true; gotPrice(asking) end
         elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then AH.Pump()
         elseif event == "AUCTION_HOUSE_AUCTION_CREATED" then

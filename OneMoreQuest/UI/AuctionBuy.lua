@@ -651,15 +651,12 @@ function B.WantedKinds()
     return want
 end
 
--- The bag browse (decision 320): the game hands out the browse results in pages, cheapest first, so the
--- first page is full of small bags. Every page is asked for until the game has handed out all containers
--- (decision 321: the whole list, it only runs on "Scan for bigger bags" or "Scan all"); only a page that
--- brings nothing new, or the safety limit B.BAG_PAGES, ends it early. Then every result is judged. The slot count comes from the item's tooltip; the game knows it only once the item is loaded, so
--- unread bags are loaded and judged again (at most B.BAG_TRIES times).
-B.BAG_PAGES, B.BAG_TRIES, B.BAG_RETRY = 500, 3, 1.5
--- decision 322: the whole bag scan (pages, loading, prices) ends after B.BAG_MAX seconds whatever happens;
--- what was found by then is shown, a price still missing counts as "none"
-B.BAG_MAX = 45
+-- The bag search (decision 325, like the weapon search): one browse for containers (class 1, the game's
+-- "Containers" category), for hunters a second one for quivers and ammo pouches (class 11, like the wand
+-- browse of the weapons). Each answer is read at once, there is no paging. Then every result is judged:
+-- one row per bag type with the cheapest offer. The slot count comes from the item's tooltip; the game
+-- knows it only once the item is loaded, so unread bags are loaded and judged again (at most B.BAG_TRIES).
+B.BAG_TRIES, B.BAG_RETRY = 3, 1.5
 
 local function judgeBags()
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
@@ -730,107 +727,48 @@ function B.JudgeBags()
     bagBrowse.state = "done"
 end
 
--- Decision 323: the auction house keeps ONE browse result list; any other browse (the batched stock prices,
--- the weapons) replaces it. So the bag results are copied at every page, and while the bag browse wants its
--- next page nothing else is sent in between (B.BrowseFirst, asked by the queue before anything else).
-local function keepBagResults(A)
-    local list, have = bagBrowse.results or {}, {}
-    for _, r in ipairs(list) do if r.itemKey then have[tostring(r.itemKey.itemID) .. ":" .. tostring(r.itemKey.itemLevel)] = true end end
-    local added = 0
-    for _, res in ipairs(A.GetBrowseResults and A.GetBrowseResults() or {}) do
-        local k = res.itemKey and (tostring(res.itemKey.itemID) .. ":" .. tostring(res.itemKey.itemLevel))
-        if k and not have[k] then have[k] = true; list[#list + 1] = res; added = added + 1 end
-    end
-    bagBrowse.results = list
-    return added
+local function wantsQuivers()
+    local _, class = UnitClass("player")
+    return class == "HUNTER"
 end
 
--- Decision 324: like the weapon scan, the bags are judged straight from the first answer and shown at
--- once; further pages only add to them in the background (B.BrowseFirst), so a page that never comes can
--- not hide what was already found.
-local function onBagBrowse()
-    bagBrowse.moreOut = nil
-    if bagBrowse.finished then return end                -- the time limit already ended the scan
+-- the answer of a bag browse: read it at once, like the weapons (decision 325)
+local function onBagBrowse(q)
     local A = CA()
-    local full = not A.HasFullBrowseResults or A.HasFullBrowseResults()
-    local first = bagBrowse.results == nil
-    local added = keepBagResults(A)
-    bagBrowse.seen = #bagBrowse.results
-    bagBrowse.wantMore = (not full) and (first or added > 0) and A.RequestMoreBrowseResults ~= nil
-        and (bagBrowse.pages or 0) < B.BAG_PAGES or nil
-    if bagBrowse.state ~= "loading" and (first or added > 0 or bagBrowse.state ~= "done") then
-        bagBrowse.tries = 0
-        B.JudgeBags()
-    end
+    bagBrowse.answered = (bagBrowse.answered or 0) + (q and q.answered and 1 or 0)
+    bagBrowse.results = bagBrowse.results or {}
+    for _, res in ipairs(A.GetBrowseResults and A.GetBrowseResults() or {}) do bagBrowse.results[#bagBrowse.results + 1] = res end
+    if bagBrowse.state == "asking" and wantsQuivers() then bagBrowse.state = "quivers"; return end   -- the quiver browse next
+    bagBrowse.tries = 0
+    B.JudgeBags()
 end
 
--- the queue asks this first: the next page of the bag browse goes before every other search (decision 323)
-function B.BrowseFirst()
-    if B.want.bags and bagBrowse.wantMore and not bagBrowse.moreOut and not bagBrowse.finished then
-        bagBrowse.wantMore, bagBrowse.moreOut = nil, true
-        bagBrowse.pages = (bagBrowse.pages or 0) + 1
-        return { browse = true, more = true, key = "bagsmore", onResult = function() onBagBrowse() end }
-    end
-    return nil
-end
-local function bagsPaging() return (bagBrowse.wantMore or bagBrowse.moreOut) and not bagBrowse.finished end
-
--- /omq ah bags: what the bag search saw (decision 320)
+-- /omq ah bags: what the bag search saw (decisions 320, 325)
 function B.BagReport()
     local worn, want = B.WornBags(), B.WantedKinds()
     local kinds, wk = {}, {}
     for k, n in pairs(worn.kinds) do kinds[#kinds + 1] = (B.BAG_LABEL[k] or k) .. " " .. n end
     for k in pairs(want) do wk[#wk + 1] = B.BAG_LABEL[k] or k end
     local st = bagBrowse.stats or {}
+    local H = AH()
+    local q, age = nil, 0
+    if H and H._Asking then q, age = H._Asking() end
     local lines = {
-"v" .. tostring(OMQ.version) .. " bags: scan " .. (B.want.bags and "requested" or "not requested") .. ", state " .. tostring(bagBrowse.state) .. ", pages " .. (bagBrowse.pages or 0) + (bagBrowse.results and 1 or 0) .. (bagsPaging() and " (more coming)" or ""),
+        string.format("v%s bags: scan %s, state %s, answers of the game %d", tostring(OMQ.version),
+            B.want.bags and "requested" or "not requested", tostring(bagBrowse.state), bagBrowse.answered or 0),
         "worn: smallest normal bag " .. tostring(worn.normal) .. (#kinds > 0 and (", " .. table.concat(kinds, ", ")) or ""),
         "special bags for you: " .. (#wk > 0 and table.concat(wk, ", ") or "none") .. ", budget " .. money0(budget()),
         string.format("results %d, bags %d, slots unread %d (tries %d), too dear %d, not bigger %d",
             st.results or 0, st.bags or 0, st.unread or 0, bagBrowse.tries or 0, st.tooDear or 0, st.notBetter or 0),
+        "the queue waits for: " .. (q and (tostring(q.key) .. " since " .. math.floor(age) .. "s") or "nothing"),
     }
-    local H = AH()
-    local q, age = nil, 0
-    if H and H._Asking then q, age = H._Asking() end
-    lines[#lines + 1] = string.format("running %ds%s%s; the queue waits for: %s",
-        bagBrowse.started and math.floor(now() - bagBrowse.started) or 0, bagBrowse.finished and ", finished" or "",
-        bagBrowse.timedOut and ", ended by the time limit" or "", q and (tostring(q.key) .. " since " .. math.floor(age) .. "s") or "nothing")
     for _, c in ipairs(bagCands) do
         lines[#lines + 1] = string.format("  %s: item %d, %d slots, %s (%s)", B.BAG_LABEL[c.bagKind] or c.bagKind, c.itemID, c.slots, money0(c.price or 0), tostring(c.state))
     end
     return lines
 end
 
--- the watchdog of the bag scan (decision 322)
-local function bagWatch()
-    if not (B.want.bags and bagBrowse.started) or bagBrowse.finished then return end
-    local pricing = false
-    for _, c in ipairs(bagCands) do if c.state == "price" then pricing = true end end
-    if bagBrowse.state == "done" and not pricing and not bagBrowse.wantMore and not bagBrowse.moreOut then
-        bagBrowse.finished = true; return
-    end
-    if now() - bagBrowse.started < B.BAG_MAX then return end
-    bagBrowse.finished, bagBrowse.timedOut = true, true
-    bagBrowse.wantMore, bagBrowse.moreOut = nil, nil
-    if bagBrowse.state ~= "done" then
-        bagBrowse.tries = B.BAG_TRIES                     -- no more loading rounds
-        judgeBags()
-        bagBrowse.state = "done"
-    end
-    for _, c in ipairs(bagCands) do if c.state == "price" then c.state = "none" end end
-    bagBrowse.dropAsk = true                              -- the queue drops a bag search it still waits for
-    return true
-end
-function B.TakeBagDrop()
-    bagWatch()
-    local d = bagBrowse.dropAsk
-    bagBrowse.dropAsk = nil
-    return d
-end
-B._bagWatch = bagWatch
-
 function B.Bags()
-    bagWatch()
     local out = {}
     local never = (db()).never
     for _, c in ipairs(bagCands) do
@@ -866,8 +804,7 @@ function B.Pending()
     for _, list in ipairs({ rows, foods, alts, candidates, bagCands }) do
         for _, r in ipairs(list) do if r.state == "price" then return true end end
     end
-    bagWatch()
-    return (B.want.weapons and browse.state ~= "done") or (B.want.bags and (bagBrowse.state ~= "done" or bagsPaging())) and true or false
+    return (B.want.weapons and browse.state ~= "done") or (B.want.bags and bagBrowse.state ~= "done") and true or false
 end
 -- the weapon scan, on request (decision 290)
 function B.ScanWeapons()
@@ -878,9 +815,7 @@ function B.ScanWeapons()
 end
 -- the bag scan, on request (decision 320, like the weapons)
 local function resetBags()
-    bagBrowse.state, bagBrowse.pages, bagBrowse.tries, bagBrowse.results, bagBrowse.stats, bagBrowse.seen = "idle", 0, 0, nil, nil, 0
-    bagBrowse.started, bagBrowse.finished, bagBrowse.timedOut = nil, nil, nil
-    bagBrowse.wantMore, bagBrowse.moreOut = nil, nil
+    bagBrowse.state, bagBrowse.tries, bagBrowse.results, bagBrowse.stats, bagBrowse.answered = "idle", 0, nil, nil, 0
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
 end
 function B.ScanBags()
@@ -932,15 +867,13 @@ function B.NextQuery()
     for _, c in ipairs(candidates) do
         if c.state == "price" then return c end
     end
-    bagWatch()
-    do local q = B.BrowseFirst(); if q then return q end end
-    if B.want.bags and bagBrowse.state == "idle" then
-        bagBrowse.started = bagBrowse.started or now()
+    if B.want.bags and (bagBrowse.state == "idle" or bagBrowse.state == "quivers") then
         local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
-        bagBrowse.state = "asking"
-        return { browse = true, key = "bags", onResult = function() onBagBrowse() end,
+        local class = bagBrowse.state == "quivers" and 11 or 1
+        bagBrowse.state = class == 1 and "asking" or "asking quivers"
+        return { browse = true, key = "bags" .. class, onResult = function(q) onBagBrowse(q) end,
                  query = { searchString = "", sorts = { { sortOrder = P, reverseSort = false } },
-                           itemClassFilters = { { classID = 1 }, { classID = 11 } } } }
+                           itemClassFilters = { { classID = class } } } }
     end
     for _, c in ipairs(bagCands) do
         if c.state == "price" then return c end
@@ -1353,7 +1286,7 @@ function B.Render(panel, top)
         if bagBrowse.state == "loading" then
             gText = string.format("Loading %d bags...", st.unread or 0)
         elseif bagBrowse.state ~= "done" then
-            gText = (bagBrowse.seen or 0) > 0 and string.format("Reading the containers... %d so far", bagBrowse.seen) or "Looking at the bags..."
+            gText = "Looking at the bags..."
         elseif pricing then
             local n, left = #bagCands, 0
             for _, c in ipairs(bagCands) do if c.state == "price" then left = left + 1 end end
@@ -1363,9 +1296,6 @@ function B.Render(panel, top)
             if (st.unread or 0) > 0 then gText = gText .. " (" .. st.unread .. " could not be read)" end
         elseif (B.bagsMore or 0) > 0 then
             gText = string.format("and %d more bag types", B.bagsMore)
-        end
-        if #G > 0 and bagsPaging() then             -- shown already, more pages still come in (decision 324)
-            gText = string.format("Reading more containers... %d so far", bagBrowse.seen or 0)
         end
     end
     for i, r in ipairs(ui.gRows) do
