@@ -737,7 +737,11 @@ local function onBagBrowse(q)
     local A = CA()
     bagBrowse.answered = (bagBrowse.answered or 0) + (q and q.answered and 1 or 0)
     bagBrowse.results = bagBrowse.results or {}
-    for _, res in ipairs(A.GetBrowseResults and A.GetBrowseResults() or {}) do bagBrowse.results[#bagBrowse.results + 1] = res end
+    local got = A.GetBrowseResults and A.GetBrowseResults() or {}
+    for _, res in ipairs(got) do bagBrowse.results[#bagBrowse.results + 1] = res end
+    -- what each browse saw (decision 326): the game's answers and how many results were read
+    bagBrowse.log = bagBrowse.log or {}
+    bagBrowse.log[#bagBrowse.log + 1] = string.format("%s: %s, read %d", tostring(q and q.key), (q and q.answers) and table.concat(q.answers, "; ") or "no answer (timeout)", #got)
     if bagBrowse.state == "asking" and wantsQuivers() then bagBrowse.state = "quivers"; return end   -- the quiver browse next
     bagBrowse.tries = 0
     B.JudgeBags()
@@ -762,6 +766,7 @@ function B.BagReport()
             st.results or 0, st.bags or 0, st.unread or 0, bagBrowse.tries or 0, st.tooDear or 0, st.notBetter or 0),
         "the queue waits for: " .. (q and (tostring(q.key) .. " since " .. math.floor(age) .. "s") or "nothing"),
     }
+    for _, l in ipairs(bagBrowse.log or {}) do lines[#lines + 1] = "  " .. l end
     for _, c in ipairs(bagCands) do
         lines[#lines + 1] = string.format("  %s: item %d, %d slots, %s (%s)", B.BAG_LABEL[c.bagKind] or c.bagKind, c.itemID, c.slots, money0(c.price or 0), tostring(c.state))
     end
@@ -815,7 +820,7 @@ function B.ScanWeapons()
 end
 -- the bag scan, on request (decision 320, like the weapons)
 local function resetBags()
-    bagBrowse.state, bagBrowse.tries, bagBrowse.results, bagBrowse.stats, bagBrowse.answered = "idle", 0, nil, nil, 0
+    bagBrowse.state, bagBrowse.tries, bagBrowse.results, bagBrowse.stats, bagBrowse.answered, bagBrowse.log = "idle", 0, nil, nil, 0, nil
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
 end
 function B.ScanBags()
