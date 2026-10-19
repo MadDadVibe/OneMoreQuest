@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "OneMoreQuest/OneMoreQuest.toc"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: v
+        run: |
+          ver=$(sed -n 's/^## Version: *//p' OneMoreQuest/OneMoreQuest.toc | tr -d '\r')
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.v.outputs.version }}
+        run: |
+          if gh release view "v$VER" >/dev/null 2>&1; then
+            echo "Release v$VER exists, nothing to do"; exit 0
+          fi
+          zip -qr "OneMoreQuest_v$VER.zip" OneMoreQuest
+          gh release create "v$VER" "OneMoreQuest_v$VER.zip" \
+            --title "One More Quest v$VER" \
+            --notes "Unzip into World of Warcraft/_classic_/Interface/AddOns (WoW Forever client) and /reload."
