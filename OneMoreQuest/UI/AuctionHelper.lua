@@ -428,7 +428,7 @@ function AH._pump()
     if not (A and A.SendSearchQuery) or not AH.open then return end
     -- the bag scan has a time limit (decision 322): when it ends, a bag search still waited for is dropped
     local BUY = OMQ.AuctionBuy
-    if BUY and BUY._bagWatch and BUY._bagWatch() and asking and type(asking.key) == "string"
+    if BUY and BUY.TakeBagDrop and BUY.TakeBagDrop() and asking and type(asking.key) == "string"
         and (asking.key:find("^bags") or asking.key:find("^g%d")) then
         asking = nil
         AH.Refresh()
@@ -441,6 +441,13 @@ function AH._pump()
     if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
     if AH.Busy() then return end                       -- a post or a purchase goes first (decision 281)
     if now() < (AH.quietUntil or 0) then return end   -- the dad is clicking: no new search (decision 293)
+    -- the next page of the bag browse goes first: any other browse would replace its results (decision 323)
+    local first = AH.view == "buy" and BUY and BUY.BrowseFirst and BUY.BrowseFirst()
+    if first then
+        asking, askedAt = first, now()
+        if A.RequestMoreBrowseResults then A.RequestMoreBrowseResults() else gotPrice(first) end
+        return
+    end
     local bq = batchQuery()
     if bq then
         asking, askedAt = bq, now()

@@ -730,21 +730,43 @@ function B.JudgeBags()
     bagBrowse.state = "done"
 end
 
+-- Decision 323: the auction house keeps ONE browse result list; any other browse (the batched stock prices,
+-- the weapons) replaces it. So the bag results are copied at every page, and while the bag browse wants its
+-- next page nothing else is sent in between (B.BrowseFirst, asked by the queue before anything else).
+local function keepBagResults(A)
+    local list, have = bagBrowse.results or {}, {}
+    for _, r in ipairs(list) do if r.itemKey then have[tostring(r.itemKey.itemID) .. ":" .. tostring(r.itemKey.itemLevel)] = true end end
+    local added = 0
+    for _, res in ipairs(A.GetBrowseResults and A.GetBrowseResults() or {}) do
+        local k = res.itemKey and (tostring(res.itemKey.itemID) .. ":" .. tostring(res.itemKey.itemLevel))
+        if k and not have[k] then have[k] = true; list[#list + 1] = res; added = added + 1 end
+    end
+    bagBrowse.results = list
+    return added
+end
+
 local function onBagBrowse()
+    if bagBrowse.finished then return end                -- the time limit already ended the scan
     local A = CA()
     local full = not A.HasFullBrowseResults or A.HasFullBrowseResults()
-    local n = #(A.GetBrowseResults and A.GetBrowseResults() or {})
-    local stalled = (bagBrowse.pages or 0) > 0 and n <= (bagBrowse.seen or 0)    -- the last page brought nothing new
-    bagBrowse.seen = n
+    local added = keepBagResults(A)
+    bagBrowse.seen = #bagBrowse.results
+    local stalled = (bagBrowse.pages or 0) > 0 and added == 0    -- the last page brought nothing new
     if not full and not stalled and A.RequestMoreBrowseResults and (bagBrowse.pages or 0) < B.BAG_PAGES then
         bagBrowse.pages = (bagBrowse.pages or 0) + 1
-        bagBrowse.state = "more"                        -- the next page is asked for by the queue
+        bagBrowse.state = "more"                        -- the next page is asked for by the queue, before anything else
         return
     end
-    local list = {}
-    for i, res in ipairs(A.GetBrowseResults and A.GetBrowseResults() or {}) do list[i] = res end
-    bagBrowse.results = list
     B.JudgeBags()
+end
+
+-- the queue asks this first: the next page of the bag browse goes before every other search (decision 323)
+function B.BrowseFirst()
+    if B.want.bags and bagBrowse.state == "more" and not bagBrowse.finished then
+        bagBrowse.state = "asking"
+        return { browse = true, more = true, key = "bagsmore", onResult = function() onBagBrowse() end }
+    end
+    return nil
 end
 
 -- /omq ah bags: what the bag search saw (decision 320)
@@ -782,18 +804,19 @@ local function bagWatch()
     if now() - bagBrowse.started < B.BAG_MAX then return end
     bagBrowse.finished, bagBrowse.timedOut = true, true
     if bagBrowse.state ~= "done" then
-        if not bagBrowse.results then
-            local A = CA()
-            local list = {}
-            for i, res in ipairs(A and A.GetBrowseResults and A.GetBrowseResults() or {}) do list[i] = res end
-            bagBrowse.results = list
-        end
         bagBrowse.tries = B.BAG_TRIES                     -- no more loading rounds
         judgeBags()
         bagBrowse.state = "done"
     end
     for _, c in ipairs(bagCands) do if c.state == "price" then c.state = "none" end end
-    return true                                           -- just ended: the queue drops a bag search it still waits for
+    bagBrowse.dropAsk = true                              -- the queue drops a bag search it still waits for
+    return true
+end
+function B.TakeBagDrop()
+    bagWatch()
+    local d = bagBrowse.dropAsk
+    bagBrowse.dropAsk = nil
+    return d
 end
 B._bagWatch = bagWatch
 
@@ -900,10 +923,7 @@ function B.NextQuery()
         if c.state == "price" then return c end
     end
     bagWatch()
-    if B.want.bags and bagBrowse.state == "more" then
-        bagBrowse.state = "asking"
-        return { browse = true, more = true, key = "bagsmore", onResult = function() onBagBrowse() end }
-    end
+    do local q = B.BrowseFirst(); if q then return q end end
     if B.want.bags and bagBrowse.state == "idle" then
         bagBrowse.started = bagBrowse.started or now()
         local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
