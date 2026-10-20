@@ -18,6 +18,7 @@ local LABEL = {
     rank = "Spells not on a bar",
     prof = "Profession training",
     tools = "Profession tools (buy hammer, pick, knife...)",
+    tracking = "Profession tracking (Find Minerals, Find Herbs)",
     groupdrink = "A dad is drinking (mana break)",
     pet = "Pet basics (call, revive, feed, summon)",
     flightfollow = "A dad took a flight: follow him",

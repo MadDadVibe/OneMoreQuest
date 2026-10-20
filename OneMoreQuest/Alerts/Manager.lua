@@ -18,6 +18,7 @@ M.rules = {}                        -- id -> { id, name, check = function() -> l
 M.ruleOrder = {}
 local active = {}                   -- key -> alert { key, rule, text, icon, color, since }
 local dismissed = {}                -- key -> GetTime() when the timer ends (memory only)
+local away = {}                     -- key -> rule id: clicked away with the right button (decision 328), until the problem is gone
 local permanentlyDismissed          -- defined further down (rank cards)
 local sequence = 0
 local frame, cards, moreText
@@ -70,6 +71,13 @@ function M:Evaluate()
                         if a.rule == id then seen[key] = true end
                     end
                 elseif list then
+                    -- a card clicked away stays away while its problem lasts; once the rule no longer
+                    -- reports it, the card may come back with the next problem (decision 328)
+                    local reported = {}
+                    for _, a in ipairs(list) do reported[a.key] = true end
+                    for key, rid in pairs(away) do
+                        if rid == id and not reported[key] then away[key] = nil; dismissed[key] = nil end
+                    end
                     for _, a in ipairs(list) do
                         seen[a.key] = true
                         local until_ = dismissed[a.key]
@@ -135,19 +143,34 @@ function permanentlyDismissed(key)
     return s and s[key] and true or false
 end
 
-function M:Dismiss(key, forGood)
-    if type(key) == "string" and (key:find("^rank:") or (forGood and (key:find("^tool:") or key:find("^consd?:")))) then
+-- One click logic for every card (decision 328):
+--   left click      the action of the card (cast, arrow, window); a card without one goes away for 5 minutes
+--   right click     the card goes away (M:Dismiss(key, true)): for good for the training, tool and consumable cards,
+--                   otherwise as long as its problem lasts
+--   shift + right   the card snoozes for 5 minutes (M:Dismiss(key, false, true)) and then comes back
+function M:Dismiss(key, forGood, snooze)
+    local persisted = false
+    if type(key) == "string" and not snooze
+        and (key:find("^rank:") or (forGood and (key:find("^tool:") or key:find("^consd?:")))) then
         local s = rankStore(true)
-        if s then s[key] = true end
+        if s then s[key] = true; persisted = true end
     end
     dismissed[key] = GetTime() + DISMISS_SECONDS
+    if forGood and not snooze and not persisted then
+        away[key] = (active[key] and active[key].rule) or true
+        dismissed[key] = math.huge
+    end
     active[key] = nil
     if self._MarkDismissed then self:_MarkDismissed(key) end
     self:Render()
     OMQ:Fire("ALERT_DISMISSED", key)
 end
 
-function M:ClearDismissals() dismissed = {} end
+function M:ClearDismissals() dismissed = {}; away = {} end
+
+-- the separate cards (rage) ask whether they were clicked away, and clear it when their problem is gone
+function M:IsAway(key) return dismissed[key] ~= nil and GetTime() < dismissed[key] end
+function M:ClearAway(key) away[key] = nil; dismissed[key] = nil end
 function M:DismissedForGood(key) return permanentlyDismissed(key) end
 
 -- "Reset consumable reminders" (decision 266): the clicked away consumable cards come back
@@ -162,6 +185,7 @@ end
 -- this character, and the quest info cards.
 function M:ResetDismissed()
     dismissed = {}
+    away = {}
     local guid0 = UnitGUID("player")
     if guid0 and OMQ.db.alerts.rankDismissed then OMQ.db.alerts.rankDismissed[guid0] = nil end
     local guid = UnitGUID("player")
@@ -196,7 +220,7 @@ end
 ----------------------------------------------------------------------
 -- small coloured tag above the title, per rule
 local TAGS = { drink = "DRINK", repair = "REPAIR", train = "TRAINER", prof = "PROFESSION", rank = "SPELL RANK",
-               buff = "BUFF", talent = "TALENTS", ammo = "AMMO", betmail = "BET CHECK", drinks = "DRINKS" }
+               buff = "BUFF", talent = "TALENTS", ammo = "AMMO", betmail = "BET CHECK", drinks = "DRINKS", tracking = "TRACKING" }
 M.TAGS = TAGS
 
 -- "Repair: most damaged item at 18%" -> title "Repair", detail "Most damaged item at 18%"
@@ -465,6 +489,13 @@ local function makeCard(i)
     card:SetScript("PostClick", function(self, button, down)
         if down then return end          -- the up part of a click does the work
         if moveMode then return end
+        -- right click: away; shift + right click: snooze for 5 minutes (decision 328)
+        if button == "RightButton" then
+            if self.key then
+                M:Dismiss(self.key, true, IsShiftKeyDown and IsShiftKeyDown() or false)
+            end
+            return
+        end
         -- a weapon oil or stone: the click shows the worn weapons next to the card (decision 291)
         if rawget(self, "weapon") and button ~= "RightButton" then
             self.wShow = not self.wShow
@@ -491,11 +522,9 @@ local function makeCard(i)
             end
         end
         local go = self.go
-        local right = button == "RightButton"
-        if self.key then M:Dismiss(self.key, right) end
-        -- a left click starts the arrow, unless another arrow is already active; a right click only
-        -- dismisses (decision 251)
-        if go and not right and OMQ.Guide and not OMQ.Guide:IsActive()
+        if self.key then M:Dismiss(self.key, false) end
+        -- a left click starts the arrow, unless another arrow is already active
+        if go and OMQ.Guide and not OMQ.Guide:IsActive()
             and not (OMQ.Arrow and OMQ.Arrow.IsStragglerShown and OMQ.Arrow:IsStragglerShown()) then
             OMQ.Guide:Start(go)
         end

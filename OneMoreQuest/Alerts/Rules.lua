@@ -882,6 +882,85 @@ M:Register({
 })
 
 ----------------------------------------------------------------------
+-- 5c. Profession tracking (decision 329): Mining teaches Find Minerals, Herbalism teaches Find Herbs. While none of
+-- the trackings of my professions is on, a card offers it; a left click casts it. Only one tracking can run at a
+-- time, so with both professions one cast takes both cards away.
+----------------------------------------------------------------------
+M.TRACKING = {
+    { key = "Mining",    spell = 2580, what = "ore" },
+    { key = "Herbalism", spell = 2383, what = "herbs" },
+}
+
+-- Is the tracking with this spell on? true / false, or nil when the game gives no answer.
+-- Sources, in this order: the tracking list of the minimap, the active tracking icon, the auras.
+function M.TrackingOn(spellId)
+    local name = spellName(spellId)
+    local answered = false
+    -- 1. the list of tracking types (modern table answer or the classic list of values)
+    if C_Minimap and C_Minimap.GetNumTrackingTypes and C_Minimap.GetTrackingInfo then
+        local okN, n = pcall(C_Minimap.GetNumTrackingTypes)
+        if okN and type(n) == "number" and n > 0 then
+            for i = 1, n do
+                local ok, a, b, c = pcall(C_Minimap.GetTrackingInfo, i)
+                if ok then
+                    local tname, active, sid
+                    if type(a) == "table" then tname, active, sid = a.name, a.active, a.spellID
+                    else tname, active = a, c end
+                    if not isSecret(tname) and not isSecret(active) then
+                        answered = true
+                        if (sid == spellId or (name and tname == name)) and active then return true end
+                    end
+                end
+            end
+        end
+    end
+    -- 2. the icon of the tracking that is on
+    local tex
+    if GetTrackingTexture then
+        local ok, t = pcall(GetTrackingTexture)
+        if ok and not isSecret(t) then
+            if t == nil then return false end                 -- nothing is tracked
+            tex = t
+            if tostring(t) == tostring(spellIcon(spellId)) then return true end
+        end
+    end
+    -- 3. a tracking shows as a buff as well on some clients
+    local names = auraNames("player")
+    if names and name and names[name] then return true end
+    if answered then return false end
+    return nil                         -- no list; some other icon is tracked, or nothing readable: we cannot tell
+end
+
+M:Register({
+    id = "tracking", name = "Turn on the tracking of a profession (Find Minerals, Find Herbs)",
+    check = function()
+        if InCombatLockdown() then return "keep" end
+        if UnitIsDeadOrGhost("player") or (IsMounted and IsMounted()) then return nil end
+        local wanted = {}
+        for _, t in ipairs(M.TRACKING) do
+            if knows(t.spell) then wanted[#wanted + 1] = t end
+        end
+        if #wanted == 0 then return nil end
+        for _, t in ipairs(wanted) do
+            if M.TrackingOn(t.spell) ~= false then return nil end     -- on, or not readable: no card
+        end
+        local out = {}
+        for i = #wanted, 1, -1 do
+            local t = wanted[i]
+            local n = spellName(t.spell)
+            if n then
+                out[#out + 1] = {
+                    key = "track:" .. t.spell, cast = n, unit = "player",
+                    title = n, sub = "Tracking is off - click to see " .. t.what .. " on the minimap",
+                    tag = "TRACKING", icon = spellIcon(t.spell), color = GREEN,
+                }
+            end
+        end
+        return out
+    end,
+})
+
+----------------------------------------------------------------------
 -- 6. Missing buffs
 ----------------------------------------------------------------------
 local function unitInReach(unit)

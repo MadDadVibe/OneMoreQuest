@@ -1,6 +1,7 @@
 -- One More Quest: minimap icon
 -- Left click: lifetime window (the vote window while a vote waits for me), right click: quick options, shift + right click: full options,
--- shift + drag: move around the minimap, shift + left click: move mode (decision 79).
+-- shift + drag: move around the minimap, shift + left click: move mode (decision 79),
+-- ctrl + left click: end this session and start a new one (decision 328).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -164,6 +165,12 @@ local function createButton()
             OMQ:Fire("MINIMAP_SHIFT_RIGHT_CLICK")
         elseif mouse == "LeftButton" and IsShiftKeyDown() then
             OMQ:Fire("MINIMAP_SHIFT_CLICK")
+        elseif mouse == "LeftButton" and IsControlKeyDown and IsControlKeyDown() then
+            -- ctrl + left click: this session ends and a new one starts (decision 328)
+            if OMQ.Measure and OMQ.Measure.ResetSession then
+                OMQ.Measure:ResetSession()
+                OMQ:Print("new session started")
+            end
         elseif mouse == "LeftButton" then
             -- while the icon pulses (a vote waits for me) the click opens the vote window
             if OMQ.Vote and OMQ.Vote:NeedsMyVote() and OMQ.Vote:ShowWindow() then return end

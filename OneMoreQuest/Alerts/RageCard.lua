@@ -60,6 +60,11 @@ local function build()
         skin:SetAllPoints()
         card.skin = skin
     end
+    -- the same click logic as every card (decision 328): left casts, right goes away, shift + right snoozes 5 minutes
+    card:SetScript("PostClick", function(_, button, down)
+        if down or button ~= "RightButton" then return end
+        M:Dismiss("ragecard", true, IsShiftKeyDown and IsShiftKeyDown() or false)
+    end)
     card:SetAlpha(0)
     card:Hide()
 end
@@ -87,8 +92,9 @@ function RC.Wanted()
     end
     for _, id in ipairs(g.spells) do
         local n = spellName(id)
-        if n and names[n] then return nil end
+        if n and names[n] then M:ClearAway("ragecard"); return nil end
     end
+    if M:IsAway("ragecard") then return nil end
     return spellName(castId)
 end
 

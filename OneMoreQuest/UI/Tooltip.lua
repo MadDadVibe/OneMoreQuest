@@ -220,6 +220,11 @@ function Tooltip:Render()
     local foot2 = newText(frame, "GameFontHighlightSmall")
     foot2:SetPoint("TOP", frame, "TOP", 0, y)
     foot2:SetText("Shift + left click: move mode  -  Shift + right click: all options")
+    y = y - 15
+    local foot3 = newText(frame, "GameFontHighlightSmall")
+    foot3:SetPoint("TOP", frame, "TOP", 0, y)
+    foot3:SetText("Ctrl + left click: start a new session")
+    foot3:SetTextColor(GREY[1], GREY[2], GREY[3])
     foot2:SetTextColor(GREY[1], GREY[2], GREY[3])
     y = y - 16 - PAD
 
