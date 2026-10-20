@@ -1061,14 +1061,14 @@ ev:SetScript("OnEvent", function(_, event, a1)
         elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
             if asking and asking.browse then
                 asking.answered = true
-                -- decision 326: the game can answer a browse first with an empty list and fill it a moment
-                -- later; an empty answer of a single browse (not a batch) waits for the next one (or the timeout)
+                -- decisions 326 and 331: the game can answer a browse or a batch first with an empty list and fill
+                -- it a moment later; an empty answer waits for the next one (or the timeout)
                 local A = CA()
                 local n = #(A.GetBrowseResults and A.GetBrowseResults() or {})
                 asking.answers = asking.answers or {}
                 asking.answers[#asking.answers + 1] = string.format("%s %d%s after %.1fs", event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" and "added" or "updated",
                     n, (A.HasFullBrowseResults and not A.HasFullBrowseResults()) and " (not full)" or "", now() - askedAt)
-                if n > 0 or asking.batch then gotPrice(asking) end
+                if n > 0 then gotPrice(asking) end
             end
         elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then AH.Pump()
         elseif event == "AUCTION_HOUSE_AUCTION_CREATED" then
