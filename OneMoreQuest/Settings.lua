@@ -174,6 +174,14 @@ function S:Sections()
                   OMQ.db.options.selfCast = v and true or false
                   if OMQ.SelfCastProbe then OMQ.SelfCastProbe.Apply() end
               end },
+            -- decision 334: the threat meter
+            { type = "check", label = "Threat meter",
+              tip = "A small frame with the threat of everyone in your group on your target, in percent (100 = he is the target). Only in a group and in combat. Drag it with the left mouse button; /omq threat reset puts it back.",
+              get = function() return OMQ.db.options.threat ~= false end,
+              set = function(v)
+                  OMQ.db.options.threat = v and true or false
+                  if OMQ.ThreatMeter then OMQ.ThreatMeter.Refresh() end
+              end },
             { type = "check", label = "Follow group members on flights",
               tip = "If a member flies somewhere, your flight master picks the same destination.",
               get = qolGet("flight"), set = qolSet("flight") },

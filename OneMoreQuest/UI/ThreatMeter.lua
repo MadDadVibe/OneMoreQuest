@@ -1,0 +1,209 @@
+-- One More Quest: the threat meter (decision 333, step 2)
+-- A small frame that shows, for the current target, how much threat the player, the pet, the party and their
+-- pets have, as the game's scaled percentage (UnitDetailedThreatSituation, 100 = the unit is the target; it can
+-- be above 100 for a moment before the mob turns). Only in a group and only in combat. Values the game
+-- does not give (secret) are skipped; when nothing is readable the frame stays hidden. In combat without
+-- an attackable target a faded one line hint shows. Drag it with the left mouse button; /omq threat reset
+-- puts it back.
+local ADDON, OMQ = ...
+OMQ = _G.OneMoreQuest
+
+local M = {}
+OMQ.ThreatMeter = M
+
+M.MAX_ROWS = 8
+M.WARM = 70                 -- from here a bar turns warm
+M.HOT = 90                  -- from here my own bar turns red: the next hit may pull
+local ROW_H, GAP, WIDTH = 18, 3, 210
+local GOLD = { 0.89, 0.71, 0.29 }
+local COLOR = {
+    tank = { 0.64, 0.50, 0.21 }, warm = { 0.89, 0.71, 0.29 }, calm = { 0.39, 0.44, 0.55 }, hot = { 0.84, 0.33, 0.20 },
+}
+local PET_COLOR = { 0.56, 0.69, 0.38 }
+
+local function isSecret(v) return issecretvalue and issecretvalue(v) or false end
+local function optionOn() return not (OMQ.db and OMQ.db.options and OMQ.db.options.threat == false) end
+M.OptionOn = optionOn
+
+local function inGroup() return (IsInGroup and IsInGroup()) and true or false end
+
+local function classColor(unit)
+    local ok, _, file = pcall(UnitClass, unit)
+    local c = ok and file and not isSecret(file) and RAID_CLASS_COLORS and RAID_CLASS_COLORS[file]
+    if c then return { c.r, c.g, c.b } end
+    return { 0.8, 0.8, 0.8 }
+end
+
+-- what to show: state "hidden" | "notarget" | "rows"; rows sorted, highest first
+function M.Compute()
+    if not (optionOn() and inGroup()) then return "hidden" end
+    if not (UnitAffectingCombat and UnitAffectingCombat("player")) then return "hidden" end
+    local T = OMQ.ThreatProbe
+    if not (T and UnitExists and UnitExists("target")) then return "notarget" end
+    local okA, attack = pcall(UnitCanAttack, "player", "target")
+    if not okA or attack ~= true then return "notarget" end
+    if UnitIsDead and UnitIsDead("target") then return "notarget" end
+    local rows = {}
+    for _, unit in ipairs(T.UNITS) do
+        local r = T.Read(unit, "target")
+        if r and not r.err and not r.none and type(r.scaled) == "number" and not isSecret(r.scaled) and r.scaled > 0 then
+            local pet = unit == "pet" or unit:find("^partypet") ~= nil
+            rows[#rows + 1] = {
+                unit = unit, name = tostring(r.name), pct = r.scaled, pet = pet,
+                tank = (not isSecret(r.tank)) and r.tank == true, me = unit == "player",
+                color = pet and PET_COLOR or classColor(unit),
+            }
+        end
+    end
+    if #rows == 0 then return "hidden" end
+    table.sort(rows, function(a, b) if a.pct ~= b.pct then return a.pct > b.pct end return a.unit < b.unit end)
+    while #rows > M.MAX_ROWS do table.remove(rows) end
+    return "rows", rows
+end
+
+-- the bar colour of a row
+function M.BarColor(row)
+    if row.tank then return COLOR.tank end
+    if row.me and row.pct >= M.HOT then return COLOR.hot end
+    if row.pct >= M.WARM then return COLOR.warm end
+    return COLOR.calm
+end
+
+----------------------------------------------------------------------
+-- Frame
+----------------------------------------------------------------------
+local frame, head, tag, targetText, hint
+local pool = {}
+
+local function getRow(i)
+    if pool[i] then return pool[i] end
+    local row = CreateFrame("Frame", nil, frame)
+    row:SetHeight(ROW_H)
+    row.bg = row:CreateTexture(nil, "BACKGROUND")
+    row.bg:SetAllPoints()
+    row.bg:SetColorTexture(0.114, 0.129, 0.169, 1)
+    row.bar = row:CreateTexture(nil, "ARTWORK")
+    row.bar:SetPoint("TOPLEFT")
+    row.bar:SetPoint("BOTTOMLEFT")
+    row.edge = row:CreateTexture(nil, "OVERLAY")
+    row.edge:SetPoint("TOPLEFT")
+    row.edge:SetPoint("BOTTOMLEFT")
+    row.edge:SetWidth(2)
+    row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.name:SetPoint("LEFT", 6, 0)
+    row.value = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.value:SetPoint("RIGHT", -6, 0)
+    row.name:SetPoint("RIGHT", row.value, "LEFT", -4, 0)
+    row.name:SetJustifyH("LEFT")
+    pool[i] = row
+    return row
+end
+
+local function build()
+    frame = CreateFrame("Frame", "OneMoreQuestThreat", UIParent)
+    frame:SetFrameStrata("MEDIUM")
+    frame:SetClampedToScreen(true)
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetWidth(WIDTH)
+    frame:SetPoint("CENTER", UIParent, "CENTER", -300, 0)
+    local p = OMQ.db and OMQ.db.threatPos
+    if p then frame:ClearAllPoints(); frame:SetPoint(p[1], UIParent, p[2], p[3], p[4]) end
+    frame:SetScript("OnDragStart", function() frame:StartMoving() end)
+    frame:SetScript("OnDragStop", function()
+        frame:StopMovingOrSizing()
+        local point, _, rel, x, y = frame:GetPoint()
+        OMQ.db.threatPos = { point or "CENTER", rel or "CENTER", x or 0, y or 0 }
+    end)
+    local border = frame:CreateTexture(nil, "BACKGROUND", nil, -1)
+    border:SetPoint("TOPLEFT", -1, 1)
+    border:SetPoint("BOTTOMRIGHT", 1, -1)
+    border:SetColorTexture(0.64, 0.50, 0.21, 1)
+    local bg = frame:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0.078, 0.09, 0.122, 0.94)
+    tag = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    tag:SetPoint("TOPLEFT", 8, -7)
+    tag:SetText("THREAT")
+    tag:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+    targetText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    targetText:SetPoint("TOPRIGHT", -8, -7)
+    targetText:SetPoint("LEFT", tag, "RIGHT", 8, 0)
+    targetText:SetJustifyH("RIGHT")
+    hint = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    hint:SetPoint("LEFT", tag, "RIGHT", 8, 0)
+    hint:SetTextColor(0.55, 0.58, 0.63)
+    hint:SetText("No target in combat")
+    frame:Hide()
+end
+
+local function targetName()
+    local ok, n = pcall(UnitName, "target")
+    if ok and n and not isSecret(n) then return tostring(n) end
+    return ""
+end
+
+function M.Refresh()
+    local state, rows = M.Compute()
+    if state == "hidden" then
+        if frame then frame:Hide() end
+        return state
+    end
+    if not frame then build() end
+    frame:Show()
+    if state == "notarget" then
+        frame:SetAlpha(0.55)
+        targetText:SetText("")
+        hint:Show()
+        frame:SetHeight(26)
+        for _, row in ipairs(pool) do row:Hide() end
+        return state
+    end
+    frame:SetAlpha(1)
+    hint:Hide()
+    targetText:SetText(targetName())
+    local top = -24
+    for i, r in ipairs(rows) do
+        local row = getRow(i)
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", frame, "TOPLEFT", 6, top)
+        row:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -6, top)
+        local c = M.BarColor(r)
+        row.bar:SetColorTexture(c[1], c[2], c[3], r.tank and 0.75 or 0.55)
+        row.bar:SetWidth(math.max(1, (WIDTH - 12) * math.min(r.pct, 100) / 100))
+        if r.tank then
+            row.edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
+        elseif r.me and r.pct >= M.HOT then
+            row.edge:SetColorTexture(1, 0.54, 0.36, 1)
+        else
+            row.edge:SetColorTexture(0, 0, 0, 0)
+        end
+        row.name:SetText(r.pet and (r.name .. " (pet)") or r.name)
+        row.name:SetTextColor(r.color[1], r.color[2], r.color[3])
+        row.value:SetText(string.format("%d", math.floor(r.pct + 0.5)))
+        row:Show()
+        top = top - ROW_H - GAP
+    end
+    for i = #rows + 1, #pool do pool[i]:Hide() end
+    frame:SetHeight(-top + 5)
+    return state
+end
+
+function M.ResetPosition()
+    if OMQ.db then OMQ.db.threatPos = nil end
+    if frame then frame:ClearAllPoints(); frame:SetPoint("CENTER", UIParent, "CENTER", -300, 0) end
+end
+
+local driver = CreateFrame("Frame")
+local acc = 0
+for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_TARGET_CHANGED", "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD" }) do
+    pcall(driver.RegisterEvent, driver, e)
+end
+driver:SetScript("OnEvent", function() M.Refresh() end)
+driver:SetScript("OnUpdate", function(_, dt)
+    acc = acc + (dt or 0)
+    if acc < 0.4 then return end
+    acc = 0
+    M.Refresh()
+end)

@@ -96,6 +96,11 @@ end
 
 OMQ:RegisterCommand("threat", function(arg)
     arg = (arg or ""):lower():gsub("%s+", "")
+    if arg == "reset" then
+        if OMQ.ThreatMeter then OMQ.ThreatMeter.ResetPosition() end
+        OMQ:Print("threat meter: position reset")
+        return
+    end
     if arg == "live" then
         T.live = not T.live
         OMQ:Print("threat live " .. (T.live and "on (every second, in combat)" or "off"))
@@ -103,4 +108,4 @@ OMQ:RegisterCommand("threat", function(arg)
         return
     end
     for _, l in ipairs(T.Report()) do print(l) end
-end, "threat test: /omq threat | live (scaled/raw per unit, every second in combat)")
+end, "threat: /omq threat (report) | live (every second) | reset (meter position)")
