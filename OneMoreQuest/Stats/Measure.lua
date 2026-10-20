@@ -27,6 +27,7 @@ local function newSession()
         startLevelValue = level + (xpMax > 0 and xp / xpMax or 0),
         startLevel = level,
         xpGained = 0, goldGained = 0, yards = 0,
+        yardsFollow = 0,                 -- the part of the yards walked while following a group member (decision 332)
         fallDmg = 0,                     -- own fall damage, see the falling section
         xpQuest = 0, xpDisc = 0,         -- XP by source; the rest of xpGained counts as kills (decision 116)
         kills = 0, deaths = 0, nearDeaths = 0,
@@ -120,6 +121,7 @@ function M:GetValues()
     -- time until the next level at the session's XP per hour (decision 194)
     if level < 60 and v.xph > 0 then v.nextlvl = (xpMax - xp) / v.xph * 3600 end
     v.yards = s.yards
+    v.yfollow = s.yardsFollow or 0
     v.gold = s.goldGained
     v.curgold = GetMoney and GetMoney() or nil
     v.dmg = (s.dmgTotal or 0) > 0 and (s.dmgMine / s.dmgTotal * 100) or self.damageShare
@@ -487,6 +489,13 @@ local function sampleFall()
     end
 end
 
+-- following a group member (decision 332): the game says when the automatic follow starts and stops
+local following = false
+local followEvents = CreateFrame("Frame")
+for _, e in ipairs({ "AUTOFOLLOW_BEGIN", "AUTOFOLLOW_END" }) do pcall(followEvents.RegisterEvent, followEvents, e) end
+followEvents:SetScript("OnEvent", function(_, event) following = (event == "AUTOFOLLOW_BEGIN") end)
+function M:IsFollowing() return following end
+
 local lastX, lastY, lastInstance
 local function sampleDistance()
     if not UnitPosition then return end
@@ -497,7 +506,11 @@ local function sampleDistance()
         and not (IsFalling and IsFalling())
     if lastX and instance == lastInstance and onFoot then
         local d = math.sqrt((x - lastX) ^ 2 + (y - lastY) ^ 2)
-        if d <= MAX_YARDS_PER_SAMPLE then s.yards = s.yards + d end
+        if d <= MAX_YARDS_PER_SAMPLE then
+            s.yards = s.yards + d
+            -- the yards of a follow count in the total as well (decision 332)
+            if following then s.yardsFollow = (s.yardsFollow or 0) + d end
+        end
     end
     lastX, lastY, lastInstance = x, y, instance
 end
@@ -662,7 +675,7 @@ OMQ:RegisterCommand("session", function(arg)
     local v = M:GetValues()
     OMQ:Print("my session values:")
     for _, k in ipairs({ "xph", "lvlp", "lvl", "yards", "gold", "curgold", "dmg", "kb", "hit", "deaths", "near", "food",
-        "ptime", "xp", "xpkill", "xpquest", "xpdisc", "quests", "fights", "heal", "fallx", "falld", "drownd", "lava", "aucp", "aucb", "need", "greed" }) do
+        "ptime", "xp", "xpkill", "xpquest", "xpdisc", "quests", "fights", "heal", "fallx", "falld", "drownd", "lava", "aucp", "aucb", "need", "greed", "yfollow" }) do
         print(string.format("  %s = %s", k, v[k] ~= nil and string.format("%.2f", v[k]) or "no data"))
     end
 end, "show own session values; /omq session reset starts a new session")

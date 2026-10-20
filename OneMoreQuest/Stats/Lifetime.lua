@@ -11,7 +11,7 @@ local MIN_SESSION = 600
 local KEYS = { "ptime", "gold", "yards", "xp", "quests", "kb", "deaths", "falld", "drownd", "fallx", "near",
                "hit", "bestxph", "longest", "bestgold", "xpkill", "xpquest", "xpdisc", "aucp", "aucb" }
 -- sent in a second message so the first one stays short enough (decision 120)
-local KEYS2 = { "xph", "food", "fights", "heal", "lava", "mostdeaths", "need", "greed", "gamble", "betswon" }
+local KEYS2 = { "xph", "food", "fights", "heal", "lava", "mostdeaths", "need", "greed", "gamble", "betswon", "yfollow" }
 OMQ.lifeKeys = KEYS
 
 local L = {}
@@ -33,7 +33,7 @@ local function allSessions()
 end
 
 local function fromSessions()
-    local v = { ptime = 0, gold = 0, yards = 0, xp = 0, kb = 0, near = 0,
+    local v = { ptime = 0, gold = 0, yards = 0, yfollow = 0, xp = 0, kb = 0, near = 0,
                 hit = 0, bestxph = 0, longest = 0, bestgold = 0 }
     local tracked = false      -- any session that knows XP by source (since 0.14.0)
     local food, online = 0, 0
@@ -42,6 +42,7 @@ local function fromSessions()
         v.ptime = v.ptime + dur
         v.gold = v.gold + (s.goldGained or 0)
         v.yards = v.yards + (s.yards or 0)
+        v.yfollow = v.yfollow + (s.yardsFollow or 0)
         v.xp = v.xp + (s.xpGained or 0)
         v.kb = v.kb + (s.kills or 0)
         if s.fallDmg ~= nil then v.fallx = (v.fallx or 0) + s.fallDmg end

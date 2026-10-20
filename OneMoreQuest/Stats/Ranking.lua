@@ -64,6 +64,7 @@ local ALL = {
     { key = "gold",    label = "Gold gained",        label2 = "Gold earned",      best = "high", fmt = "gold", session = true, life = true },
     { key = "curgold", label = "Current gold",       best = "high", fmt = "gold", session = true },
     { key = "yards",   label = "Yards walked",       best = "high", fmt = "compact", session = true, life = true },
+    { key = "yfollow", label = "Yards on follow",    best = "high", fmt = "compact", session = true, life = true },
     { heading = "Experience" },
     { key = "lvlp",    label = "Level progress",     best = "high", fmt = "plus2", session = true },
     { key = "lvl",     label = "Current level",      best = "high", fmt = "dec2", session = true },
