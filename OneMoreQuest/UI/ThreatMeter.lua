@@ -20,29 +20,29 @@ local COLOR = {
     tank = { 0.64, 0.50, 0.21 }, warm = { 0.89, 0.71, 0.29 }, calm = { 0.39, 0.44, 0.55 }, hot = { 0.84, 0.33, 0.20 },
 }
 local PET_COLOR = { 0.56, 0.69, 0.38 }
+local function isSecret(v) return issecretvalue and issecretvalue(v) or false end
 COLOR.good = { 0.26, 0.66, 0.32 }          -- tank mode: I hold the aggro
 
--- Tank mode (decision 337): my role is Tank (warrior, druid, paladin), or I am a shaman in the damage
--- role (Enhancement) with Rockbiter on my weapon. The check of the weapon is cached for a few seconds.
-local rockCache = { at = -100, v = false }
-function M.TankMode()
-    local SC = OMQ.Score
-    if not SC then return false end
-    local role = SC.MyRole()
-    if role == "tank" then return true end
-    if SC.MyClass() == "SHAMAN" and role == "damage" then
-        local now = GetTime and GetTime() or 0
-        if now - rockCache.at >= 3 then
-            rockCache.at = now
-            local on = OMQ.Alerts and OMQ.Alerts.RockbiterOn and OMQ.Alerts.RockbiterOn()
-            rockCache.v = on == true
-        end
-        return rockCache.v
+-- Tank mode (decisions 337, 338): on when I have the role Tank in the group (the role assigned in the group
+-- finder or by the leader), or the main tank mark of a raid. The role is read from the game.
+function M.MyGroupRole()
+    local role, mt
+    if UnitGroupRolesAssigned then
+        local ok, r = pcall(UnitGroupRolesAssigned, "player")
+        if ok and type(r) == "string" and not isSecret(r) then role = r end
     end
-    return false
+    if GetPartyAssignment then
+        local ok, v = pcall(GetPartyAssignment, "MAINTANK", "player")
+        if ok and not isSecret(v) and v then mt = true end
+    end
+    return role, mt
 end
 
-local function isSecret(v) return issecretvalue and issecretvalue(v) or false end
+function M.TankMode()
+    local role, mt = M.MyGroupRole()
+    return role == "TANK" or mt == true
+end
+
 local function inGroup() return (IsInGroup and IsInGroup()) and true or false end
 
 -- when the meter may show (decision 335): "group" = in a group, "dungeon" = inside a dungeon or raid, "never"

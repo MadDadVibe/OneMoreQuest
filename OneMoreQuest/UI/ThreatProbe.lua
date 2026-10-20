@@ -66,6 +66,11 @@ function T.Report()
     local tl = targetLine()
     if not tl then out[1] = "threat: no target"; return out end
     out[1] = tl
+    if OMQ.ThreatMeter then
+        local role, mt = OMQ.ThreatMeter.MyGroupRole()
+        out[#out + 1] = string.format("my group role: %s%s  tank mode: %s", tostring(role or "none"), mt and " + main tank" or "",
+            OMQ.ThreatMeter.TankMode() and "on" or "off")
+    end
     local any = false
     for _, u in ipairs(T.UNITS) do
         local r = T.Read(u, MOB)
