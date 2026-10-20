@@ -1,10 +1,10 @@
 -- One More Quest: the threat meter (decision 333, step 2)
 -- A small frame that shows, for the current target, how much threat the player, the pet, the party and their
 -- pets have, as the game's scaled percentage (UnitDetailedThreatSituation, 100 = the unit is the target; it can
--- be above 100 for a moment before the mob turns). Only in a group and only in combat. Values the game
+-- be above 100 for a moment before the mob turns). Shown in a group, in dungeons or never (option), whenever
+-- somebody has threat on the target, also when I have none yet. Values the game
 -- does not give (secret) are skipped; when nothing is readable the frame stays hidden. In combat without
--- an attackable target a faded one line hint shows. Drag it with the left mouse button; /omq threat reset
--- puts it back.
+-- an attackable target a faded one line hint shows. It can be dragged in the move mode only; /omq threat reset puts it back.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -22,10 +22,30 @@ local COLOR = {
 local PET_COLOR = { 0.56, 0.69, 0.38 }
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) or false end
-local function optionOn() return not (OMQ.db and OMQ.db.options and OMQ.db.options.threat == false) end
-M.OptionOn = optionOn
-
 local function inGroup() return (IsInGroup and IsInGroup()) and true or false end
+
+-- when the meter may show (decision 335): "group" = in a group, "dungeon" = inside a dungeon or raid, "never"
+function M.Mode()
+    local o = OMQ.db and OMQ.db.options
+    local m = o and o.threatMode
+    if m == "group" or m == "dungeon" or m == "never" then return m end
+    if o and o.threat == false then return "never" end         -- the old on/off option (0.54.24)
+    return "group"
+end
+
+local function inDungeon()
+    if not IsInInstance then return false end
+    local inside, kind = IsInInstance()
+    return inside and (kind == "party" or kind == "raid") or false
+end
+
+local function modeAllows()
+    local m = M.Mode()
+    if m == "never" then return false end
+    if m == "dungeon" then return inDungeon() end
+    return inGroup()
+end
+
 
 local function classColor(unit)
     local ok, _, file = pcall(UnitClass, unit)
@@ -36,13 +56,16 @@ end
 
 -- what to show: state "hidden" | "notarget" | "rows"; rows sorted, highest first
 function M.Compute()
-    if not (optionOn() and inGroup()) then return "hidden" end
-    if not (UnitAffectingCombat and UnitAffectingCombat("player")) then return "hidden" end
+    if not modeAllows() then return "hidden" end
+    local fighting = UnitAffectingCombat and UnitAffectingCombat("player") and true or false
+    -- the hint only while I fight myself; the rows show whenever somebody has threat on the target,
+    -- also when I have none yet (decision 335)
+    local none = fighting and "notarget" or "hidden"
     local T = OMQ.ThreatProbe
-    if not (T and UnitExists and UnitExists("target")) then return "notarget" end
+    if not (T and UnitExists and UnitExists("target")) then return none end
     local okA, attack = pcall(UnitCanAttack, "player", "target")
-    if not okA or attack ~= true then return "notarget" end
-    if UnitIsDead and UnitIsDead("target") then return "notarget" end
+    if not okA or attack ~= true then return none end
+    if UnitIsDead and UnitIsDead("target") then return none end
     local rows = {}
     for _, unit in ipairs(T.UNITS) do
         local r = T.Read(unit, "target")
@@ -56,6 +79,14 @@ function M.Compute()
         end
     end
     if #rows == 0 then return "hidden" end
+    local mine = false
+    for _, r in ipairs(rows) do if r.me then mine = true end end
+    if not mine then
+        -- somebody has threat and I have none yet: my own row at 0
+        local okN, nm = pcall(UnitName, "player")
+        rows[#rows + 1] = { unit = "player", name = okN and nm and not isSecret(nm) and tostring(nm) or "?", pct = 0,
+                            pet = false, tank = false, me = true, color = classColor("player") }
+    end
     table.sort(rows, function(a, b) if a.pct ~= b.pct then return a.pct > b.pct end return a.unit < b.unit end)
     while #rows > M.MAX_ROWS do table.remove(rows) end
     return "rows", rows
@@ -99,22 +130,32 @@ local function getRow(i)
     return row
 end
 
+M.DEFAULT_POS = { "TOPLEFT", "TOPLEFT", 120, -300 }
+function M.ApplyPosition()
+    if not frame then return end
+    local p = OMQ.db and OMQ.db.threatPos
+    if not (p and p[1] == "TOPLEFT") then p = M.DEFAULT_POS end      -- an older centred position is dropped
+    frame:ClearAllPoints()
+    frame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", p[3], p[4])
+end
+
 local function build()
     frame = CreateFrame("Frame", "OneMoreQuestThreat", UIParent)
     frame:SetFrameStrata("MEDIUM")
     frame:SetClampedToScreen(true)
     frame:SetMovable(true)
-    frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
     frame:SetWidth(WIDTH)
-    frame:SetPoint("CENTER", UIParent, "CENTER", -300, 0)
-    local p = OMQ.db and OMQ.db.threatPos
-    if p then frame:ClearAllPoints(); frame:SetPoint(p[1], UIParent, p[2], p[3], p[4]) end
-    frame:SetScript("OnDragStart", function() frame:StartMoving() end)
+    frame:EnableMouse(M.moveMode and true or false)
+    M.ApplyPosition()
+    frame:SetScript("OnDragStart", function() if M.moveMode then frame:StartMoving() end end)
     frame:SetScript("OnDragStop", function()
         frame:StopMovingOrSizing()
-        local point, _, rel, x, y = frame:GetPoint()
-        OMQ.db.threatPos = { point or "CENTER", rel or "CENTER", x or 0, y or 0 }
+        -- saved by the top left corner: the top edge stays, the frame grows downward (decision 335)
+        local left, top = frame:GetLeft(), frame:GetTop()
+        local pl, pt = UIParent:GetLeft() or 0, UIParent:GetTop() or 0
+        OMQ.db.threatPos = { "TOPLEFT", "TOPLEFT", (left or 0) - pl, (top or 0) - pt }
+        M.ApplyPosition()
     end)
     local border = frame:CreateTexture(nil, "BACKGROUND", nil, -1)
     border:SetPoint("TOPLEFT", -1, 1)
@@ -144,25 +185,10 @@ local function targetName()
     return ""
 end
 
-function M.Refresh()
-    local state, rows = M.Compute()
-    if state == "hidden" then
-        if frame then frame:Hide() end
-        return state
-    end
-    if not frame then build() end
-    frame:Show()
-    if state == "notarget" then
-        frame:SetAlpha(0.55)
-        targetText:SetText("")
-        hint:Show()
-        frame:SetHeight(26)
-        for _, row in ipairs(pool) do row:Hide() end
-        return state
-    end
+local function render(rows, name)
     frame:SetAlpha(1)
     hint:Hide()
-    targetText:SetText(targetName())
+    targetText:SetText(name or "")
     local top = -24
     for i, r in ipairs(rows) do
         local row = getRow(i)
@@ -187,17 +213,56 @@ function M.Refresh()
     end
     for i = #rows + 1, #pool do pool[i]:Hide() end
     frame:SetHeight(-top + 5)
+end
+
+-- three sample rows while the move mode is on, so the frame can be seen and placed
+local DEMO = {
+    { name = "Tank", pct = 100, tank = true, me = false, pet = false, color = { 0.78, 0.61, 0.43 } },
+    { name = "You", pct = 74, tank = false, me = true, pet = false, color = { 1, 1, 1 } },
+    { name = "Pet", pct = 22, tank = false, me = false, pet = true, color = PET_COLOR },
+}
+
+function M.Refresh()
+    if M.moveMode then
+        if not frame then build() end
+        frame:EnableMouse(true)
+        frame:Show()
+        render(DEMO, "Move mode: drag me")
+        return "move"
+    end
+    local state, rows = M.Compute()
+    if state == "hidden" then
+        if frame then frame:Hide() end
+        return state
+    end
+    if not frame then build() end
+    frame:EnableMouse(false)
+    frame:Show()
+    if state == "notarget" then
+        frame:SetAlpha(0.55)
+        targetText:SetText("")
+        hint:Show()
+        frame:SetHeight(26)
+        for _, row in ipairs(pool) do row:Hide() end
+        return state
+    end
+    render(rows, targetName())
     return state
 end
 
 function M.ResetPosition()
     if OMQ.db then OMQ.db.threatPos = nil end
-    if frame then frame:ClearAllPoints(); frame:SetPoint("CENTER", UIParent, "CENTER", -300, 0) end
+    M.ApplyPosition()
 end
+
+OMQ:On("MOVE_MODE", function(on)
+    M.moveMode = on and true or false
+    M.Refresh()
+end)
 
 local driver = CreateFrame("Frame")
 local acc = 0
-for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_TARGET_CHANGED", "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD" }) do
+for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_TARGET_CHANGED", "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD", "UNIT_THREAT_LIST_UPDATE" }) do
     pcall(driver.RegisterEvent, driver, e)
 end
 driver:SetScript("OnEvent", function() M.Refresh() end)

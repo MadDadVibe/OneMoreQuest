@@ -174,12 +174,17 @@ function S:Sections()
                   OMQ.db.options.selfCast = v and true or false
                   if OMQ.SelfCastProbe then OMQ.SelfCastProbe.Apply() end
               end },
-            -- decision 334: the threat meter
-            { type = "check", label = "Threat meter",
-              tip = "A small frame with the threat of everyone in your group on your target, in percent (100 = he is the target). Only in a group and in combat. Drag it with the left mouse button; /omq threat reset puts it back.",
-              get = function() return OMQ.db.options.threat ~= false end,
-              set = function(v)
-                  OMQ.db.options.threat = v and true or false
+            -- decisions 334, 335: the threat meter
+            { type = "segment", label = "Threat meter",
+              tip = "A small frame with the threat of everyone in your group on your target, in percent (100 = he is the target). In group: whenever you are in a group. Dungeons: only inside a dungeon or raid. Place it in the move mode; /omq threat reset puts it back.",
+              options = { "In group", "Dungeons", "Never" },
+              get = function()
+                  local m = OMQ.ThreatMeter and OMQ.ThreatMeter.Mode() or "group"
+                  return (m == "group" and 1) or (m == "dungeon" and 2) or 3
+              end,
+              set = function(i)
+                  OMQ.db.options.threatMode = ({ "group", "dungeon", "never" })[i] or "group"
+                  OMQ.db.options.threat = nil
                   if OMQ.ThreatMeter then OMQ.ThreatMeter.Refresh() end
               end },
             { type = "check", label = "Follow group members on flights",
