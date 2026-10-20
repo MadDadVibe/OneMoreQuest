@@ -588,6 +588,53 @@ B.BAG_LABEL = { ["1/0"] = "bag", ["1/1"] = "soul bag", ["1/2"] = "herb bag", ["1
                 ["11/2"] = "quiver", ["11/3"] = "ammo pouch" }
 B.PROF_BAG = { [182] = 2, [333] = 3, [202] = 4 }       -- skill line -> bag subclass (herbs, enchanting, engineering)
 
+-- The reagent bag (decision 330; "Handwerkstaschen" in the German client): the general bag for every crafting
+-- reagent, worn in its own slot (Enum.BagIndex.ReagentBag). It is a container subclass of its own; which number
+-- it has the game tells: the subclass names of the containers (the auction house's category list) are read and
+-- the one that names reagents or crafting is the reagent bag. Failing that, the reagent bag I wear tells it.
+B.REAGENT_WORDS = { "reagent", "reagenz", "crafting", "handwerk" }
+local reagentKey
+function B.ResetReagentKey() reagentKey = nil end
+local function subClassName(c, sub)
+    local f = (C_Item and C_Item.GetItemSubClassInfo) or GetItemSubClassInfo
+    if not f then return nil end
+    local ok, n = pcall(f, c, sub)
+    if ok and type(n) == "string" and n ~= "" and not isSecret(n) then return n end
+end
+-- the container categories of the game: { { sub = 0, name = "Bag" }, ... }
+function B.ContainerSubclasses()
+    local out = {}
+    for sub = 0, 20 do
+        local n = subClassName(1, sub)
+        if n then out[#out + 1] = { sub = sub, name = n } end
+    end
+    return out
+end
+function B.ReagentKey()
+    if reagentKey then return reagentKey end
+    local E = Enum and Enum.ItemContainerSubclass
+    if E and type(E.Reagent) == "number" then reagentKey = "1/" .. E.Reagent; return reagentKey end
+    for _, c in ipairs(B.ContainerSubclasses()) do
+        local l = c.name:lower()
+        for _, w in ipairs(B.REAGENT_WORDS) do
+            if l:find(w, 1, true) then reagentKey = "1/" .. c.sub; return reagentKey end
+        end
+    end
+    local R = Enum and Enum.BagIndex and Enum.BagIndex.ReagentBag
+    local C = C_Container
+    local inv = type(R) == "number" and C and C.ContainerIDToInventoryID and C.ContainerIDToInventoryID(R)
+    local id = inv and GetInventoryItemID and GetInventoryItemID("player", inv)
+    if id then
+        local _, _, _, _, _, classID, sub = instant(id)
+        if classID == 1 and (sub or 0) > 4 then reagentKey = "1/" .. sub; return reagentKey end
+    end
+    return nil
+end
+function B.KindLabel(k)
+    if k and k == B.ReagentKey() then return "reagent bag" end
+    return B.BAG_LABEL[k]
+end
+
 -- The tooltip line with the slot count, from the game's own format CONTAINER_SLOTS (decision 327). The
 -- format may use positional arguments ("%2$s ... %1$d", common in German); they are turned into plain
 -- placeholders first, then everything else is escaped. A format that still can not be used falls back to
@@ -638,6 +685,12 @@ function B.WornBags()
             end
         end
     end
+    -- the reagent bag sits in its own slot (decision 330); no bag there = 0 slots
+    local R, rk = Enum and Enum.BagIndex and Enum.BagIndex.ReagentBag, B.ReagentKey()
+    if rk and type(R) == "number" then
+        local n = C and C.GetContainerNumSlots and C.GetContainerNumSlots(R) or 0
+        kinds[rk] = math.max(kinds[rk] or 0, n)
+    end
     return { normal = smallest, kinds = kinds }
 end
 
@@ -652,6 +705,8 @@ function B.WantedKinds()
             end
         end
     end
+    local rk = B.ReagentKey()
+    if rk then want[rk] = true end                         -- the reagent bag: for everybody, next to the profession bag
     local _, class = UnitClass("player")
     if class == "WARLOCK" then want["1/1"] = true end
     if class == "HUNTER" then
@@ -673,7 +728,7 @@ local function judgeBags()
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
     local worn, want = B.WornBags(), B.WantedKinds()
     local bestOf, unread = {}, {}
-    local st = { results = 0, bags = 0, unread = 0, tooDear = 0, notBetter = 0 }
+    local st = { results = 0, bags = 0, unread = 0, tooDear = 0, notBetter = 0, kinds = {} }
     for _, res in ipairs(bagBrowse.results or {}) do
         st.results = st.results + 1
         local okR, errR = pcall(function()
@@ -681,6 +736,8 @@ local function judgeBags()
         local _, _, _, _, _, classID, sub = instant(id or 0)
         if classID == 1 or classID == 11 then
             st.bags = st.bags + 1
+            local kk = (classID or 0) .. "/" .. (sub or 0)
+            st.kinds[kk] = (st.kinds[kk] or 0) + 1
             local slots = id and B.BagSlots(id)
             if not slots then
                 st.unread = st.unread + 1; unread[#unread + 1] = id
@@ -711,8 +768,12 @@ local function judgeBags()
         c.replaces = (k == "1/0") and worn.normal or (worn.kinds[k] or 0)
         bagCands[#bagCands + 1] = c
     end
-    -- normal bags first, then the special kinds; within a kind the biggest first
+    -- normal bags first, then the reagent bags, then the other special kinds; within a kind the biggest first
+    local rk = B.ReagentKey()
+    local function rank(k) return (k == "1/0" and 0) or (k == rk and 1) or 2 end
     table.sort(bagCands, function(a, b)
+        local ra, rb = rank(a.bagKind), rank(b.bagKind)
+        if ra ~= rb then return ra < rb end
         if a.bagKind ~= b.bagKind then return a.bagKind < b.bagKind end
         return a.slots > b.slots
     end)
@@ -771,8 +832,8 @@ end
 function B.BagReport()
     local worn, want = B.WornBags(), B.WantedKinds()
     local kinds, wk = {}, {}
-    for k, n in pairs(worn.kinds) do kinds[#kinds + 1] = (B.BAG_LABEL[k] or k) .. " " .. n end
-    for k in pairs(want) do wk[#wk + 1] = B.BAG_LABEL[k] or k end
+    for k, n in pairs(worn.kinds) do kinds[#kinds + 1] = (B.KindLabel(k) or k) .. " " .. n end
+    for k in pairs(want) do wk[#wk + 1] = B.KindLabel(k) or k end
     local st = bagBrowse.stats or {}
     local H = AH()
     local q, age = nil, 0
@@ -787,10 +848,19 @@ function B.BagReport()
         "the queue waits for: " .. (q and (tostring(q.key) .. " since " .. math.floor(age) .. "s") or "nothing"),
         "slot line format: " .. tostring(CONTAINER_SLOTS) .. " -> " .. B.SlotPattern(),
     }
+    -- the container categories of the game and which one is the reagent bag (decision 330)
+    local cats = {}
+    for _, c in ipairs(B.ContainerSubclasses()) do cats[#cats + 1] = c.sub .. " " .. c.name end
+    lines[#lines + 1] = "container categories: " .. (#cats > 0 and table.concat(cats, ", ") or "not readable") ..
+        "; reagent bag kind: " .. tostring(B.ReagentKey())
+    local seen = {}
+    for k, n in pairs(st.kinds or {}) do seen[#seen + 1] = k .. " x" .. n end
+    table.sort(seen)
+    lines[#lines + 1] = "kinds seen in the answers: " .. (#seen > 0 and table.concat(seen, ", ") or "none")
     if st.err then lines[#lines + 1] = string.format("ERROR (%d): %s", st.errors or 1, st.err) end
     for _, l in ipairs(bagBrowse.log or {}) do lines[#lines + 1] = "  " .. l end
     for _, c in ipairs(bagCands) do
-        lines[#lines + 1] = string.format("  %s: item %d, %d slots, %s (%s)", B.BAG_LABEL[c.bagKind] or c.bagKind, c.itemID, c.slots, money0(c.price or 0), tostring(c.state))
+        lines[#lines + 1] = string.format("  %s: item %d, %d slots, %s (%s)", B.KindLabel(c.bagKind) or c.bagKind, c.itemID, c.slots, money0(c.price or 0), tostring(c.state))
     end
     return lines
 end
@@ -802,8 +872,18 @@ function B.Bags()
         if c.state == "ok" and not never[c.itemID] and not c.bought then out[#out + 1] = c end
     end
     B.bagsMore = math.max(0, #out - B.BAG_ROWS)
-    for i = #out, B.BAG_ROWS + 1, -1 do out[i] = nil end
-    return out
+    -- every bag type gets its first (biggest) row before one type fills them all: the reagent bag is always shown
+    -- next to the profession bag (decision 330); the rest of the rows go by the usual order
+    local keep, seenKind, nKeep = {}, {}, 0
+    for _, c in ipairs(out) do
+        if not seenKind[c.bagKind] and nKeep < B.BAG_ROWS then seenKind[c.bagKind] = true; keep[c] = true; nKeep = nKeep + 1 end
+    end
+    for _, c in ipairs(out) do
+        if not keep[c] and nKeep < B.BAG_ROWS then keep[c] = true; nKeep = nKeep + 1 end
+    end
+    local shown = {}
+    for _, c in ipairs(out) do if keep[c] then shown[#shown + 1] = c end end
+    return shown
 end
 
 -- buff foods I can eat: their prices are looked at once, the cheapest per piece becomes a row
@@ -1334,7 +1414,7 @@ function B.Render(panel, top)
             local name, _, quality, _, _, _, _, _, _, icon = info(g.itemID)
             r.icon:SetTexture(icon or select(5, instant(g.itemID)))
             r.name:SetText(name or ("item " .. g.itemID)); r.name:SetTextColor(qColor(quality))
-            local what = B.BAG_LABEL[g.bagKind] or "bag"
+            local what = B.KindLabel(g.bagKind) or "bag"
             r.sub:SetText(g.replaces == 0 and (what .. " - an empty bag slot") or string.format("%s - instead of %d slots", what, g.replaces))
             r.top:SetText("|cff40e060" .. g.slots .. " slots|r")
             r.bottom:SetText((buying and buying.row == g) and "Buying..." or (g.bought and "Bought") or money0(B.Cost(g, 1)))
