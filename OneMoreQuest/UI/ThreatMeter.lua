@@ -20,6 +20,27 @@ local COLOR = {
     tank = { 0.64, 0.50, 0.21 }, warm = { 0.89, 0.71, 0.29 }, calm = { 0.39, 0.44, 0.55 }, hot = { 0.84, 0.33, 0.20 },
 }
 local PET_COLOR = { 0.56, 0.69, 0.38 }
+COLOR.good = { 0.26, 0.66, 0.32 }          -- tank mode: I hold the aggro
+
+-- Tank mode (decision 337): my role is Tank (warrior, druid, paladin), or I am a shaman in the damage
+-- role (Enhancement) with Rockbiter on my weapon. The check of the weapon is cached for a few seconds.
+local rockCache = { at = -100, v = false }
+function M.TankMode()
+    local SC = OMQ.Score
+    if not SC then return false end
+    local role = SC.MyRole()
+    if role == "tank" then return true end
+    if SC.MyClass() == "SHAMAN" and role == "damage" then
+        local now = GetTime and GetTime() or 0
+        if now - rockCache.at >= 3 then
+            rockCache.at = now
+            local on = OMQ.Alerts and OMQ.Alerts.RockbiterOn and OMQ.Alerts.RockbiterOn()
+            rockCache.v = on == true
+        end
+        return rockCache.v
+    end
+    return false
+end
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) or false end
 local function inGroup() return (IsInGroup and IsInGroup()) and true or false end
@@ -81,6 +102,7 @@ function M.Compute()
     if not okA or attack ~= true then return quiet(fighting, false) end
     if UnitIsDead and UnitIsDead("target") then return quiet(fighting, false) end
     local rows = {}
+    local tankMode = M.TankMode()
     for _, unit in ipairs(T.UNITS) do
         local r = T.Read(unit, "target")
         if r and not r.err and not r.none and type(r.scaled) == "number" and not isSecret(r.scaled) and r.scaled > 0 then
@@ -88,7 +110,7 @@ function M.Compute()
             rows[#rows + 1] = {
                 unit = unit, name = tostring(r.name), pct = r.scaled, pet = pet,
                 tank = (not isSecret(r.tank)) and r.tank == true, me = unit == "player",
-                color = pet and PET_COLOR or classColor(unit),
+                color = pet and PET_COLOR or classColor(unit), tankMode = tankMode,
             }
         end
     end
@@ -108,6 +130,12 @@ end
 
 -- the bar colour of a row
 function M.BarColor(row)
+    if row.tankMode then
+        -- tank mode: somebody else holds the aggro = red, I hold it = green, the rest as usual
+        if row.tank then return row.me and COLOR.good or COLOR.hot end
+        if row.pct >= M.WARM then return COLOR.warm end
+        return COLOR.calm
+    end
     if row.tank then return COLOR.tank end
     if row.me and row.pct >= M.HOT then return COLOR.hot end
     if row.pct >= M.WARM then return COLOR.warm end
@@ -212,7 +240,11 @@ local function render(rows, name)
         local c = M.BarColor(r)
         row.bar:SetColorTexture(c[1], c[2], c[3], r.tank and 0.75 or 0.55)
         row.bar:SetWidth(math.max(1, (WIDTH - 12) * math.min(r.pct, 100) / 100))
-        if r.tank then
+        if r.tankMode and r.tank then
+            if r.me then row.edge:SetColorTexture(0.45, 0.9, 0.5, 1) else row.edge:SetColorTexture(1, 0.54, 0.36, 1) end
+        elseif r.tankMode then
+            row.edge:SetColorTexture(0, 0, 0, 0)
+        elseif r.tank then
             row.edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
         elseif r.me and r.pct >= M.HOT then
             row.edge:SetColorTexture(1, 0.54, 0.36, 1)

@@ -1090,6 +1090,24 @@ local function weaponTooltipHas(names)
     return false
 end
 
+-- Is Rockbiter on the main hand weapon (threat meter tank mode, decision 337)? The name comes from the
+-- spell (works in every client language), looked for in the weapon tooltip. nil = cannot say
+function M.RockbiterOn()
+    local name = spellName(8017)
+    if not name then return nil end
+    local lines = weaponLines()
+    if not lines then return nil end
+    local bases = imbueBases({ [name] = true })
+    for _, text in ipairs(lines) do
+        local low = text:lower()
+        if text:find(name, 1, true) then return true end
+        for _, b in ipairs(bases) do
+            if b ~= "" and low:find(b, 1, true) then return true end
+        end
+    end
+    return false
+end
+
 -- returns true / false, or nil when nothing can be said
 function M.WeaponEnchanted(names)
     local api
