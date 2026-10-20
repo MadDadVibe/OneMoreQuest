@@ -1,7 +1,7 @@
 -- One More Quest: the threat meter (decision 333, step 2)
 -- A small frame that shows, for the current target, how much threat the player, the pet, the party and their
 -- pets have, as the game's scaled percentage (UnitDetailedThreatSituation, 100 = the unit is the target; it can
--- be above 100 for a moment before the mob turns). Shown in a group, in dungeons or never (option), whenever
+-- be above 100 for a moment before the mob turns). Shown in a group, in dungeons or never (option), always inside a dungeon, 8 seconds after a fight, whenever
 -- somebody has threat on the target, also when I have none yet. Values the game
 -- does not give (secret) are skipped; when nothing is readable the frame stays hidden. In combat without
 -- an attackable target a faded one line hint shows. It can be dragged in the move mode only; /omq threat reset puts it back.
@@ -55,17 +55,31 @@ local function classColor(unit)
 end
 
 -- what to show: state "hidden" | "notarget" | "rows"; rows sorted, highest first
+M.GRACE = 8                 -- seconds the frame stays after a fight (decision 336)
+M.graceUntil = 0
+M.hintText = ""
+local function graceActive() return GetTime and GetTime() < M.graceUntil end
+
+-- nothing to list: a faded hint line or nothing. The hint shows while I fight, always inside a dungeon
+-- and for the grace period after a fight (decision 336)
+local function quiet(fighting, targetOk)
+    local text
+    if fighting and not targetOk then text = "No target in combat"
+    elseif inDungeon() then text = targetOk and "No threat" or "No target"
+    elseif graceActive() then text = "Combat over" end
+    if text then M.hintText = text; return "notarget" end
+    return "hidden"
+end
+
 function M.Compute()
     if not modeAllows() then return "hidden" end
     local fighting = UnitAffectingCombat and UnitAffectingCombat("player") and true or false
-    -- the hint only while I fight myself; the rows show whenever somebody has threat on the target,
-    -- also when I have none yet (decision 335)
-    local none = fighting and "notarget" or "hidden"
+    -- the rows show whenever somebody has threat on the target, also when I have none yet (decision 335)
     local T = OMQ.ThreatProbe
-    if not (T and UnitExists and UnitExists("target")) then return none end
+    if not (T and UnitExists and UnitExists("target")) then return quiet(fighting, false) end
     local okA, attack = pcall(UnitCanAttack, "player", "target")
-    if not okA or attack ~= true then return none end
-    if UnitIsDead and UnitIsDead("target") then return none end
+    if not okA or attack ~= true then return quiet(fighting, false) end
+    if UnitIsDead and UnitIsDead("target") then return quiet(fighting, false) end
     local rows = {}
     for _, unit in ipairs(T.UNITS) do
         local r = T.Read(unit, "target")
@@ -78,7 +92,7 @@ function M.Compute()
             }
         end
     end
-    if #rows == 0 then return "hidden" end
+    if #rows == 0 then return quiet(fighting, true) end
     local mine = false
     for _, r in ipairs(rows) do if r.me then mine = true end end
     if not mine then
@@ -231,6 +245,7 @@ function M.Refresh()
         return "move"
     end
     local state, rows = M.Compute()
+    M.visible = state ~= "hidden"
     if state == "hidden" then
         if frame then frame:Hide() end
         return state
@@ -241,6 +256,7 @@ function M.Refresh()
     if state == "notarget" then
         frame:SetAlpha(0.55)
         targetText:SetText("")
+        hint:SetText(M.hintText)
         hint:Show()
         frame:SetHeight(26)
         for _, row in ipairs(pool) do row:Hide() end
@@ -265,7 +281,11 @@ local acc = 0
 for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_TARGET_CHANGED", "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD", "UNIT_THREAT_LIST_UPDATE" }) do
     pcall(driver.RegisterEvent, driver, e)
 end
-driver:SetScript("OnEvent", function() M.Refresh() end)
+driver:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_REGEN_ENABLED" and M.visible and GetTime then M.graceUntil = GetTime() + M.GRACE end
+    if event == "PLAYER_REGEN_DISABLED" then M.graceUntil = 0 end
+    M.Refresh()
+end)
 driver:SetScript("OnUpdate", function(_, dt)
     acc = acc + (dt or 0)
     if acc < 0.4 then return end
