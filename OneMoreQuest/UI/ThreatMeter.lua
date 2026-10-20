@@ -85,7 +85,7 @@ local function graceActive() return GetTime and GetTime() < M.graceUntil end
 -- and for the grace period after a fight (decision 336)
 local function quiet(fighting, targetOk)
     local text
-    if fighting and not targetOk then text = "No target in combat"
+    if fighting then text = targetOk and "No threat" or "No target in combat"
     elseif inDungeon() then text = targetOk and "No threat" or "No target"
     elseif graceActive() then text = "Combat over" end
     if text then M.hintText = text; return "notarget" end
@@ -103,8 +103,10 @@ function M.Compute()
     if UnitIsDead and UnitIsDead("target") then return quiet(fighting, false) end
     local rows = {}
     local tankMode = M.TankMode()
+    local sawSecret = false
     for _, unit in ipairs(T.UNITS) do
         local r = T.Read(unit, "target")
+        if r and isSecret(r.scaled) then sawSecret = true end
         if r and not r.err and not r.none and type(r.scaled) == "number" and not isSecret(r.scaled) and r.scaled > 0 then
             local pet = unit == "pet" or unit:find("^partypet") ~= nil
             rows[#rows + 1] = {
@@ -114,7 +116,12 @@ function M.Compute()
             }
         end
     end
-    if #rows == 0 then return quiet(fighting, true) end
+    if #rows == 0 then
+        -- values the game hides: nothing to show (a dungeon keeps its frame); a target without threat in
+        -- my fight: the hint, the frame stays (decision 339)
+        if sawSecret then return inDungeon() and quiet(false, true) or "hidden" end
+        return quiet(fighting, true)
+    end
     local mine = false
     for _, r in ipairs(rows) do if r.me then mine = true end end
     if not mine then
