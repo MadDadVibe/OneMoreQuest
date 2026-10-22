@@ -359,24 +359,38 @@ end
 local rank = nil
 -- every recipe I know of the open profession, with what one skill-up costs; { [recipeID] = {chance, perUp, perUpNet} }
 function C.Ranking()
-    if rank then return rank end
-    rank = { by = {}, best = nil, bestNet = nil }
+    if rank then
+        local empty = next(rank.by) == nil
+        if not (empty and (GetTime and GetTime() or 0) - (rank.at or 0) > 3) then return rank end   -- an empty answer is asked again soon
+    end
+    rank = { by = {}, best = nil, bestNet = nil, at = GetTime and GetTime() or 0,
+             stats = { listed = 0, unlearned = 0, noThreshold = 0, gray = 0, noPrice = 0, ranked = 0 } }
     local T = C_TradeSkillUI
     local skill = C.MySkill()
+    rank.skill = skill
     if not (T and T.GetRecipeInfo and skill) then return rank end
+    local st = rank.stats
     for _, id in ipairs(recipeIDs()) do
+        st.listed = st.listed + 1
         local okI, info = pcall(T.GetRecipeInfo, id)
         if okI and type(info) == "table" and info.learned ~= false then
+            if not info.recipeID then info.recipeID = id end
             local th = C.Thresholds(info)
             local chance = C.Chance(skill, th)
             local res = C.Profit(id)
-            if chance and chance > 0 and res and #res.missing == 0 then
+            if not chance then st.noThreshold = st.noThreshold + 1
+            elseif chance <= 0 then st.gray = st.gray + 1
+            elseif not (res and #res.missing == 0) then st.noPrice = st.noPrice + 1
+            else
+                st.ranked = st.ranked + 1
                 local e = { chance = chance, th = th, cost = res.cost, perUp = res.cost / chance }
                 if res.sale then e.perUpNet = (res.cost - math.floor(res.sale * (1 - C.CUT) + 0.5)) / chance end
                 rank.by[id] = e
                 if not rank.best or e.perUp < rank.by[rank.best].perUp then rank.best = id end
                 if e.perUpNet and (not rank.bestNet or e.perUpNet < rank.by[rank.bestNet].perUpNet) then rank.bestNet = id end
             end
+        else
+            st.unlearned = st.unlearned + 1
         end
     end
     return rank
@@ -470,4 +484,9 @@ OMQ:RegisterCommand("craftinfo", function()
     local n = 0
     for _ in pairs(R.by) do n = n + 1 end
     OMQ:Print(string.format("ranking: %d recipes with a chance and a price, cheapest %s, cheapest with selling %s", n, tostring(R.best), tostring(R.bestNet)))
+    local st = R.stats
+    if st then
+        OMQ:Print(string.format("ranking: skill %s, listed %d, not learned %d, no thresholds %d, gray %d, a material without price %d, ranked %d",
+            tostring(R.skill), st.listed, st.unlearned, st.noThreshold, st.gray, st.noPrice, st.ranked))
+    end
 end, "profession skill-ups: what the game says about the open recipe")
