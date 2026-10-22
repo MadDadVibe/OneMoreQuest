@@ -331,6 +331,7 @@ end
 function AH.Scanning()
     if not AH.open then return false end
     if asking then return true end
+    if OMQ.Prices and OMQ.Prices.Busy() then return true end      -- the whole-house price scan (decision 341)
     local A = CA()
     if A and A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return true end
     for _, e in ipairs(entries) do if e.state == "price" then return true end end
@@ -433,6 +434,7 @@ function AH._pump()
     end
     if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
     if AH.Busy() then return end                       -- a post or a purchase goes first (decision 281)
+    if OMQ.Prices and OMQ.Prices.Busy() then return end   -- the price scan of the whole house owns the result list (decision 341)
     if now() < (AH.quietUntil or 0) then return end   -- the dad is clicking: no new search (decision 293)
     local bq = batchQuery()
     if bq then

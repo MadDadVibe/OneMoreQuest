@@ -254,6 +254,15 @@ function S:Sections()
               tip = "Lists what in your bags brings at least 5% more on the auction house than at the vendor and posts it with one click per auction. Fast mode: one button. Select mode: one row per item. Buy: weapon upgrades and the buff items of your class, stock up with one click per item.",
               get = function() return OMQ.db.options.ahHelper ~= false end,
               set = function(v) OMQ.db.options.ahHelper = v and true or false end },
+            -- decision 341: auction prices of everything and the crafting profit
+            { type = "check", label = "Scan all auction prices when the auction house opens",
+              tip = "Reads the whole auction house once an hour (it gives way to the auction helper) and keeps the lowest price of every item. The crafting profit uses these prices. /omq prices scan starts a scan by hand.",
+              get = function() return OMQ.db.options.priceScan ~= false end,
+              set = function(v) OMQ.db.options.priceScan = v and true or false end },
+            { type = "check", label = "Crafting profit in the profession window",
+              tip = "Shows next to every recipe what it earns on the auction house (product price minus 5% cut minus the materials, from the scanned prices and the vendor prices you have seen) and a block with the numbers under the materials of the selected recipe.",
+              get = function() return OMQ.db.options.craftProfit ~= false end,
+              set = function(v) OMQ.db.options.craftProfit = v and true or false end },
             -- decision 292
             { type = "check", label = "Vendor helper at the vendor",
               tip = "A window next to the vendor lists what you should sell there: grey items, gear not worth the auction house or unsold twice, white items worth no more there than here, and bound gear worse than what you wear. A click sells one item, a button sells all.",
