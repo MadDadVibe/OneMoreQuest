@@ -484,6 +484,22 @@ OMQ:RegisterCommand("craftinfo", function()
     local n = 0
     for _ in pairs(R.by) do n = n + 1 end
     OMQ:Print(string.format("ranking: %d recipes with a chance and a price, cheapest %s, cheapest with selling %s", n, tostring(R.best), tostring(R.bestNet)))
+    local T = C_TradeSkillUI
+    for _, k in ipairs({ "best", "bestNet" }) do
+        local rid = R[k]
+        local inf = rid and T and T.GetRecipeInfo and T.GetRecipeInfo(rid)
+        OMQ:Print(string.format("  %s: recipe %s (%s)", k == "best" and "cheapest by craft cost" or "cheapest with selling", tostring(rid), inf and tostring(inf.name) or "?"))
+    end
+    local seen, shown, ids = 0, 0, {}
+    local sb = scrollBox()
+    if sb and sb.ForEachFrame then
+        sb:ForEachFrame(function(frame, data)
+            seen = seen + 1
+            ids[#ids + 1] = tostring(recipeIDOf(frame, data))
+            if (frame.OMQCheap and frame.OMQCheap:IsShown()) or (frame.OMQNet and frame.OMQNet:IsShown()) then shown = shown + 1 end
+        end)
+    end
+    OMQ:Print(string.format("  list rows now: %d, with a badge: %d; ids %s", seen, shown, table.concat(ids, ",")))
     local st = R.stats
     if st then
         OMQ:Print(string.format("ranking: skill %s, listed %d, not learned %d, no thresholds %d, gray %d, a material without price %d, ranked %d",
