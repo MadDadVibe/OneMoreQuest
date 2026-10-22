@@ -310,7 +310,10 @@ end
 function C.Thresholds(info)
     if type(info) ~= "table" then return nil end
     local out = {}
-    numberFields(info, out, 0)
+    -- the names the game uses: minSkill, yellowSkillLevel, greenSkillLevel, graySkillLevel
+    local function num(v) return type(v) == "number" and not isSecret(v) and v or nil end
+    out.orange, out.yellow, out.green, out.gray = num(info.minSkill), num(info.yellowSkillLevel), num(info.greenSkillLevel), num(info.graySkillLevel)
+    if not (out.yellow and out.gray) then numberFields(info, out, 0) end
     if out.yellow and out.gray then return out end
     return nil
 end
@@ -324,11 +327,30 @@ function C.MySkill()
     local T = C_TradeSkillUI
     if T and T.GetBaseProfessionInfo then
         local ok, p = pcall(T.GetBaseProfessionInfo)
-        if ok and type(p) == "table" and tonumber(p.skillLevel) then return tonumber(p.skillLevel) end
+        if ok and type(p) == "table" and tonumber(p.skillLevel) and not isSecret(p.skillLevel) then return tonumber(p.skillLevel) end
     end
     local f = pf()
     local p = f and f.professionInfo
-    return p and tonumber(p.skillLevel) or nil
+    if p and tonumber(p.skillLevel) then return tonumber(p.skillLevel) end
+    if T and T.GetTradeSkillLine then
+        local ok, _, rank = pcall(T.GetTradeSkillLine)
+        if ok and tonumber(rank) then return tonumber(rank) end
+    end
+    if GetTradeSkillLine then
+        local ok, _, rank = pcall(GetTradeSkillLine)
+        if ok and tonumber(rank) then return tonumber(rank) end
+    end
+    return nil
+end
+local function recipeIDs()
+    local T = C_TradeSkillUI
+    for _, fn in ipairs({ "GetAllRecipeIDs", "GetFilteredRecipeIDs" }) do
+        if T and T[fn] then
+            local ok, ids = pcall(T[fn])
+            if ok and type(ids) == "table" and #ids > 0 then return ids end
+        end
+    end
+    return {}
 end
 
 local rank = nil
@@ -338,10 +360,8 @@ function C.Ranking()
     rank = { by = {}, best = nil, bestNet = nil }
     local T = C_TradeSkillUI
     local skill = C.MySkill()
-    if not (T and T.GetAllRecipeIDs and T.GetRecipeInfo and skill) then return rank end
-    local ok, ids = pcall(T.GetAllRecipeIDs)
-    if not (ok and type(ids) == "table") then return rank end
-    for _, id in ipairs(ids) do
+    if not (T and T.GetRecipeInfo and skill) then return rank end
+    for _, id in ipairs(recipeIDs()) do
         local okI, info = pcall(T.GetRecipeInfo, id)
         if okI and type(info) == "table" and info.learned ~= false then
             local th = C.Thresholds(info)
@@ -439,7 +459,7 @@ OMQ:RegisterCommand("craftinfo", function()
         if type(v) == "table" then for k2, v2 in pairs(v) do keys[#keys + 1] = "  " .. tostring(k) .. "." .. tostring(k2) .. "=" .. ((type(v2) == "table") and "{table}" or tostring(v2)) end end
     end
     table.sort(keys)
-    OMQ:Print("craft info: recipe " .. id .. ", my skill " .. tostring(C.MySkill()))
+    OMQ:Print("craft info: recipe " .. id .. ", my skill " .. tostring(C.MySkill()) .. ", recipes listed " .. #recipeIDs())
     for _, l in ipairs(keys) do OMQ:Print("  " .. l) end
     local th = C.Thresholds(info)
     OMQ:Print("thresholds: " .. (th and string.format("orange %s yellow %s green %s gray %s", tostring(th.orange), tostring(th.yellow), tostring(th.green), tostring(th.gray)) or "not found in the recipe info"))
