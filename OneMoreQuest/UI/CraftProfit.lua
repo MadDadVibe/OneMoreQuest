@@ -310,6 +310,9 @@ end
 function C.Thresholds(info)
     if type(info) ~= "table" then return nil end
     local out = {}
+    -- the table of SkillUp Forever first (Data/SkillThresholds.lua), then what the game says itself
+    local row = OMQ.SkillThresholds and info.recipeID and OMQ.SkillThresholds[info.recipeID]
+    if row then return { orange = row[1], yellow = row[2], green = row[3], gray = row[4] } end
     -- the names the game uses: minSkill, yellowSkillLevel, greenSkillLevel, graySkillLevel
     local function num(v) return type(v) == "number" and not isSecret(v) and v or nil end
     out.orange, out.yellow, out.green, out.gray = num(info.minSkill), num(info.yellowSkillLevel), num(info.greenSkillLevel), num(info.graySkillLevel)

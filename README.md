@@ -23,4 +23,4 @@ In the game: `/omq help` lists the commands; right click on the minimap icon ope
 
 ## License
 
-GPL-3.0, see [LICENSE](LICENSE). Uses map and quest data from [Questie / QuestieDB](https://github.com/Questie/QuestieDB) (GPL-3.0).
+GPL-3.0, see [LICENSE](LICENSE). Uses map and quest data from [Questie / QuestieDB](https://github.com/Questie/QuestieDB) (GPL-3.0), and the skill-up thresholds of [SkillUp Forever](https://github.com/cjber/skillup-forever) by cjber (GPL-3.0).
