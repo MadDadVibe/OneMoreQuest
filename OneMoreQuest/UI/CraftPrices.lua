@@ -175,29 +175,109 @@ function P.Cancel() if scan then finish(false, "stopped") end end
 -- Events and commands
 ----------------------------------------------------------------------
 local ev = CreateFrame("Frame")
-for _, e in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "REPLICATE_ITEM_LIST_UPDATE", "MERCHANT_SHOW" }) do
+for _, e in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "REPLICATE_ITEM_LIST_UPDATE", "MERCHANT_SHOW", "MERCHANT_UPDATE" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 
--- what a merchant sells and for how much one piece (decision 341)
+-- what a merchant sells and for how much one piece (decisions 341, 345). The client may have the old globals or
+-- C_MerchantFrame; both are tried, and the result is told once per merchant window.
+local function merchantItem(i)
+    local link, price, qty, extended
+    local M = C_MerchantFrame
+    if M and M.GetItemInfo then
+        local ok, t = pcall(M.GetItemInfo, i)
+        if ok and type(t) == "table" then price, qty, extended = t.price, t.stackCount, t.hasExtendedCost end
+    end
+    if price == nil and GetMerchantItemInfo then
+        local ok, _, _, p, q, _, _, x = pcall(GetMerchantItemInfo, i)
+        if ok then price, qty, extended = p, q, x end
+    end
+    if GetMerchantItemLink then link = GetMerchantItemLink(i)
+    elseif M and M.GetItemLink then link = M.GetItemLink(i) end
+    return link, price, qty, extended
+end
 function P.LearnVendor()
-    if not (GetMerchantNumItems and GetMerchantItemLink and GetMerchantItemInfo) then return 0 end
+    local num = GetMerchantNumItems and GetMerchantNumItems() or (C_MerchantFrame and C_MerchantFrame.GetNumItems and C_MerchantFrame.GetNumItems()) or 0
     local n, vs = 0, vendorStore()
-    for i = 1, GetMerchantNumItems() or 0 do
-        local link = GetMerchantItemLink(i)
+    for i = 1, num do
+        local link, price, qty, extended = merchantItem(i)
         local id = link and tonumber(tostring(link):match("item:(%d+)"))
-        local _, _, price, qty, _, _, extended = GetMerchantItemInfo(i)
         if id and type(price) == "number" and not isSecret(price) and price > 0 and not extended then
             vs[id] = math.floor(price / math.max(1, tonumber(qty) or 1))
             n = n + 1
         end
     end
+    P.lastMerchant = { items = num, learned = n }
     return n
 end
 
+-- the latest scanned price in every item tooltip (decision 345): the cheaper of auction house and vendor
+local function agoText(at)
+    if not at then return "" end
+    local d = (time and time() or 0) - at
+    if d < 120 then return "just now" end
+    if d < 7200 then return math.floor(d / 60) .. " min ago" end
+    if d < 172800 then return math.floor(d / 3600) .. " h ago" end
+    return math.floor(d / 86400) .. " days ago"
+end
+local function money(c)
+    local C = OMQ.CraftProfit
+    if C and C.Money then return C.Money(c) end
+    return c .. "c"
+end
+function P.TooltipLines(id)
+    local a, q, at = P.Auction(id)
+    local v = P.Vendor(id)
+    if not a and not v then return nil end
+    local best, src = P.Cost(id)
+    local lines = { { "Price: " .. money(best) .. (src == "vendor" and "  (vendor)" or "  (auction house)"), 0.85, 0.75, 0.4 } }
+    if a and v then
+        lines[#lines + 1] = { string.format("Auction house %s - vendor %s", money(a), money(v)), 0.6, 0.6, 0.6 }
+    end
+    if a then
+        lines[#lines + 1] = { string.format("scanned %s%s", agoText(at), q and (", " .. q .. " on offer") or ""), 0.5, 0.5, 0.5 }
+    end
+    return lines
+end
+local function onTip(tt, data)
+    if not tt or (tt.IsForbidden and tt:IsForbidden()) then return end
+    local id = data and data.id
+    if not id and tt.GetItem then
+        local _, link = tt:GetItem()
+        id = link and tonumber(tostring(link):match("item:(%d+)"))
+    end
+    if not id or isSecret(id) then return end
+    local lines = P.TooltipLines(id)
+    if not lines then return end
+    for _, l in ipairs(lines) do tt:AddLine(l[1], l[2], l[3], l[4]) end
+    if tt.Show then tt:Show() end
+end
+P._onTip = onTip
+OMQ:On("READY", function()
+    if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
+        TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tt, data)
+            local ok, err = pcall(onTip, tt, data)
+            if not ok then OMQ:Error("price tooltip", err) end
+        end)
+    elseif GameTooltip and GameTooltip.HookScript then
+        GameTooltip:HookScript("OnTooltipSetItem", function(tt)
+            local ok, err = pcall(onTip, tt, nil)
+            if not ok then OMQ:Error("price tooltip", err) end
+        end)
+    end
+end)
+
 ev:SetScript("OnEvent", function(_, event)
     local ok, err = pcall(function()
-        if event == "MERCHANT_SHOW" then P.LearnVendor()
+        if event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
+            local n = P.LearnVendor()
+            if event == "MERCHANT_SHOW" and C_Timer and C_Timer.After then
+                C_Timer.After(1, function()                      -- the list may be filled a moment later
+                    P.LearnVendor()
+                    local m = P.lastMerchant
+                    if m and m.items > 0 and m.learned == 0 then OMQ:Print("prices: could not read the vendor prices of this merchant") end
+                end)
+            end
         elseif event == "AUCTION_HOUSE_SHOW" then
             if P.AutoOn() and C_Timer and C_Timer.After then
                 C_Timer.After(P.START_DELAY, function()
