@@ -13,8 +13,8 @@ OMQ = _G.OneMoreQuest
 local P = {}
 OMQ.Prices = P
 
-P.MAX_AGE = 3600            -- an automatic scan only when the last one is older (seconds)
-P.START_DELAY = 3           -- seconds after the window opens before an automatic scan starts
+P.MAX_AGE = 900             -- an automatic scan only when the last one is older: the server lets a dump be asked for about every 15 minutes (decision 343)
+P.START_DELAY = 0.2         -- seconds after the window opens before the scan starts (decision 343)
 
 local function now() return GetTime() end
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
@@ -56,6 +56,12 @@ function P.Count() return store().n or 0 end
 ----------------------------------------------------------------------
 local scan = nil           -- { state "start" | "requested" | "reading", n, i, seen, results, startedAt }
 function P.Busy() return scan ~= nil end
+-- the dump is good for this window: a scan finished, or the last one is fresh (decision 343)
+local sessionAt = nil
+function P.Session() return sessionAt ~= nil and not scan end
+function P.SessionAt() return sessionAt end
+function P.EndSession() sessionAt = nil end
+function P.Items() return store().items end
 function P.Progress() return scan and { results = scan.results, total = scan.n } or nil end
 P.last = nil               -- how the last scan ended: { ok, items, secs, results, why }
 P.CHUNK = 400              -- auctions read per step, so a dump of many thousands does not freeze the game
@@ -72,10 +78,12 @@ local function finish(ok, why)
     if ok then
         st.items = scan.items                 -- the dump replaces the list: what was sold is gone
         st.at, st.n = stamp(), n
+        sessionAt = now()
     end
     P.last = { ok = ok, items = n, secs = now() - scan.startedAt, results = scan.results, why = why }
     scan = nil
     local H = helper()
+    if ok and H and H.Evaluate then pcall(H.Evaluate) end
     if H and H.Refresh then pcall(H.Refresh) end
     if H and H.Pump then pcall(H.Pump) end
     if OMQ.Fire then OMQ:Fire("PRICES_UPDATED", ok) end
@@ -153,9 +161,9 @@ function P.Start(manual)
     if not (api and api.ReplicateItems and api.GetNumReplicateItems and api.GetReplicateItemInfo) then
         return false, "this client has no ReplicateItems"
     end
-    if H.Scanning and H.Scanning() then return false, "the auction helper is still scanning" end
     scan = { state = "start", items = {}, seen = {}, results = 0, n = 0, i = 0, startedAt = now() }
     if manual then OMQ:Print("prices: asking the auction house for everything - the game answers in a moment") end
+    sessionAt = nil
     if H.Refresh then pcall(H.Refresh) end
     P.Step()
     return true
@@ -194,10 +202,19 @@ ev:SetScript("OnEvent", function(_, event)
             if P.AutoOn() and C_Timer and C_Timer.After then
                 C_Timer.After(P.START_DELAY, function()
                     local at = P.ScannedAt()
-                    if not scan and (not at or stamp() - at > P.MAX_AGE) then P.Start(false) end
+                    if scan then return end
+                    if not at or stamp() - at > P.MAX_AGE then P.Start(false)
+                    else                                      -- fresh: the dump of a moment ago serves this window
+                        sessionAt = now()
+                        local H = helper()
+                        if H and H.Evaluate then pcall(H.Evaluate) end
+                        if H and H.Refresh then pcall(H.Refresh) end
+                        if H and H.Pump then pcall(H.Pump) end
+                    end
                 end)
             end
         elseif event == "AUCTION_HOUSE_CLOSED" then
+            sessionAt = nil
             if scan then finish(false, "the window closed") end
         elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
             if scan and scan.state == "requested" then beginReading() end

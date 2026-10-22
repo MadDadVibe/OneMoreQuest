@@ -213,6 +213,13 @@ function AH.Evaluate()
     local skip = db().skip
     for _, e in ipairs(entries) do
         local p = prices[e.key]
+        -- the dump of the whole house prices a commodity at once (decision 343)
+        local D = OMQ.Prices
+        if e.commodity and not e.posted and D and D.Session and D.Session() and (not p or p.at < (D.SessionAt() or 0)) then
+            local dp = D.Auction(e.itemID)
+            p = { price = dp or false, at = now() }
+            prices[e.key] = p
+        end
         e.skipped = skip[e.itemID] and true or false
         if e.out then e.state = e.out
         elseif not p or (now() - p.at > AH.PRICE_TTL and not e.posted) then e.state = "price"
@@ -349,12 +356,18 @@ function AH.WaitNote()
 end
 local function paintScan()
     if panel and panel.scan then panel.scan:SetShown(AH.Scanning()) end
+    -- while the whole house is read the panel is covered (decision 343)
+    if panel and panel.veil then
+        local busy = AH.open and OMQ.Prices and OMQ.Prices.Busy() or false
+        if busy then panel.veil:Show() else panel.veil:Hide() end
+    end
 end
 AH.PaintScan = paintScan
 
 -- scan everything again (decision 290)
 function AH.ScanAll()
     if not AH.open then return end
+    if OMQ.Prices and OMQ.Prices.EndSession then OMQ.Prices.EndSession() end     -- live searches this time (decision 343)
     AH.Scan()
     if OMQ.AuctionBuy and OMQ.AuctionBuy.ScanAll then OMQ.AuctionBuy.ScanAll() end
     AH.Refresh()
@@ -436,6 +449,7 @@ function AH._pump()
     if AH.Busy() then return end                       -- a post or a purchase goes first (decision 281)
     if OMQ.Prices and OMQ.Prices.Busy() then return end   -- the price scan of the whole house owns the result list (decision 341)
     if now() < (AH.quietUntil or 0) then return end   -- the dad is clicking: no new search (decision 293)
+    if OMQ.AuctionBuy and OMQ.AuctionBuy.UseDump then OMQ.AuctionBuy.UseDump() end   -- the dump answers what it can (decision 343)
     local bq = batchQuery()
     if bq then
         asking, askedAt = bq, now()
@@ -628,6 +642,24 @@ local function build()
     tag:SetPoint("TOPLEFT", 16, -14); tag:SetText("AUCTION HELPER")
     panel.scan = fs(panel, "GameFontNormalSmall", 0.95, 0.62, 0.25)       -- a scan is running (decision 286)
     panel.scan:SetPoint("TOPRIGHT", -84, -14); panel.scan:SetText("Scanning - please wait..."); panel.scan:Hide()
+    -- the cover while the whole house is read (decision 343)
+    local veil = CreateFrame("Frame", nil, panel)
+    veil:SetAllPoints()
+    veil:SetFrameLevel(panel:GetFrameLevel() + 20)
+    veil:EnableMouse(true)
+    local vbg = veil:CreateTexture(nil, "BACKGROUND")
+    vbg:SetAllPoints(); vbg:SetColorTexture(0.05, 0.055, 0.075, 0.97)
+    veil.big = fs(veil, "GameFontNormalHuge", GOLD[1], GOLD[2], GOLD[3])
+    veil.big:SetPoint("CENTER", 0, 10); veil.big:SetText("Scan running...")
+    veil.sub = fs(veil, "GameFontNormalSmall", 0.75, 0.75, 0.8)
+    veil.sub:SetPoint("TOP", veil.big, "BOTTOM", 0, -10); veil.sub:SetText("reading the whole auction house")
+    veil:SetScript("OnUpdate", function(self)
+        local pr = OMQ.Prices and OMQ.Prices.Progress and OMQ.Prices.Progress()
+        if pr and (pr.total or 0) > 0 then self.sub:SetText(string.format("%d of %d auctions", pr.results or 0, pr.total))
+        else self.sub:SetText("waiting for the auction house...") end
+    end)
+    veil:Hide()
+    panel.veil = veil
     -- the small "Scan all" button and the header, which closes the helper on a right click (decision 290)
     local sa = CreateFrame("Button", nil, panel)
     sa:SetSize(64, 18); sa:SetPoint("TOPRIGHT", -12, -10)
@@ -1028,9 +1060,15 @@ function AH.Open()
     if OMQ.AuctionBuy then OMQ.AuctionBuy.Open() end
     anchor()
     panel:Show()
+    -- the scan of the whole house comes first; the cover goes up until the dump is read (decision 343)
+    if OMQ.Prices and OMQ.Prices.AutoOn and OMQ.Prices.AutoOn() and OMQ.Prices.Start and not OMQ.Prices.Busy() then
+        local at = OMQ.Prices.ScannedAt()
+        if not at or (time and time() or 0) - at > OMQ.Prices.MAX_AGE then pcall(OMQ.Prices.Start, false) end
+    end
     AH.Scan()
     AH.Refresh()
     AH.Pump()
+    paintScan()
 end
 
 function AH.Close()
@@ -1058,7 +1096,9 @@ ev:SetScript("OnEvent", function(_, event, a1)
         elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
             if asking and not asking.browse and asking.commodity ~= true and (keyString(a1) == keyString(asking.itemKey)
                 or (asking.anyKey and type(a1) == "table" and a1.itemID == asking.itemID)) then
-                asking.commodity = false; gotPrice(asking)
+                asking.commodity = false
+                if asking.anyKey and type(a1) == "table" then asking.itemKey = a1 end   -- the key the game really uses (decision 343)
+                gotPrice(asking)
             end
         elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
             if asking and asking.browse then

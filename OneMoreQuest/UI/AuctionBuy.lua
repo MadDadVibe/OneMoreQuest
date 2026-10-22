@@ -510,12 +510,12 @@ function B.WantsWands(class)
     return B.WAND_CLASSES[class or ""] and true or false
 end
 
-local function onBrowse()
+local function onBrowse(dump)
     local A = CA()
-    local list = A.GetBrowseResults and A.GetBrowseResults() or {}
+    local list = dump or (A.GetBrowseResults and A.GetBrowseResults() or {})
     browse.results = browse.results or {}
     for _, res in ipairs(list) do browse.results[#browse.results + 1] = res end
-    if browse.state == "asking" and B.WantsWands() then browse.state = "wands"; return end   -- the wand browse next
+    if not dump and browse.state == "asking" and B.WantsWands() then browse.state = "wands"; return end   -- the wand browse next
     browse.state = "done"
     list = browse.results
     browse.results = nil
@@ -548,6 +548,7 @@ local function onBrowse()
     end
     for _, c in ipairs(pick) do
         c.key, c.state, c.commodity = "w" .. AH()._KeyString(c.itemKey), "price", false
+        c.anyKey = dump and true or nil                       -- the key of the dump is a guess: the game's own key is taken from its answer (decision 343)
         c.onResult = function(x)
             x.state = "done"
             local bestO, bestG
@@ -939,6 +940,50 @@ function B.ScanAll()
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
     for _, r in pairs(byId) do r.state = "price" end
     B.Build()
+end
+
+-- the dump of the whole house answers what it can (decision 343): the stock prices of stackable items, and the
+-- weapons and bags, which are judged at once; only the offers of the few candidates are searched later
+local function dumpList(classes)
+    local P, out = OMQ.Prices, {}
+    local make = C_AuctionHouse and C_AuctionHouse.MakeItemKey
+    for id, e in pairs(P.Items()) do
+        local classID = select(6, instant(id))
+        if classes[classID] then
+            out[#out + 1] = { itemKey = make and make(id) or { itemID = id, itemLevel = 0, itemSuffix = 0 }, minPrice = e.p, totalQuantity = e.q }
+        end
+    end
+    return out
+end
+function B.UseDump()
+    local P = OMQ.Prices
+    if not (P and P.Session and P.Session()) then return end
+    local changed = false
+    for _, list in ipairs({ rows, foods, alts }) do
+        for _, r in ipairs(list) do
+            if r.state == "price" then
+                local stack = select(8, info(r.itemID))
+                if (stack or 1) > 1 then
+                    local p, q = P.Auction(r.itemID)
+                    B.FromBatch(r, p and { minPrice = p, totalQuantity = q } or nil)
+                    changed = true
+                end
+            end
+        end
+    end
+    if browse.state == "idle" then
+        B.want.weapons = true
+        browse.results, browse.state = nil, "done"
+        local ok, err = pcall(onBrowse, dumpList({ [2] = true }))
+        if not ok then OMQ:Error("auction buy dump", err) end
+    end
+    if bagBrowse.state == "idle" then
+        B.want.bags = true
+        bagBrowse.results, bagBrowse.tries, bagBrowse.answered = dumpList({ [1] = true, [11] = true }), 0, 0
+        bagBrowse.log = { "from the dump of the whole house" }
+        B.JudgeBags()
+    end
+    if changed then B.Build() end
 end
 
 -- the next search the auction helper's queue should send (after its own price checks)
