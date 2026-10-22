@@ -136,6 +136,7 @@ end
 local paintBadgesRef
 local function paintRow(frame, elementData)
     local id = recipeIDOf(frame, elementData)
+    frame.OMQRecipeID = id
     if paintBadgesRef then local ok, err = pcall(paintBadgesRef, frame, id); if not ok then OMQ:Error("craft badges", err) end end
     local label = frame.OMQProfit
     local text = id and C.ListText(C.Profit(id)) or nil
@@ -425,7 +426,8 @@ local function paintBadges(frame, id)
     local e = id and R.by[id]
     for _, key in ipairs({ "OMQCheap", "OMQNet" }) do if frame[key] then frame[key]:Hide() end end
     if not e then return end
-    local anchor = (frame.SkillUps and frame.SkillUps.IsShown and frame.SkillUps:IsShown() and frame.SkillUps) or frame.OMQProfit or frame
+    -- left of the profit number: left of the skill-up arrow there is no room (the list clips it, decision 351)
+    local anchor = frame.OMQProfit or frame
     local x = nil
     if R.best == id then
         local b = badge(frame, "OMQCheap", ICON_CHEAP, anchor)
@@ -442,6 +444,56 @@ end
 
 paintBadgesRef = paintBadges
 C._paintBadges = paintBadges
+
+-- the exact chance in the tooltip of the skill-up indicator of a row (decision 351)
+function C.ChanceOf(recipeID)
+    local T = C_TradeSkillUI
+    local skill = C.MySkill()
+    if not (recipeID and T and T.GetRecipeInfo and skill) then return nil end
+    local ok, info = pcall(T.GetRecipeInfo, recipeID)
+    if not (ok and type(info) == "table") then return nil end
+    info.recipeID = info.recipeID or recipeID
+    local th = C.Thresholds(info)
+    local chance = C.Chance(skill, th)
+    if not chance then return nil end
+    return chance, th, skill
+end
+function C.ChanceLine(recipeID)
+    local chance, th, skill = C.ChanceOf(recipeID)
+    if not chance then return nil end
+    local pct = string.format("%.1f%%", chance * 100):gsub("%.0%%", "%%")
+    local how
+    if skill < th.yellow then how = "orange: always"
+    elseif skill >= th.gray then how = "gray: never"
+    else how = string.format("(%d - %d) / (%d - %d)", th.gray, skill, th.gray, th.yellow) end
+    return "Skill-up chance: " .. pct .. "  " .. how
+end
+local function rowOf(owner)
+    for _ = 1, 4 do
+        if not owner then return nil end
+        if owner.OMQRecipeID then return owner end
+        owner = owner.GetParent and owner:GetParent() or nil
+    end
+end
+function C.OnTooltip(tt)
+    if not (tt and tt.GetOwner) then return end
+    local owner = tt:GetOwner()
+    if not owner or owner.tip or owner.OMQRecipeID then return end      -- my own badges and the row itself are left alone
+    local row = rowOf(owner)
+    if not row or tt.omqChance then return end
+    local line = C.ChanceLine(row.OMQRecipeID)
+    if not line then return end
+    tt.omqChance = true
+    tt:AddLine(line, 0.85, 0.75, 0.4)
+    if tt.Show then tt:Show() end
+end
+OMQ:On("READY", function()
+    if GameTooltip and GameTooltip.HookScript then
+        GameTooltip:HookScript("OnShow", function(tt) safe(function() C.OnTooltip(tt) end, "craft chance tooltip") end)
+        GameTooltip:HookScript("OnTooltipCleared", function(tt) tt.omqChance = nil end)
+        GameTooltip:HookScript("OnHide", function(tt) tt.omqChance = nil end)
+    end
+end)
 
 -- /omq craft: the recipe that is open, its materials and prices; what was found of the window
 OMQ:RegisterCommand("craft", function()
