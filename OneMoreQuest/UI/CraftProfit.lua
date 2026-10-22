@@ -133,8 +133,10 @@ local function recipeIDOf(frame, elementData)
     return nil
 end
 
+local paintBadgesRef
 local function paintRow(frame, elementData)
     local id = recipeIDOf(frame, elementData)
+    if paintBadgesRef then local ok, err = pcall(paintBadgesRef, frame, id); if not ok then OMQ:Error("craft badges", err) end end
     local label = frame.OMQProfit
     local text = id and C.ListText(C.Profit(id)) or nil
     if not text then
@@ -280,13 +282,129 @@ for _, e in ipairs({ "TRADE_SKILL_SHOW", "ADDON_LOADED", "TRADE_SKILL_LIST_UPDAT
 frame:SetScript("OnEvent", function(_, event, name)
     if event == "ADDON_LOADED" and name ~= "Blizzard_Professions" then return end
     safe(hookForm, "craft profit")
+    if event == "TRADE_SKILL_LIST_UPDATE" or event == "TRADE_SKILL_SHOW" then C.ForgetRanking() end
     if event ~= "ADDON_LOADED" then
         startTicker()
         if C_Timer and C_Timer.After then C_Timer.After(0.3, function() safe(C.PaintBlock, "craft profit block") end) end
     end
 end)
-OMQ:On("PRICES_UPDATED", function() safe(C.PaintList, "craft profit list"); safe(C.PaintBlock, "craft profit block") end)
+OMQ:On("PRICES_UPDATED", function() C.ForgetRanking(); safe(C.PaintList, "craft profit list"); safe(C.PaintBlock, "craft profit block") end)
 OMQ:On("READY", function() safe(hookForm, "craft profit") end)
+
+----------------------------------------------------------------------
+-- Cheapest way to level a profession (decision 346)
+----------------------------------------------------------------------
+-- The chance of a skill-up: orange always; yellow and green (G - X) / (G - Y), X = my skill, Y = where the recipe turns
+-- yellow, G = where it turns gray. Gray never. The thresholds are read from the recipe info of the game by their names.
+local function numberFields(t, out, depth)
+    for k, v in pairs(t) do
+        local name = tostring(k):lower()
+        if type(v) == "number" and not isSecret(v) then
+            if name:find("orange") or name:find("optimal") then out.orange = out.orange or v
+            elseif name:find("yellow") or name:find("medium") then out.yellow = out.yellow or v
+            elseif name:find("green") or name:find("easy") then out.green = out.green or v
+            elseif name:find("gray") or name:find("grey") or name:find("trivial") then out.gray = out.gray or v end
+        elseif type(v) == "table" and depth < 2 then numberFields(v, out, depth + 1) end
+    end
+end
+function C.Thresholds(info)
+    if type(info) ~= "table" then return nil end
+    local out = {}
+    numberFields(info, out, 0)
+    if out.yellow and out.gray then return out end
+    return nil
+end
+function C.Chance(skill, th)
+    if not (skill and th and th.yellow and th.gray) then return nil end
+    if skill < th.yellow then return 1 end
+    if skill >= th.gray then return 0 end
+    return (th.gray - skill) / (th.gray - th.yellow)
+end
+function C.MySkill()
+    local T = C_TradeSkillUI
+    if T and T.GetBaseProfessionInfo then
+        local ok, p = pcall(T.GetBaseProfessionInfo)
+        if ok and type(p) == "table" and tonumber(p.skillLevel) then return tonumber(p.skillLevel) end
+    end
+    local f = pf()
+    local p = f and f.professionInfo
+    return p and tonumber(p.skillLevel) or nil
+end
+
+local rank = nil
+-- every recipe I know of the open profession, with what one skill-up costs; { [recipeID] = {chance, perUp, perUpNet} }
+function C.Ranking()
+    if rank then return rank end
+    rank = { by = {}, best = nil, bestNet = nil }
+    local T = C_TradeSkillUI
+    local skill = C.MySkill()
+    if not (T and T.GetAllRecipeIDs and T.GetRecipeInfo and skill) then return rank end
+    local ok, ids = pcall(T.GetAllRecipeIDs)
+    if not (ok and type(ids) == "table") then return rank end
+    for _, id in ipairs(ids) do
+        local okI, info = pcall(T.GetRecipeInfo, id)
+        if okI and type(info) == "table" and info.learned ~= false then
+            local th = C.Thresholds(info)
+            local chance = C.Chance(skill, th)
+            local res = C.Profit(id)
+            if chance and chance > 0 and res and #res.missing == 0 then
+                local e = { chance = chance, th = th, cost = res.cost, perUp = res.cost / chance }
+                if res.sale then e.perUpNet = (res.cost - math.floor(res.sale * (1 - C.CUT) + 0.5)) / chance end
+                rank.by[id] = e
+                if not rank.best or e.perUp < rank.by[rank.best].perUp then rank.best = id end
+                if e.perUpNet and (not rank.bestNet or e.perUpNet < rank.by[rank.bestNet].perUpNet) then rank.bestNet = id end
+            end
+        end
+    end
+    return rank
+end
+function C.ForgetRanking() rank = nil end
+
+local ICON_CHEAP, ICON_NET = "Interface\\Icons\\INV_Misc_Coin_01", "Interface\\Icons\\INV_Misc_Coin_17"
+local function badge(frame, key, tex, anchor, dx)
+    local b = frame[key]
+    if not b then
+        b = CreateFrame("Frame", nil, frame)
+        b:SetSize(16, 16)
+        b.tex = b:CreateTexture(nil, "ARTWORK"); b.tex:SetAllPoints(); b.tex:SetTexture(tex)
+        b:EnableMouse(true)
+        b:SetScript("OnEnter", function(self)
+            if not (GameTooltip and self.tip) then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            for i, line in ipairs(self.tip) do
+                if i == 1 then GameTooltip:AddLine(line, 1, 0.82, 0) else GameTooltip:AddLine(line, 0.9, 0.9, 0.9) end
+            end
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+        frame[key] = b
+    end
+    b:ClearAllPoints()
+    b:SetPoint("RIGHT", anchor, "LEFT", dx or -4, 0)
+    return b
+end
+local function paintBadges(frame, id)
+    local R = C.Ranking()
+    local e = id and R.by[id]
+    for _, key in ipairs({ "OMQCheap", "OMQNet" }) do if frame[key] then frame[key]:Hide() end end
+    if not e then return end
+    local anchor = (frame.SkillUps and frame.SkillUps.IsShown and frame.SkillUps:IsShown() and frame.SkillUps) or frame.OMQProfit or frame
+    local x = nil
+    if R.best == id then
+        local b = badge(frame, "OMQCheap", ICON_CHEAP, anchor)
+        b.tip = { "Cheapest skill-up", string.format("%s per skill-up (%d%% chance, craft cost %s)", C.Money(math.floor(e.perUp + 0.5)), math.floor(e.chance * 100 + 0.5), C.Money(e.cost)) }
+        b:Show(); anchor = b
+    end
+    if R.bestNet == id then
+        local b = badge(frame, "OMQNet", ICON_NET, anchor)
+        local v = math.floor(e.perUpNet + 0.5)
+        b.tip = { "Cheapest skill-up with selling", string.format("%s%s per skill-up after selling the product (%d%% chance)", v < 0 and "gain " or "", C.Money(v), math.floor(e.chance * 100 + 0.5)) }
+        b:Show()
+    end
+end
+
+paintBadgesRef = paintBadges
+C._paintBadges = paintBadges
 
 -- /omq craft: the recipe that is open, its materials and prices; what was found of the window
 OMQ:RegisterCommand("craft", function()
@@ -308,3 +426,25 @@ OMQ:RegisterCommand("craft", function()
         OMQ:Print(string.format("cost %s, sale %s, net %s%s", C.Money(res.cost), C.Money(res.sale), res.net < 0 and "-" or "", C.Money(res.net)))
     end
 end, "crafting profit: what the open recipe costs and brings")
+
+-- /omq craft info: what the game tells about the open recipe (the skill-up thresholds are read from it, decision 346)
+OMQ:RegisterCommand("craftinfo", function()
+    local id = C.RecipeOfForm()
+    if not id then OMQ:Print("craft info: no recipe selected"); return end
+    local info = C_TradeSkillUI and C_TradeSkillUI.GetRecipeInfo and C_TradeSkillUI.GetRecipeInfo(id)
+    local keys = {}
+    for k, v in pairs(info or {}) do
+        local sv = (type(v) == "table") and "{table}" or tostring(v)
+        keys[#keys + 1] = tostring(k) .. "=" .. sv
+        if type(v) == "table" then for k2, v2 in pairs(v) do keys[#keys + 1] = "  " .. tostring(k) .. "." .. tostring(k2) .. "=" .. ((type(v2) == "table") and "{table}" or tostring(v2)) end end
+    end
+    table.sort(keys)
+    OMQ:Print("craft info: recipe " .. id .. ", my skill " .. tostring(C.MySkill()))
+    for _, l in ipairs(keys) do OMQ:Print("  " .. l) end
+    local th = C.Thresholds(info)
+    OMQ:Print("thresholds: " .. (th and string.format("orange %s yellow %s green %s gray %s", tostring(th.orange), tostring(th.yellow), tostring(th.green), tostring(th.gray)) or "not found in the recipe info"))
+    local R = C.Ranking()
+    local n = 0
+    for _ in pairs(R.by) do n = n + 1 end
+    OMQ:Print(string.format("ranking: %d recipes with a chance and a price, cheapest %s, cheapest with selling %s", n, tostring(R.best), tostring(R.bestNet)))
+end, "profession skill-ups: what the game says about the open recipe")
