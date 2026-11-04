@@ -370,8 +370,9 @@ function U:Tick()
     local c = self.cur
     if not (c and card) then return end
     local tnow = now()
-    -- the mouse on the card: the reading time stands still (from the texts until it flies off)
-    if U.hover and c.last and (tnow - c.at) >= U.T_TEXT and (tnow - c.at) < (c.flyAt or U.T_FLY) then
+    -- the mouse on the card: the reading time stands still, only once the card is complete and its bar runs
+    -- (the intro is never held up), until it flies off
+    if U.hover and c.last and (tnow - c.at) >= U.T_BAR and (tnow - c.at) < (c.flyAt or U.T_FLY) then
         c.at = c.at + (tnow - c.last)
         if not c.paused then c.paused = true; note("pause") end
     end
