@@ -375,6 +375,8 @@ function R:Finish()
         if pct >= 100 then rec.full = rec.full + 1 end
         if pct >= 80 then rec.high = rec.high + 1 end
         if pct < 30 then rec.low = rec.low + 1 end
+        if r.mode.id == "easy" and pct < 30 then rec.lowEasy = (rec.lowEasy or 0) + 1 end
+        if r.mode.id == "hard" and pct < 20 then rec.lowHard = (rec.lowHard or 0) + 1 end
         rec.last = time()
     end
     r.phase, r.endAt = "done", GetTime()
@@ -481,10 +483,31 @@ if L then
     local function rec(b) return b.rhythm or {} end
     add({ tab = "rhythm", id = "rhythmopen", title = "Dad Beats", text = "Reach level 30: Spell Rhythm is open", icon = "Ability_Warrior_BattleShout", q = 2,
           value = function(_, ctx) return ctx and num(ctx.level) and ctx.level >= R.MIN_LEVEL and 1 or 0 end })
-    add({ tab = "rhythm", id = "rhythm80", title = "On Beat", text = "Hit 80% or more of one song", icon = "Spell_Holy_InnerFire", q = 3,
-          value = function(b) return rec(b).high or 0 end })
-    add({ tab = "rhythm", id = "rhythm100", title = "Dad Hero", text = "Hit every note of one song", icon = "Spell_Nature_Bloodlust", q = 5,
-          value = function(b) return rec(b).full or 0 end })
-    add({ tab = "mishaps", id = "rhythm0", title = "Two Left Hands", text = "Hit less than 30% of one song", icon = "Spell_Shadow_Possession", q = 2,
-          value = function(b) return rec(b).low or 0 end })
+    -- the best % of one mode: any song reaches pct, or (all) every song reaches it
+    local function best(b, mode, pct, all)
+        local t = rec(b).best and rec(b).best[mode] or {}
+        local hit, n = 0, 0
+        for _, song in ipairs(R.SONGS) do
+            n = n + 1
+            if num(t[song.id]) and t[song.id] >= pct then hit = hit + 1 end
+        end
+        if all then return n > 0 and hit == n and 1 or 0 end
+        return hit > 0 and 1 or 0
+    end
+    add({ tab = "rhythm", id = "rhythmeasy", title = "Easy Listening", text = "Hit 80% or more of one song on Easy", icon = "INV_Misc_Note_02", q = 2,
+          value = function(b) return best(b, "easy", 80) end })
+    add({ tab = "rhythm", id = "rhythm80", title = "On Beat", text = "Hit 80% or more of one song on Medium", icon = "Spell_Holy_InnerFire", q = 3,
+          value = function(b) return best(b, "medium", 80) end })
+    add({ tab = "rhythm", id = "rhythmhard", title = "Shredder", text = "Hit 80% or more of one song on Hard", icon = "Spell_Fire_Fireball02", q = 4,
+          value = function(b) return best(b, "hard", 80) end })
+    add({ tab = "rhythm", id = "rhythmskip", title = "No Skips", text = "Hit every note of one song on Medium", icon = "Spell_Holy_SealOfMight", q = 3,
+          value = function(b) return best(b, "medium", 100) end })
+    add({ tab = "rhythm", id = "rhythmalbum", title = "Full Album", text = "Hit 80% or more of all four songs on Medium or on Hard", icon = "INV_Misc_Book_09", q = 4,
+          value = function(b) return math.max(best(b, "medium", 80, true), best(b, "hard", 80, true)) end })
+    add({ tab = "rhythm", id = "rhythm100", title = "Dad Hero", text = "Hit every note of one song on Hard", icon = "Spell_Nature_Bloodlust", q = 5,
+          value = function(b) return best(b, "hard", 100) end })
+    add({ tab = "mishaps", id = "rhythm0", title = "Two Left Hands", text = "Hit less than 30% of one song on Easy", icon = "Spell_Shadow_Possession", q = 2,
+          value = function(b) return rec(b).lowEasy or 0 end })
+    add({ tab = "mishaps", id = "rhythmover", title = "Overconfident", text = "Hit less than 20% of one song on Hard", icon = "Spell_Shadow_DeathScream", q = 2,
+          value = function(b) return rec(b).lowHard or 0 end })
 end
