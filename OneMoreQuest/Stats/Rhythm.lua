@@ -75,13 +75,22 @@ local function keyboardKey(k)
     return str(k) and not k:find("BUTTON") and not k:find("MOUSEWHEEL") and k ~= "ESCAPE"
 end
 
--- every spell with a keyboard key: { id, name, icon, key, slot }, one per spell name and per key
+-- only action bars 1, 2 and 3: the main bar (with its pages and stance bars), bottom left (61-72), bottom right (49-60)
+function R.OnBars(cmd, slot)
+    if not (str(cmd) and slot) then return false end
+    if cmd:match("^ACTIONBUTTON%d+$") or cmd:match("^MULTIACTIONBAR[12]BUTTON%d+$") then return true end
+    if cmd:match("^CLICK BT4Button") then return slot <= 12 or (slot >= 49 and slot <= 72) or slot >= 73 end
+    return false
+end
+
+-- every spell with a keyboard key on bars 1-3: { id, name, icon, key, slot }, one per spell name and per key
 function R:Spells()
     local out, names, keys = {}, {}, {}
     local n = GetNumBindings and call(GetNumBindings) or 0
     for i = 1, (num(n) and n or 0) do
         local cmd, _, k1, k2 = call(GetBinding, i)
         local slot = self.SlotOf(cmd)
+        if not self.OnBars(cmd, slot) then slot = nil end
         local key = keyboardKey(k1) and k1 or (keyboardKey(k2) and k2 or nil)
         if slot and key and not keys[key] then
             local kind, id = call(GetActionInfo, slot)
@@ -280,8 +289,8 @@ function R:SongTime()
     return now() - r.t0
 end
 
-local function judged(r, n, how)
-    n.done = how
+local function judged(r, n, how, ahead)
+    n.done, n.at, n.ahead = how, GetTime(), ahead
     if how == "miss" then
         r.miss = r.miss + 1
         r.combo = 0
@@ -312,10 +321,10 @@ function R:Key(key)
     if not best then r.stray = r.stray + 1; note("stray"); return end
     local want = r.spells[best.s]
     if want and want.key == full then
-        judged(r, best, math.abs(bestD) <= self.PERFECT and "perfect" or "good")
+        judged(r, best, math.abs(bestD) <= self.PERFECT and "perfect" or "good", -bestD)
     else
-        judged(r, best, "miss")
-        r.last.wrong = true
+        judged(r, best, "miss", -bestD)
+        best.wrong, r.last.wrong = true, true
     end
     changed()
 end

@@ -12,6 +12,7 @@ local R = OMQ.Rhythm
 local WIDTH, PAD = 560, 20
 local LANE_W, LANE_H, HIT_X, ICON = WIDTH - 2 * PAD, 130, 76, 52
 local POOL = 16
+W.FLASH = 0.25        -- seconds a pressed note flashes before it goes
 local BACKDROP = BackdropTemplateMixin and "BackdropTemplate" or nil
 local EDGE = "Interface\\Tooltips\\UI-Tooltip-Border"
 local TITLE_FONT, BODY_FONT = "Fonts\\MORPHEUS.TTF", "Fonts\\FRIZQT__.TTF"
@@ -66,6 +67,10 @@ local function tile(parent, size)
     local t = CreateFrame("Frame", nil, parent, BACKDROP)
     t:SetSize(size, size)
     boxed(t, .1, .1, .12)
+    -- the flash after a key: a coloured frame around the icon (green = hit, red = wrong key)
+    t.flash = t:CreateTexture(nil, "BACKGROUND")
+    t.flash:SetPoint("TOPLEFT", -4, 4); t.flash:SetPoint("BOTTOMRIGHT", 4, -4)
+    t.flash:Hide()
     t.icon = t:CreateTexture(nil, "ARTWORK")
     t.icon:SetPoint("TOPLEFT", 3, -3); t.icon:SetPoint("BOTTOMRIGHT", -3, 3)
     t.key = font(t:CreateFontString(nil, "OVERLAY", "GameFontNormal"), BODY_FONT, 12)
@@ -310,21 +315,34 @@ function W:Frame()
     f.counts:SetText(string.format("|cff40bf40Perfect %d|r   |cff8fb8ffGood %d|r   |cffe04848Miss %d|r", r.perfect, r.good, r.miss))
     local span = LANE_W - HIT_X - ICON / 2
     local used = 0
-    for i = r.next or 1, #r.notes do
+    local nowT = GetTime()
+    for i = math.max(1, (r.next or 1) - 8), #r.notes do
         local n = r.notes[i]
         local ahead = n.t - t
         if ahead > R.LOOK then break end
         if used >= POOL then break end
-        if not n.done or n.done == "miss" then
+        -- a pressed note stays where it was hit and flashes green (hit) or red (wrong key), then goes
+        local flash = n.at and (n.done ~= "miss" or n.wrong) and nowT - n.at < W.FLASH
+        if not n.done or flash or (n.done == "miss" and not n.wrong) then
             used = used + 1
             local ic = f.icons[used]
             local sp = r.spells[n.s]
             ic:ClearAllPoints()
-            ic:SetPoint("CENTER", f.lane, "LEFT", HIT_X + ahead / R.LOOK * span, 6)
+            ic:SetPoint("CENTER", f.lane, "LEFT", HIT_X + (flash and n.ahead or ahead) / R.LOOK * span, 6)
             ic.icon:SetTexture(sp and sp.icon)
             ic.key:SetText(sp and R.ShortKey(sp.key) or "")
-            if ic.SetAlpha then ic:SetAlpha(n.done and .3 or 1) end
-            setEdge(ic, (not n.done and math.abs(ahead) <= R.GOOD) and GOLD or EDGE_PLAIN)
+            if flash then
+                local c = n.wrong and MISS or PERFECT
+                ic.flash:SetColorTexture(c[1], c[2], c[3], 1)
+                ic.flash:Show()
+                setEdge(ic, c)
+                if ic.SetAlpha then ic:SetAlpha(1 - 0.6 * (nowT - n.at) / W.FLASH) end
+            else
+                ic.flash:Hide()
+                if ic.SetAlpha then ic:SetAlpha(n.done and .3 or 1) end
+                setEdge(ic, (not n.done and math.abs(ahead) <= R.GOOD) and GOLD or EDGE_PLAIN)
+            end
+            ic.note = n
             ic:Show()
         end
     end
