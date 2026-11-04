@@ -1,6 +1,7 @@
 -- One More Quest: new features step by step
 -- Some features open by level, others the first time something happens in the game. When one opens, a card
--- with a light flash and a fanfare shows what is new, waits a few seconds and flies into the minimap icon.
+-- with a light flash and a fanfare shows what is new, waits a few seconds (longer while the mouse is on it) and
+-- flies into the minimap icon; a right click sends it off.
 -- Cards never overlap: they wait in a queue, never during a fight, and start 5 s after a level up.
 -- Per character: OMQDB.unlock[guid] = { got = { id = time }, shown = { id = time } }.
 local ADDON, OMQ = ...
@@ -292,7 +293,11 @@ local function build()
     card.bar:SetHeight(3)
     card.bar:SetPoint("BOTTOMLEFT", 0, 0)
     card.texts = { card.head, card.title, card.desc, card.line, card.trigger, card.where }
-    card:SetScript("OnClick", function() U:Skip() end)
+    -- a right click sends the card off; while the mouse is on it, the time stands still
+    if card.RegisterForClicks then card:RegisterForClicks("RightButtonUp") end
+    card:SetScript("OnClick", function(_, button) if button == "RightButton" then U:Skip() end end)
+    card:SetScript("OnEnter", function() U.hover = true end)
+    card:SetScript("OnLeave", function() U.hover = false end)
     card:SetScript("OnUpdate", function() U:Tick() end)
     card:Hide()
 end
@@ -364,7 +369,14 @@ local function ease(v) v = clamp(v); return 1 - (1 - v) * (1 - v) end
 function U:Tick()
     local c = self.cur
     if not (c and card) then return end
-    local t = now() - c.at
+    local tnow = now()
+    -- the mouse on the card: the reading time stands still (from the texts until it flies off)
+    if U.hover and c.last and (tnow - c.at) >= U.T_TEXT and (tnow - c.at) < (c.flyAt or U.T_FLY) then
+        c.at = c.at + (tnow - c.last)
+        if not c.paused then c.paused = true; note("pause") end
+    end
+    c.last = tnow
+    local t = tnow - c.at
     -- flash
     local fa = t < 0.12 and t / 0.12 or clamp(1 - (t - 0.12) / 0.9)
     flash.glow:SetAlpha(fa * 0.9)
@@ -428,6 +440,7 @@ function U:Done()
     local r = self:Record()
     if r then r.shown[c.def.id] = time() end
     self.cur = nil
+    self.hover = false
     if card then card:Hide() end
     if flash then flash:Hide() end
     self.holdUntil = math.max(self.holdUntil or 0, now() + U.GAP)
