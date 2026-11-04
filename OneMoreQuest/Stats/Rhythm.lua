@@ -17,11 +17,12 @@ R.LOOK = 2.0          -- seconds an icon is on the timeline before it reaches th
 R.PERFECT = 0.08      -- seconds off the beat for "perfect"
 R.GOOD = 0.16         -- seconds off the beat for "good"; later is a miss
 R.MODES = {
-    { id = "easy", name = "Easy", n = 4 },
-    { id = "medium", name = "Medium", n = 6 },
+    { id = "easy", name = "Easy", n = 3 },
+    { id = "medium", name = "Medium", n = 5 },
     { id = "hard", name = "Hard", n = 8 },
 }
 R.SPELLS = 8          -- the most a mode uses
+R.POOL = 8            -- the spells of a run are drawn at random from the 8 most cast
 R.CLOSE_TIME = 15
 R.MEDIA = "Interface\\AddOns\\OneMoreQuest\\Media\\"
 R.SONGS = {
@@ -231,20 +232,23 @@ function R:Notes(song, count)
     return out
 end
 
--- Easy / Medium / Hard: the n most cast spells with a key
+-- Easy / Medium / Hard: n spells drawn at random from the 8 most cast spells with a key
 function R:SetMode(id, quiet)
     local r = self.run
     if not r or r.phase ~= "songs" then return end
     local m = self:Mode(id)
     r.mode = m
+    local pool = {}
+    for i = 1, math.min(self.POOL, #r.all) do pool[i] = r.all[i] end
+    for i = #pool, 2, -1 do local j = math.random(i); pool[i], pool[j] = pool[j], pool[i] end
     r.spells = {}
-    for i = 1, math.min(m.n, #r.all) do r.spells[i] = r.all[i] end
+    for i = 1, math.min(m.n, #pool) do r.spells[i] = pool[i] end
     if OMQ.db then OMQ.db.rhythmMode = m.id end
     if not quiet then changed() end
 end
 function R:Ready(mode)
     local r = self.run
-    return r and r.all and #r.all >= (mode or r.mode).n or false
+    return r and r.all and math.min(#r.all, self.POOL) >= (mode or r.mode).n or false
 end
 
 function R:Choose(i)
