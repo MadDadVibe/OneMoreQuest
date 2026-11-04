@@ -356,34 +356,3 @@ OMQ:On("READY", function()
         if R.run and R.run.phase == "done" and W.frame and W.frame:IsShown() then W:SafeRefresh() end
     end)
 end)
-
-----------------------------------------------------------------------
--- Play button in the Spell Rhythm tab of the ledger window
-----------------------------------------------------------------------
-local LU = OMQ.LedgerUI
-if LU and LU.Refresh then
-    local refresh = LU.Refresh
-    LU.Refresh = function(self, ...)
-        refresh(self, ...)
-        local f = self.frame
-        if not f then return end
-        if W.ledgerFor ~= f then
-            local b = button(f, 130, 26, "Play")
-            b:SetPoint("RIGHT", f.flexBtn or f, f.flexBtn and "LEFT" or "TOPRIGHT", -24, f.flexBtn and 0 or -30)
-            b:SetScript("OnClick", function()
-                local _, why = R:Open("manual")
-                if why == "combat" then OMQ:Print("Spell Rhythm: not in combat.") end
-            end)
-            b:SetScript("OnEnter", function(btn)
-                if not GameTooltip then return end
-                GameTooltip:SetOwner(btn, "ANCHOR_LEFT")
-                GameTooltip:AddLine("Spell Rhythm")
-                GameTooltip:AddLine("Press your spell keys to the beat of a song.", 1, 1, 1, true)
-                GameTooltip:Show()
-            end)
-            b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-            W.ledgerFor, W.ledgerBtn = f, b
-        end
-        if self.tab == "rhythm" and R:Unlocked() then W.ledgerBtn:Show() else W.ledgerBtn:Hide() end
-    end
-end
