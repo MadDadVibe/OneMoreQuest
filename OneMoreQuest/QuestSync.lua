@@ -1,8 +1,9 @@
 -- One More Quest: quest sync (section 6)
 -- A quest is shared exactly once, one second after it was accepted (decision 128). When
 -- sharing does not work it is not tried again, and there is no card for quests. The only
--- other trigger is a new group member: then everybody shares in turn (player 1, then
--- player 2 ...), each quest tried once per round.
+-- other way is a sync round started by hand (options button or /omq quests sync, decision 412):
+-- then I share every quest of mine a dad lacks and can take, each tried once. A newcomer, a
+-- reload or a relog no longer starts a round by itself (decision 412); they only exchange lists.
 -- Inside a dungeon or raid nothing is shared automatically (decision 409): quests accepted there are
 -- not pushed, and a round that falls inside (a dad reloads or reconnects) waits until I am outside
 -- again. In combat a waiting push is held until the fight is over.
@@ -15,7 +16,6 @@ local ARM_SECONDS = 30          -- how long a receiver accepts a announced quest
 local LEVEL_GAP = 5             -- automatic sharing only between dads at most this many levels apart (decision 211)
 local SEND_INTERVAL = 30        -- seconds between full quest lists
 local CHANGE_DELAY = 0.2        -- seconds to wait after the quest log changed
-local ROUND_DELAY = 5           -- seconds after the last newcomer before a round starts
 local HANDOFF_AFTER = 3         -- seconds after the last push until the next player starts
 local HANDOFF_TIMEOUT = 60      -- the next player starts anyway after this long
 local ASK_WAIT = 2              -- seconds to wait for the answers "which of these can you take" (decision 297)
@@ -238,6 +238,16 @@ local function turnOrder()
     return list
 end
 
+-- By hand (options button, /omq quests sync): my own turn at once, no waiting for the others (decision 412).
+function Q:ShareNow()
+    roundStartAt = nil
+    if not OMQ:QuestSyncOn() or not OMQ:GetChannel() then return false end
+    if inInstance() then roundAfterInstance = true; return "later" end
+    round = { started = false, deadline = GetTime() + HANDOFF_TIMEOUT }
+    self:BeginTurn()
+    return true
+end
+
 function Q:StartRound()
     round = nil
     if not OMQ:QuestSyncOn() or not OMQ:GetChannel() then return end
@@ -358,9 +368,9 @@ local function processQueues()
     if inside then
         if #pushQueue > 0 then pushQueue = {} end
         if round then round = nil; roundAfterInstance = true end
-    elseif roundAfterInstance and not roundStartAt then
+    elseif roundAfterInstance then                                -- asked for inside: now, outside (decision 412)
         roundAfterInstance = nil
-        roundStartAt = now + ROUND_DELAY
+        Q:ShareNow()
     end
     -- pushes: announce first, push SHARE_WAIT seconds later; held during a fight
     local item = pushQueue[1]
@@ -444,17 +454,16 @@ OMQ:On("READY", function()
     C_Timer.NewTicker(SEND_INTERVAL, function() pcall(sendList) end)
 end)
 
--- A newcomer needs our list; every newcomer starts a (debounced) sync round.
+-- A newcomer (or a dad after a reload) needs our list. No sync round any more (decision 412).
 OMQ:On("USER_JOINED", function()
     sendList()
-    roundStartAt = GetTime() + ROUND_DELAY
-    round = nil
 end)
 
 OMQ:RegisterCommand("quests", function(arg)
     if arg == "sync" then
-        roundStartAt = GetTime() + 0.5
-        OMQ:Print("sync round starts")
+        local r = Q:ShareNow()
+        OMQ:Print(r == "later" and "quests are shared after the dungeon" or r and "sharing your quests with the group"
+            or "quest sync is off or you are not in a group")
         return
     elseif arg == "auto" then
         OMQ.db.options.autoShare = not (OMQ.db.options.autoShare ~= false)
