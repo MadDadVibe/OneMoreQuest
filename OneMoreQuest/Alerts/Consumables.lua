@@ -3,7 +3,8 @@
 -- items of Data/BuyList.lua) and has not got their buff on gets a card: "Use Elixir of Ogre's
 -- Strength" - a left click uses it, a right click hides that reminder for good.
 -- Option "Consumable reminders": Never, Always (out in the world - not in a city or an inn - and in
--- dungeons) or Dungeons (only there; the default). In a dungeon the reminders count separately: a
+-- dungeons) or Dungeons (only there; the default). Weapon stones and weapon oils are the exception:
+-- under Dungeons they remind out in the world too (cheap, made for questing; decision 408). In a dungeon the reminders count separately: a
 -- card clicked away there stays away in every future dungeon, but still comes outside (and the other
 -- way round). "Reset consumable reminders" under the option brings them all back.
 -- Potions are left out (they are for emergencies), so are armor kits and shield spikes (they stay on).
@@ -16,6 +17,7 @@ OMQ.ConsumableAlert = C
 
 C.KINDS = { elixir = true, flask = true, scroll = true, food = true, stone = true, oil = true, juju = true }
 C.MAX = 3
+C.WEAPON = { stone = true, oil = true }   -- also out in the world under the mode Dungeons (decision 408)
 C.WELL_FED = 19705                -- "Well Fed": its name in the client's language
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
@@ -106,7 +108,7 @@ function C.Check()
     -- buff foods the list does not know count too (decision 278, UI/AuctionBuy.lua)
     local kindOf = OMQ.BuyKind or function(i) return OMQ.BuyKnown[i] end
     local dungeon = inDungeon()
-    if mode == "dungeon" and not dungeon then return nil end
+    local weaponOnly = mode == "dungeon" and not dungeon                    -- outside: only stones and oils (decision 408)
     if not dungeon and OMQ:InTown() then return nil end                     -- in a city, a town, an inn or a quest hub (decision 308)
     if InCombatLockdown and InCombatLockdown() then return "keep" end
     if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
@@ -122,7 +124,7 @@ function C.Check()
             local it = Ct.GetContainerItemInfo(bag, slot)
             local id = it and it.itemID
             local kind = id and kindOf(id)
-            if kind and C.KINDS[kind] and not seen[id] then
+            if kind and C.KINDS[kind] and not seen[id] and (not weaponOnly or C.WEAPON[kind]) then
                 seen[id] = true
                 local name, _, _, _, minLevel, _, _, _, _, icon = info(id)
                 local s = (kind == "stone" or kind == "oil") and "weapon" or (kind == "food" and "food") or spellOf(id)
@@ -152,7 +154,7 @@ function C.Explain()
     out[#out + 1] = string.format("consumable reminders: mode %s, in a dungeon %s, in a town (city, town, inn or quest hub) %s, alerts %s",
         mode, tostring(dungeon), tostring(resting), tostring(M:IsRuleEnabled("consumable")))
     if mode == "never" then out[#out + 1] = "  mode Never: no reminders"
-    elseif mode == "dungeon" and not dungeon then out[#out + 1] = "  mode Dungeons and not in a dungeon: no reminders"
+    elseif mode == "dungeon" and not dungeon then out[#out + 1] = "  mode Dungeons and not in a dungeon: only weapon stones and oils remind"
     elseif not dungeon and resting then out[#out + 1] = "  in a city, a town, an inn or a quest hub: no reminders here" end
     local Ct = C_Container
     local auras = auraNames()
@@ -170,6 +172,7 @@ function C.Explain()
                 local s = (kind == "stone" or kind == "oil") and "weapon enchant" or (kind == "food" and "Well Fed") or spellOf(id)
                 local why
                 if not C.KINDS[kind] then why = "not reminded (" .. kind .. ")"
+                elseif mode == "dungeon" and not dungeon and not C.WEAPON[kind] then why = "only in dungeons (mode Dungeons)"
                 elseif not name then why = "item data not loaded yet"
                 elseif (minLevel or 0) > level then why = "needs level " .. minLevel
                 elseif not s then why = "its buff spell is not known yet"
