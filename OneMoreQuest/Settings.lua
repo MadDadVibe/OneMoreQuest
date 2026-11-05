@@ -37,7 +37,7 @@ local function alertItems()
         if id == "consumable" then
             -- decision 266: when to remind of the bought buff items, and a reset for the cards clicked away
             out[#out + 1] = { type = "segment", label = "Consumable reminders",
-                tip = "Never: no reminders. Always: whenever you are out in the world (not in a city or an inn) and in dungeons. Dungeons: only in dungeons, but weapon stones and weapon oils remind out in the world too. A right click hides a reminder for good; in dungeons that counts separately, for every future dungeon.",
+                tip = "Never: no reminders. Always: whenever you are out in the world (not in a city or an inn) and in dungeons. Dungeons: only in dungeons. A right click hides a reminder for good; in dungeons that counts separately, for every future dungeon.",
                 options = { "Never", "Always", "Dungeons" },
                 get = function()
                     local m = OMQ.db.options.consumeMode or "dungeon"
