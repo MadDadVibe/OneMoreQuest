@@ -31,7 +31,8 @@ function GD.MyDrink()
     if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return false end
     local dn = drinkNames()
     for i = 1, 40 do
-        local a = C_UnitAuras.GetAuraDataByIndex("player", i, "HELPFUL")
+        local a, hidden = OMQ.ReadAura("player", i, "HELPFUL")
+        if hidden then return false end
         if not a then break end
         if isSecret(a.name) then return false end
         if type(a.name) == "string" and dn[a.name] then

@@ -112,7 +112,8 @@ local function auraNames(unit)
     if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return nil end
     local names = {}
     for i = 1, 40 do
-        local aura = C_UnitAuras.GetAuraDataByIndex(unit, i, "HELPFUL")
+        local aura, hidden = OMQ.ReadAura(unit, i, "HELPFUL")
+        if hidden then return nil end
         if not aura then break end
         local name = aura.name
         if isSecret(name) then return nil end

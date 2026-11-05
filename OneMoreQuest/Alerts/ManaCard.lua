@@ -65,7 +65,8 @@ local function allowed()
     if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
         drinkName = drinkName or (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(430))
         for i = 1, 40 do
-            local a = C_UnitAuras.GetAuraDataByIndex("player", i, "HELPFUL")
+            local a, hidden = OMQ.ReadAura("player", i, "HELPFUL")
+            if hidden then return false end
             if not a then break end
             if not isSecret(a.name) and a.name == drinkName then return false end
         end

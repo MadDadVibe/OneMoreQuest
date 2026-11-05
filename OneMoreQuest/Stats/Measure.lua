@@ -640,14 +640,15 @@ local function sampleFood()
             or (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(19705))
             or (GetSpellInfo and GetSpellInfo(19705))
             or "Well Fed"
-        local found = false
+        local found, hidden = false, false
         for i = 1, 40 do
-            local aura = C_UnitAuras.GetAuraDataByIndex("player", i, "HELPFUL")
+            local aura, h = OMQ.ReadAura("player", i, "HELPFUL")
+            if h then hidden = true; break end
             if not aura then break end
             local ok, match = pcall(function() return aura.name == wellFedName end)
             if ok and match then found = true; break end
         end
-        hasFood = found
+        if not hidden then hasFood = found end
     end
     if hasFood then s.foodSeconds = s.foodSeconds + 1 end
     s.lastActive = time()

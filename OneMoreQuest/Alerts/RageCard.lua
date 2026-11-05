@@ -84,7 +84,8 @@ function RC.Wanted()
     local names = {}
     if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
         for i = 1, 40 do
-            local a = C_UnitAuras.GetAuraDataByIndex("player", i, "HELPFUL")
+            local a, hidden = OMQ.ReadAura("player", i, "HELPFUL")
+            if hidden then return nil end
             if not a then break end
             if isSecret(a.name) then return nil end
             if type(a.name) == "string" then names[a.name] = true end

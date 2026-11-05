@@ -5,7 +5,7 @@ OMQ = OMQ or {}
 _G.OneMoreQuest = OMQ
 
 OMQ.name = "One More Quest"
-OMQ.version = "1.3.15"
+OMQ.version = "1.3.16"
 
 -- the last bag to look into for what I carry: the reagent bag too, if the client has one (decision 272)
 function OMQ.LastBag()
@@ -89,6 +89,36 @@ function OMQ:Error(where, err)
     self.errors = self.errors or {}
     table.insert(self.errors, tostring(where) .. ": " .. tostring(err))
     if #self.errors > 20 then table.remove(self.errors, 1) end
+end
+
+----------------------------------------------------------------------
+-- Auras. On the retail client the game hides auras from addons in a dungeon fight
+-- ("Auras cannot be accessed when secret while tainted"): the call itself raises an error,
+-- and many of those get the addon blocked. So every aura read goes through here:
+-- OMQ.ReadAura(unit, index, filter) -> aura or nil, unreadable (true when it cannot be read now).
+-- After a failed read no aura is touched for AURA_PAUSE seconds.
+----------------------------------------------------------------------
+local AURA_PAUSE = 5
+local auraPauseUntil = -1
+function OMQ.AurasHidden()
+    if GetTime() < auraPauseUntil then return true end
+    if C_Secrets and C_Secrets.ShouldAurasBeSecret then
+        local ok, hidden = pcall(C_Secrets.ShouldAurasBeSecret)
+        if ok and hidden then return true end
+    end
+    return false
+end
+
+function OMQ.ReadAura(unit, index, filter)
+    if OMQ.AurasHidden() then return nil, true end
+    local ok, a
+    if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
+        ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, index, filter)
+    else
+        return nil, true
+    end
+    if not ok then auraPauseUntil = GetTime() + AURA_PAUSE; return nil, true end
+    return a, false
 end
 
 ----------------------------------------------------------------------

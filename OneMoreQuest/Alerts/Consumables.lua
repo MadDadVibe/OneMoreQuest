@@ -38,7 +38,8 @@ local function auraNames()
     local get = (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex)
     if get then
         for i = 1, 40 do
-            local a = get("player", i, "HELPFUL")
+            local a, hidden = OMQ.ReadAura("player", i, "HELPFUL")
+            if hidden then return nil end                 -- hidden in a dungeon fight: cannot tell
             if not a then break end
             any = true
             if type(a.name) == "string" and not isSecret(a.name) then names[a.name] = true; readable = readable + 1 end
@@ -46,7 +47,8 @@ local function auraNames()
         end
     elseif UnitBuff then
         for i = 1, 40 do
-            local name, _, _, _, _, _, _, _, _, sid = UnitBuff("player", i)
+            local okb, name, _, _, _, _, _, _, _, _, sid = pcall(UnitBuff, "player", i)
+            if not okb then return nil end
             if not name then break end
             any = true
             if type(name) == "string" and not isSecret(name) then names[name] = true; readable = readable + 1 end
@@ -93,7 +95,7 @@ function C.Active(id, kind, auras)
     local s, sid = spellOf(id)
     if not s then return nil end
     if sid and auras.__ids and auras.__ids[sid] then return true end
-    if sid and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
+    if sid and not OMQ.AurasHidden() and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
         local ok, a = pcall(C_UnitAuras.GetPlayerAuraBySpellID, sid)
         if ok and a then return true end
     end
