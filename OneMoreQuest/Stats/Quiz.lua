@@ -154,10 +154,27 @@ end
 Q._PickBest = pickBest
 
 -- the right number and three others around it, no doubles, none below `min`
-local function numbers(v, small)
+-- `top` (levels): no option above it, so only levels the player has reached are offered; too few -> no question
+local function numbers(v, small, top)
     if not num(v) then return nil end
     local cand = small and { v - 2, v - 1, v + 1, v + 2, v + 3 }
         or { math.floor(v * 0.5 + 0.5), math.floor(v * 0.75 + 0.5), math.floor(v * 1.35 + 0.5), math.floor(v * 1.7 + 0.5), v + 2 }
+    if num(top) then
+        top = math.max(top, v)
+        local near, far = {}, {}
+        for c = v - 3, v + 3 do if c ~= v and c >= 1 and c <= top then near[#near + 1] = c end end
+        for c = v - 4, v - 6, -1 do if c >= 1 then far[#far + 1] = c end end
+        shuffle(near)
+        cand = near
+        for _, c in ipairs(far) do cand[#cand + 1] = c end
+        local list, seen = { v }, { [v] = true }
+        for _, c in ipairs(cand) do
+            if #list < 4 and not seen[c] then seen[c] = true; list[#list + 1] = c end
+        end
+        if #list < 4 then return nil end
+        shuffle(list)
+        for i, x in ipairs(list) do if x == v then return list, i end end
+    end
     local list, seen = { v }, { [v] = true }
     shuffle(cand)
     for _, c in ipairs(cand) do
@@ -170,7 +187,7 @@ end
 Q._Numbers = numbers
 
 local function numberQ(kind, text, v, fmt, reveal, extra)
-    local list, right = numbers(v, extra and extra.small)
+    local list, right = numbers(v, extra and extra.small, extra and extra.level and UnitLevel("player") or nil)
     if not list then return nil end
     local opts = {}
     for i, x in ipairs(list) do opts[i] = { label = fmt and fmt(x) or tostring(x) } end
@@ -245,7 +262,7 @@ kind("A6", function(b)
     local f = b.firsts and b.firsts.elite
     if not (f and num(f.l)) then return nil end
     return numberQ("A6", "At what level did you kill your first elite?", f.l, function(x) return "Level " .. x end,
-        "At level " .. f.l .. ".", { small = true })
+        "At level " .. f.l .. ".", { small = true, level = true })
 end)
 kind("A7", function(b)
     local pool = causes(b)
@@ -408,7 +425,7 @@ kind("A30", function(b) local d = b.deaths or {}; return deathZone("A30", "Where
 kind("A31", function(b)
     local d = (b.deaths or {})[#(b.deaths or {})]
     if not (d and num(d.l)) then return nil end
-    return numberQ("A31", "At what level did you die last?", d.l, function(x) return "Level " .. x end, "At level " .. d.l .. ".", { small = true })
+    return numberQ("A31", "At what level did you die last?", d.l, function(x) return "Level " .. x end, "At level " .. d.l .. ".", { small = true, level = true })
 end)
 kind("A32", function(b) return bestQ("A32", "Which of these did you find last?", gear(b, function(e) return e.src ~= "before" end), "t", false,
     function(o) return ago(o.t) end, function(o) return o.label .. ", " .. ago(o.t) .. "." end) end)
@@ -421,7 +438,7 @@ kind("A34", function(b)
     end
     if not last then return nil end
     return numberQ("A34", "At what level did you find your last blue item?", last.l, function(x) return "Level " .. x end,
-        (last.nm or "It") .. ", at level " .. last.l .. ".", { small = true, icon = itemIcon(last.id) })
+        (last.nm or "It") .. ", at level " .. last.l .. ".", { small = true, level = true, icon = itemIcon(last.id) })
 end)
 kind("A35", function(b)
     local here = OMQ.Tally.map and OMQ.Tally.ZoneOf and OMQ.Tally.ZoneOf(OMQ.Tally.map)
