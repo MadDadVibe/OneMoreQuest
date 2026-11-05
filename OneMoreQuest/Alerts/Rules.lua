@@ -1073,7 +1073,7 @@ local function unitInReach(unit)
     if UnitIsConnected and not UnitIsConnected(unit) then return false end
     if UnitIsVisible and not UnitIsVisible(unit) then return false end
     local guid = UnitGUID(unit)
-    if guid and OMQ.Arrow and OMQ.Arrow.DistanceTo then
+    if guid and not isSecret(guid) and OMQ.Arrow and OMQ.Arrow.DistanceTo then
         local d = OMQ.Arrow:DistanceTo(guid)
         if d and d > BUFF_RANGE then return false end
     end
@@ -1083,7 +1083,7 @@ end
 -- true when the unit is a group member who runs the addon
 local function hasAddon(unit)
     local guid = UnitGUID(unit)
-    local u = guid and OMQ.users[guid]
+    local u = guid and not isSecret(guid) and OMQ.users[guid]
     return u ~= nil and OMQ:IsOnline(u)
 end
 

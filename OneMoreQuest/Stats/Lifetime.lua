@@ -349,7 +349,7 @@ local function groupGuids()
     local function add(unit)
         if UnitExists and not UnitExists(unit) then return end
         local g = UnitGUID(unit)
-        if g then set[g] = true end
+        if g and not (issecretvalue and issecretvalue(g)) then set[g] = true end
     end
     if IsInRaid and IsInRaid() then
         for i = 1, 40 do add("raid" .. i) end

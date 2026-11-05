@@ -357,6 +357,7 @@ local function onTarget()
     if not (UnitExists and UnitExists("target")) then return end
     local isPlayer = UnitIsPlayer and UnitIsPlayer("target")
     local guid = UnitGUID("target")
+    if isSecret(guid) then guid = nil end                 -- hidden enemy GUID in a fight: not a dad
     local inGroup = guid and (OMQ:GroupPosition(guid) ~= nil or (UnitInParty and UnitInParty("target")))
     local m = me()
     if m and guid == m.guid then return end

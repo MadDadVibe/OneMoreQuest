@@ -211,13 +211,18 @@ local function groupMembers()
 end
 
 -- Position of the player in my group (1 to 4), or nil when he is not in it.
+-- A GUID the game hides (a secret value, e.g. an enemy target in a fight) can never be a member:
+-- using it as a table key would raise an error.
+local function hidden(v) return issecretvalue and issecretvalue(v) or false end
+
 function OMQ:GroupPosition(guid)
-    if not guid then return nil end
+    if not guid or hidden(guid) then return nil end
     return groupMembers()[guid]
 end
 
 function OMQ:InGroup(guid)
     if self.assumeInGroup then return true end       -- tests without unit tokens
+    if not guid or hidden(guid) then return false end
     return groupMembers()[guid] ~= nil
 end
 
