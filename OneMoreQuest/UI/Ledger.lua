@@ -2,6 +2,8 @@
 -- Reads Stats/Ledger.lua. The window opens from the quick options once the first tab is open.
 -- A shown card flies out of the minimap icon on the other clients; a dad who owns it can counter it
 -- with a left click, and only then the one who showed it rests for 5 minutes.
+-- The one who showed it sees a waiting toast, then who missed the card (or the counter).
+-- Sounds: an incoming shown card and every new card play a short sound of the game.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -14,6 +16,7 @@ local COLS, ROWS = 5, 2
 local CW, CH, GAP, PAD = 128, 180, 10, 20
 local TOAST_HOLD, INTRO_HOLD, FLEX_HOLD, COUNTER_HOLD = 4, 8, 8, 5
 local REST = 300
+local RESULT_AFTER = FLEX_HOLD + 3   -- seconds until the one who showed a card hears how it went
 local MAX_TOASTS = 6
 
 local QCOLOR = { [0] = { .62, .62, .62 }, { 1, 1, 1 }, { .12, 1, 0 }, { 0, .44, .87 }, { .64, .21, .93 }, { 1, .5, 0 } }
@@ -305,6 +308,26 @@ end
 U._Fly = fly
 
 ----------------------------------------------------------------------
+-- Sounds of the game itself: a shown card comes in, a new card is reached. They play always (rare
+-- moments, not the soft sounds of the option "Sounds"), on the effects channel, at most once a second.
+----------------------------------------------------------------------
+U.SOUNDS = {
+    flex = { kit = "MAP_PING",               id = 3175 },
+    card = { kit = "IG_QUEST_LIST_COMPLETE", id = 878 },
+}
+local soundAt = {}
+function U:Sound(kind)
+    local s = self.SOUNDS[kind]
+    if not s or not PlaySound then return false end
+    local now = GetTime and GetTime() or time()
+    if soundAt[kind] and now - soundAt[kind] < 1 then return false end
+    soundAt[kind] = now
+    local id = (_G.SOUNDKIT and _G.SOUNDKIT[s.kit]) or s.id
+    local ok, will = pcall(PlaySound, id, "SFX")
+    return ok and will ~= false
+end
+
+----------------------------------------------------------------------
 -- Toasts: a new card slides into the icon
 ----------------------------------------------------------------------
 local toast, toastQueue, toastBusy = nil, {}, false
@@ -368,19 +391,21 @@ local function showToast(item)
     toast:ClearAllPoints()
     toast:SetPoint("RIGHT", anchor(), "LEFT", -8, 0)
     toast:Show()
-    if OMQ.Sound and OMQ.Sound.Play then pcall(OMQ.Sound.Play, OMQ.Sound, "popup") end
+    if item.sound then U:Sound(item.sound) end
     local hold = item.hold or TOAST_HOLD
-    C_Timer.After(hold, function()
-        local function gone()
+    if item.ended then hold = 0 end
+    item.close = function()
+        if item.closing or U.toastShown ~= item then return end
+        item.closing = true
+        fly(toast, false, 0.4, function()
             toast:Hide(); toast:SetScale(1); toast:SetAlpha(1)
             glowIcon()
             toastBusy = false
             U.toastShown = nil
             nextToast()
-        end
-        if item.update then item.update = nil end
-        fly(toast, false, 0.4, gone)
-    end)
+        end)
+    end
+    C_Timer.After(hold, item.close)
     if item.tick then
         local function again()
             if U.toastShown ~= item then return end
@@ -402,6 +427,18 @@ function U:Toast(item)
     nextToast()
 end
 function U:ToastCount() return #toastQueue + (toastBusy and 1 or 0) end
+-- a toast that is no longer true: out of the queue, or into the icon at once when it is shown
+function U:EndToast(item)
+    if not item then return end
+    item.ended = true
+    for i, q in ipairs(toastQueue) do if q == item then table.remove(toastQueue, i); return end end
+    if U.toastShown == item and item.close then item.close() end
+end
+-- a toast that comes before the waiting ones (answers to my own click)
+function U:ToastFirst(item)
+    table.insert(toastQueue, 1, item)
+    nextToast()
+end
 
 OMQ:On("LEDGER_NEW", function(fresh, tabs, first)
     -- the first opening is shown by the unlock card (UI/Unlock.lua), only the cards come as toasts
@@ -409,7 +446,7 @@ OMQ:On("LEDGER_NEW", function(fresh, tabs, first)
     for _, n in ipairs(fresh or {}) do
         shown = shown + 1
         if shown > MAX_TOASTS then break end
-        U:Toast({ card = n.card, tier = n.tier })
+        U:Toast({ card = n.card, tier = n.tier, sound = "card" })
     end
     if #(fresh or {}) > MAX_TOASTS then
         U:Toast({ head = "Forever Journey", title = "+" .. (#fresh - MAX_TOASTS) .. " more cards",
@@ -423,7 +460,7 @@ end)
 -- Showing a card to the group, and the counter
 ----------------------------------------------------------------------
 U.restUntil = 0
-local lastFlex                -- { fid, id } of my last shown card
+local lastFlex                -- { fid, id, saw, wait } of my last shown card
 local flexCard, flexQueue, flexBusy, flexItem = nil, {}, false, nil
 local countered = {}          -- fid -> true (one counter per shown card)
 
@@ -442,9 +479,57 @@ function U:Flex(id)
     if not me then return false end
     local fid = tostring(time()) .. tostring(math.random(100, 999))
     if not OMQ:Send("LF", me.guid, me.name, id, rec.n or 1, fid) then return false end
-    lastFlex = { fid = fid, id = id }
+    local flex = { fid = fid, id = id, saw = {} }
+    if lastFlex and lastFlex.wait then self:EndToast(lastFlex.wait) end
+    lastFlex = flex
     self.cardRest[id] = time() + REST
+    -- my own feedback: the card went out, the others have a few seconds to counter
+    flex.wait = { head = "You show a card", card = c, tier = rec.n or 1, hold = RESULT_AFTER,
+                  line = "Waiting for the others...",
+                  tick = function(t) t.line:SetText(U:WaitLine(flex)) end }
+    self:ToastFirst(flex.wait)
+    C_Timer.After(RESULT_AFTER, function() U:FlexResult(flex) end)
     return true
+end
+
+local function names(list)
+    local t = {}
+    for _, s in ipairs(list) do t[#t + 1] = s.name end
+    return table.concat(t, ", ")
+end
+
+function U:WaitLine(flex)
+    local n = #flex.saw
+    if n == 0 then return "Waiting for the others..." end
+    return "Waiting for the others... (" .. n .. (n == 1 and " dad sees it)" or " dads see it)")
+end
+
+-- after the counter time: no counter came, so the card landed. Says who misses it.
+function U:FlexResult(flex)
+    if not flex or flex.countered or flex.done then return nil end
+    flex.done = true
+    self:EndToast(flex.wait)
+    if flex ~= lastFlex then return nil end   -- a newer shown card took over
+    local c = L:Card(flex.id)
+    if not c then return nil end
+    local miss, own = {}, {}
+    for _, s in ipairs(flex.saw) do
+        if s.own then own[#own + 1] = s else miss[#miss + 1] = s end
+    end
+    local item = { head = "Card shown", card = c, tier = (L:Owned(flex.id) or {}).n or 1 }
+    if #miss > 0 then
+        item.title = "Flex landed!"
+        item.line = names(miss) .. (#miss == 1 and " misses this card" or " miss this card")
+    elseif #own > 0 then
+        item.title = "Nobody countered"
+        item.line = names(own) .. (#own == 1 and " has it too and let it pass" or " have it too and let it pass")
+    else
+        item.title = "Nobody countered"
+        item.line = "No dad with an open journal saw it"
+    end
+    flex.result = item
+    self:ToastFirst(item)
+    return item
 end
 
 local function buildFlex()
@@ -497,7 +582,7 @@ local function showFlex(item)
     end
     flexCard.banner:SetText(item.name .. " shows a card!")
     flexCard:Show()
-    if OMQ.Sound and OMQ.Sound.Play then pcall(OMQ.Sound.Play, OMQ.Sound, "popup") end
+    U:Sound("flex")
     fly(flexCard, true, 0.5)
     local token = {}
     flexCard.token = token
@@ -536,6 +621,8 @@ local function onFlex(fields)
     local c = L:Card(id or "")
     if not c or not L:Open() then return end
     L:MarkSeen(id, name, tier)
+    -- tell the one who shows it that I saw it, and whether I own it (for the result)
+    if me and fid then OMQ:Send("LA", me.guid, me.name, guid, fid, L:Owned(id) and "1" or "0") end
     if OMQ.db and OMQ.db.options and OMQ.db.options.bookFlexOff then return end
     flexQueue[#flexQueue + 1] = { guid = guid, name = name or "?", card = c, tier = tier or 1, fid = fid }
     nextFlex()
@@ -549,14 +636,28 @@ local function onCounter(fields)
     if not lastFlex or lastFlex.fid ~= fid or lastFlex.countered then return end
     lastFlex.countered = true
     U.restUntil = time() + REST
+    U:EndToast(lastFlex.wait)
+    if lastFlex.result then U:EndToast(lastFlex.result) end
     local c = L:Card(lastFlex.id)
-    U:Toast({ head = "Countered", title = "Countered by " .. tostring(name) .. " - 5 minutes of quiet",
+    U:ToastFirst({ head = "Countered", title = "Countered by " .. tostring(name) .. " - 5 minutes of quiet",
               icon = c and c.icon, hold = COUNTER_HOLD, line = "Showing cards again in " .. mmss(REST),
               tick = function(t) t.line:SetText("Showing cards again in " .. mmss(U.restUntil - time())) end })
 end
 
 OMQ:RegisterMessage("LF", onFlex)
 OMQ:RegisterMessage("LC", onCounter)
+
+-- a dad saw my shown card
+local function onSaw(fields)
+    local guid, name, target, fid, own = fields[1], fields[2], fields[3], fields[4], fields[5]
+    local me = OMQ:GetSelf()
+    if not me or target ~= me.guid or guid == me.guid then return end
+    if not lastFlex or lastFlex.fid ~= fid or lastFlex.done then return end
+    for _, s in ipairs(lastFlex.saw) do if s.guid == guid then return end end
+    lastFlex.saw[#lastFlex.saw + 1] = { guid = guid, name = name or "?", own = own == "1" }
+end
+OMQ:RegisterMessage("LA", onSaw)
+U._LastFlex = function() return lastFlex end
 
 ----------------------------------------------------------------------
 -- The window
@@ -784,7 +885,7 @@ U._Paint, U._NewCard = paint, newCard
 ----------------------------------------------------------------------
 local function demo()
     local c = L:Card("dragon")
-    U:Toast({ card = c, tier = 3 })
+    U:Toast({ card = c, tier = 3, sound = "card" })
     if not flexCard then buildFlex() end
     flexQueue[#flexQueue + 1] = { guid = "demo", name = "Demo", card = L:Card("lava"), tier = 1, fid = "demo" }
     nextFlex()
