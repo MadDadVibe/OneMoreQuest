@@ -224,7 +224,7 @@ local function paint(f, c, state, num, rec, value)
     f.footL:SetText(day(rec.t)); f.footL:SetTextColor(.35, .27, .13)
     f.footR:SetText(rec.l and ("Level " .. rec.l) or "")
     f.footR:SetTextColor(.35, .27, .13)
-    f.extra:SetText(rec.g and rec.g ~= "" and ("With " .. rec.g) or ""); f.extra:SetTextColor(.24, .17, .09)
+    f.extra:SetText("") -- group (rec.g) stays stored, not shown: it covered the goal line
 end
 
 -- the tooltip of a card; hint: the last line (what a click does)
