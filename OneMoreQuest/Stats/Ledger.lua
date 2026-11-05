@@ -106,7 +106,7 @@ one(T0, "marathon", "Marathon", "Play 4 hours on one day", "INV_Drink_04", 3, fu
 end)
 tiers(T0, "spell", "Favourite Spell", "Cast one spell %s times", "INV_Misc_Book_11", { 1000, 5000, 10000, 25000 }, function(b)
     local best, id = 0, nil
-    for sid, n in pairs(b.spells or {}) do if n > best then best, id = n, sid end end
+    for sid, n in pairs(b.spells or {}) do if n > best and OMQ.Tally.OwnSpell(sid, b) then best, id = n, sid end end
     local name = id and C_Spell and call(C_Spell.GetSpellName, id)
     return best, ok(name) and name or nil
 end)

@@ -705,12 +705,68 @@ local function helpful(id)
     return nil
 end
 
+-- Own spells: the spell book (all ranks) or the use of an item. The game also casts hidden spells on the player
+-- (e.g. "Login Effect" at every login, "Opening" at chests); those stay in the counters but are no own spells.
+local function knownSpell(id)
+    local any = false
+    for _, fn in ipairs({ IsPlayerSpell, IsSpellKnown, C_SpellBook and C_SpellBook.IsSpellKnown }) do
+        if type(fn) == "function" then
+            any = true
+            local k = call(fn, id)
+            if ok(k) and k then return true end
+        end
+    end
+    if not any then return nil end           -- no API: cannot tell
+    return false
+end
+T.KnownSpell = knownSpell
+
+-- spell ids of the items in the bags, worn or on the action bars (item id per spell id); cached for a few seconds
+local itemSpellCache, itemSpellAt = nil, -100
+local function itemSpells()
+    local now = GetTime()
+    if itemSpellCache and now - itemSpellAt < 5 then return itemSpellCache end
+    local out, seen = {}, {}
+    local getSpell = (C_Item and C_Item.GetItemSpell) or GetItemSpell
+    local function add(itemID)
+        if not num(itemID) or seen[itemID] or not getSpell then return end
+        seen[itemID] = true
+        local _, sid = call(getSpell, itemID)
+        if num(sid) then out[sid] = itemID end
+    end
+    for slot = 1, 19 do add(call(GetInventoryItemID, "player", slot)) end
+    local numSlots = (C_Container and C_Container.GetContainerNumSlots) or GetContainerNumSlots
+    local itemAt = (C_Container and C_Container.GetContainerItemID) or GetContainerItemID
+    for bag = 0, 4 do
+        local n = numSlots and call(numSlots, bag) or 0
+        for slot = 1, (num(n) and n or 0) do add(itemAt and call(itemAt, bag, slot)) end
+    end
+    for slot = 1, 120 do
+        local kind, id = call(GetActionInfo, slot)
+        if kind == "item" then add(id) end
+    end
+    itemSpellCache, itemSpellAt = out, now
+    return out
+end
+T.ItemSpells = itemSpells
+
+-- true when the spell id is an own spell: known, or once cast from an item (b.spellItem) or an item carried now
+function T.OwnSpell(id, b)
+    if not num(id) then return false end
+    local k = knownSpell(id)
+    if k ~= false then return true end
+    if b and b.spellItem and b.spellItem[id] then return true end
+    return itemSpells()[id] ~= nil
+end
+
 local sentTarget = {}          -- castGUID -> target name (UNIT_SPELLCAST_SENT)
+local sentItem = {}            -- castGUID -> item id when the cast came from an item (seen before it is used up)
 local lastGather, lastGatherAt = nil, -100
 
-local function onSent(unit, target, castGUID)
+local function onSent(unit, target, castGUID, spellID)
     if unit ~= "player" or not str(castGUID) then return end
     sentTarget[castGUID] = str(target) and target or nil
+    if num(spellID) and knownSpell(spellID) == false then sentItem[castGUID] = itemSpells()[spellID] end
 end
 
 local function onCast(unit, castGUID, spellID)
@@ -722,6 +778,17 @@ local function onCast(unit, castGUID, spellID)
     b.spellLast = b.spellLast or {}          -- spell id -> time of the last cast
     b.spellLast[spellID] = time()
     note("spell")
+    if knownSpell(spellID) == false then
+        local item = (str(castGUID) and sentItem[castGUID]) or itemSpells()[spellID]
+        if item then
+            b.spellItem = b.spellItem or {}  -- spell id -> item id: casts from items count as own spells
+            b.spellItem[spellID] = item
+            note("spell.item")
+        else
+            note("spell.hidden")
+        end
+    end
+    if str(castGUID) then sentItem[castGUID] = nil end
     local kind = spellKind(spellID)
     if kind == "herb" or kind == "mine" or kind == "skin" then
         b.gather[kind] = b.gather[kind] + 1

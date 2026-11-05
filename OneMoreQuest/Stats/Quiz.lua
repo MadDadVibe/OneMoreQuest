@@ -332,7 +332,7 @@ end)
 local function spells(b, field)
     local out = {}
     for id, v in pairs(b[field] or {}) do
-        local nm = num(id) and spellName(id)
+        local nm = num(id) and OMQ.Tally.OwnSpell(id, b) and spellName(id)
         if nm then out[#out + 1] = { label = nm, icon = spellIcon(id), v = v, n = (b.spells or {})[id] or 0 } end
     end
     return out
