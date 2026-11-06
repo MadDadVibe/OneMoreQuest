@@ -61,8 +61,39 @@ local function store()
 end
 CH._store = store
 
+-- the rank number of a spell id ("Rank 3" / "Rang 3" -> 3), nil when the game does not tell it (yet)
+local function rankOf(id)
+    local sub = C_Spell and C_Spell.GetSpellSubtext and C_Spell.GetSpellSubtext(id)
+    return type(sub) == "string" and tonumber(sub:match("%d+")) or nil
+end
+CH.RankOf = rankOf
+
+-- true when new is a lower rank of the same spell than cur while cur is still known: a binding never
+-- steps down (decision 417). The spell book can be read half loaded (after a loading screen or right
+-- after training a rank its rank text is missing), then the highest rank seems to be an older one.
+function CH.Down(cur, new)
+    if not (cur and new) or cur == new or not knows(cur) then return false end
+    local a, b = spellName(cur), spellName(new)
+    if not (a and a == b) then return false end
+    local rc, rn = rankOf(cur), rankOf(new)
+    return not (rc and rn and rn > rc)
+end
+
+-- decision 417: a rank the last check saw as the highest stays the highest while it is still known,
+-- unless the book now shows a higher rank for sure. Changes now in place and returns it.
+function CH.Steady(now, old)
+    if not (now and old) then return now end
+    for name, oid in pairs(old) do
+        local t = now[name]
+        if knows(oid) and spellName(oid) == name and (not t or (t.id ~= oid and CH.Down(oid, t.id))) then
+            now[name] = { id = oid, rank = rankOf(oid) or (t and t.rank) or 0 }
+        end
+    end
+    return now
+end
+
 -- the spell for a button, nil when the class has none or nothing is learned yet
-function CH.Wanted(button)
+function CH.Wanted(button, tops)
     local _, class = UnitClass("player")
     local list = CH.HEALS[class] and CH.HEALS[class][button]
     if not list then return nil end
@@ -73,7 +104,7 @@ function CH.Wanted(button)
             if not (CB and CB.CanSpellBeClickBound) or CB.CanSpellBeClickBound(id) then best = id end
         end
     end
-    return best and CH.TopRank(best)
+    return best and CH.TopRank(best, tops)
 end
 
 -- the highest learned rank of every ranked spell in the spell book: { [name] = { id =, rank = } },
@@ -129,7 +160,7 @@ function CH.Follow(profile, old, now)
         if info.type == SPELL and info.actionID then
             local name = spellName(info.actionID)
             local t = name and now[name]
-            if t and old[name] == info.actionID and t.id ~= info.actionID then
+            if t and old[name] == info.actionID and t.id ~= info.actionID and not CH.Down(info.actionID, t.id) then
                 info.actionID = t.id; moved = moved + 1
             end
         end
@@ -169,7 +200,7 @@ function CH.Plan(profile, st, wantOf, on)
         if mine then
             if not want then
                 remove[idx] = true; st[button] = nil; changed = true
-            elseif want ~= mine then
+            elseif want ~= mine and not CH.Down(mine, want) then
                 notes[#notes + 1] = { button = button, spell = want, from = mine }
                 cur.actionID = want; st[button] = want; changed = true
             end
@@ -197,8 +228,8 @@ function CH.Update()
     local ok, profile = pcall(CB.GetProfileInfo)
     if not ok or type(profile) ~= "table" then return end
     local on = enabled()
-    local new, notes = CH.Plan(profile, st, CH.Wanted, on)
-    local now = on and CH.Tops() or nil
+    local now = on and CH.Steady(CH.Tops(), st.tops) or nil
+    local new, notes = CH.Plan(profile, st, function(b) return CH.Wanted(b, now) end, on)
     if now then
         local base = new
         if not base then
