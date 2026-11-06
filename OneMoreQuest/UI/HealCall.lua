@@ -18,7 +18,9 @@ OMQ = _G.OneMoreQuest
 local H = {}
 OMQ.HealCall = H
 
-H.ROWS = 4
+H.ROWS = 5              -- rows 1 to 4: party1 to party4, row 5: my own character (decision 425)
+H.SELF = 5
+function H.Unit(i) return i == H.SELF and "player" or ("party" .. i) end
 H.SAMPLE = 0.2          -- seconds between two looks at the low life flash
 H.REPEAT = 3            -- while low, the call is sent again this often
 H.EXPIRE = 8            -- a call without news for this long is over
@@ -89,7 +91,7 @@ end
 H.ApplyPosition = applyPosition
 
 function H.Macro(i, spell)
-    local unit = "party" .. i
+    local unit = H.Unit(i)
     return "/target " .. unit .. "\n/cast [@" .. unit .. "] " .. tostring(spell)
 end
 
@@ -113,7 +115,7 @@ end
 
 -- out of combat: every row under the frame of its dad, or in the stack
 local function place(i)
-    local b, f = buttons[i], H.PartyFrame("party" .. i)
+    local b, f = buttons[i], H.PartyFrame(H.Unit(i))
     b:ClearAllPoints()
     if f then
         b:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -2)
@@ -211,6 +213,7 @@ end
 H.SetAttributes = setAttributes
 
 local function isDad(i)
+    if i == H.SELF then return true end
     local g = UnitGUID and UnitGUID("party" .. i)
     if not g or isSecret(g) then return false end
     local u = OMQ.users and OMQ.users[g]
@@ -261,9 +264,10 @@ end
 function H.Arm()
     if not holder or locked() then return end
     setAttributes()
-    local active = H.Active() and OMQ:GetChannel() ~= nil
+    local active = H.Active()
+    local grouped = OMQ:GetChannel() ~= nil
     for i = 1, H.ROWS do
-        fight[i] = (active and (calls[i] or isDad(i))) and true or nil
+        fight[i] = (active and (calls[i] or (i == H.SELF) or (grouped and isDad(i)))) and true or nil
     end
     H.Render()
 end
@@ -298,7 +302,7 @@ function H.Receive(guid, name, on)
     local me = OMQ:GetSelf()
     if me and guid == me.guid then return end
     local row = OMQ:GroupPosition(guid)
-    if not row or row > H.ROWS then return end
+    if not row or row >= H.SELF then return end
     if not on then
         if calls[row] and calls[row].guid == guid then calls[row] = nil; H.Render() end
         return
@@ -323,9 +327,9 @@ end)
 function H.Expire()
     local changed = false
     for i, c in pairs(calls) do
-        local gone = now() - c.at > H.EXPIRE or OMQ:GroupPosition(c.guid) ~= i
+        local gone = now() - c.at > H.EXPIRE or (i ~= H.SELF and OMQ:GroupPosition(c.guid) ~= i)
         if not gone and UnitIsDeadOrGhost then
-            local ok, dead = pcall(UnitIsDeadOrGhost, "party" .. i)
+            local ok, dead = pcall(UnitIsDeadOrGhost, H.Unit(i))
             if ok and not isSecret(dead) and dead then gone = true end
         end
         if gone then calls[i] = nil; changed = true end
@@ -337,6 +341,21 @@ end
 -- Sending: my own low life flash
 ----------------------------------------------------------------------
 local low, lastSent = false, -100
+-- my own low life: the healer gets the card under his own frame as well (decision 425)
+function H.Own(shown, me)
+    local c = calls[H.SELF]
+    if shown and H.Active() then
+        if c then c.at = now(); return end
+        calls[H.SELF] = { guid = me.guid, name = me.name or "?", at = now(), since = now() }
+        if not locked() then setAttributes() end
+        H.Render()
+        H.PlaySound(me.guid)
+    elseif c and not shown and not c.test then
+        calls[H.SELF] = nil
+        H.Render()
+    end
+end
+
 function H.Sample()
     local f = _G.LowHealthFrame
     if not f then return end
@@ -351,6 +370,7 @@ function H.Sample()
     end
     local me = OMQ:GetSelf()
     if not me then return end
+    H.Own(shown, me)
     if shown then
         if not low or now() - lastSent >= H.REPEAT then
             if OMQ:Send("LW", me.guid, me.name, "1") then lastSent = now() end
@@ -421,7 +441,7 @@ OMQ:RegisterCommand("healcall", function(arg)
             OMQ:Print("heal call: only for healers (preferred role Healer or the healer role in the group) with a heal spell")
             return
         end
-        for i = 1, H.ROWS do
+        for i = 1, H.SELF - 1 do
             local g = UnitGUID and UnitGUID("party" .. i)
             if g and not isSecret(g) then
                 local n = UnitName and UnitName("party" .. i)
@@ -429,7 +449,12 @@ OMQ:RegisterCommand("healcall", function(arg)
                 return
             end
         end
-        OMQ:Print("heal call test: join a group first, the card belongs to a party member")
+        -- alone: the card under my own frame (a click heals and targets me)
+        local me = OMQ:GetSelf()
+        if me then
+            calls[H.SELF] = { guid = me.guid, name = me.name or "?", at = now(), since = now(), test = true }
+            setAttributes(); H.Render(); H.PlaySound(me.guid)
+        end
         return
     end
     OMQ:Print(string.format("heal call: %s, healer %s, spell %s, open calls %d",

@@ -176,7 +176,7 @@ local function allSections()
               end },
             -- decision 423: a dad at low life calls the healer, a click on the card heals him
             { type = "check", label = "Low life calls for healers",
-              tip = "When a dad's screen flashes red at low life, the healers of the group (preferred role Healer, or the healer role in the group) get a small red card LOW LIFE / HEAL under his party frame and a warning sound, also in a fight. Left click on the card targets him and casts your emergency heal. In a fight the empty card places under the party frames take no clicks.",
+              tip = "When a dad's screen flashes red at low life, the healers of the group (preferred role Healer, or the healer role in the group) get a small red card LOW LIFE / HEAL under his party frame and a warning sound, also in a fight; at your own low life the card shows under your own frame. Left click on the card targets him and casts your emergency heal. In a fight the empty card places under the party frames take no clicks.",
               get = function() return OMQ.db.options.healCall ~= false end,
               set = function(v) OMQ.db.options.healCall = v and true or false end },
             -- decision 250: an invisible unit button over the personal resource display
