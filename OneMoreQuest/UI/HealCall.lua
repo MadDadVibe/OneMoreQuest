@@ -1,12 +1,13 @@
 -- One More Quest: low life call to the healer (decision 423)
 -- A dad whose screen shows the game's low life flash (LowHealthFrame) tells the group ("LW" message: guid,
 -- name, 1 = low, 0 = over; repeated every few seconds while it lasts). A dad marked as healer (preferred role
--- Healer in the options, or the healer role in the group) gets a red card "Low Life warning <Name> - Left
--- click for emergency heal" and a warning sound, also in a fight. A left click targets that dad and casts the
--- emergency heal of the Shift-click heals (ClickHeals.lua, the Shift + left click spell) on him.
+-- Healer in the options, or the healer role in the group) gets a small red card "LOW LIFE / HEAL" right under
+-- the dad's party frame (decision 424, the raid-style party frames of the Dad UI) and a warning sound, also in a
+-- fight. A left click targets that dad and casts the emergency heal of the Shift-click heals (ClickHeals.lua, the
+-- Shift + left click spell) on him. The tooltip names the dad.
 -- Combat: a button that casts a spell must be a secure button, and the game forbids an addon to show, hide,
 -- move or change a secure button while the combat lockdown is on. So every party place (party1 to party4)
--- has its own secure button in a fixed row (row N = partyN), holding "/target partyN" and the heal. At the
+-- has its own secure button (row N = partyN) under the party frame of that unit, holding "/target partyN" and the heal. At the
 -- start of a fight (PLAYER_REGEN_DISABLED, before the lockdown) the rows of the dads in the group are shown,
 -- fully transparent. What the healer sees is a plain frame (the card), which may come and go in combat. Over
 -- every row without a call lies a plain "shield" frame that takes the clicks, so a click there never heals
@@ -24,8 +25,6 @@ H.EXPIRE = 8            -- a call without news for this long is over
 H.SOUND_GAP = 2         -- the warning sound plays at most this often per dad
 H.SOUND = { kit = "RAID_WARNING", id = 8959 }
 local RED = { 0.95, 0.25, 0.22 }
-local GAP = 6
-local SCALE = 1.2
 
 local calls = {}        -- row -> { guid, name, at (last news), since }
 local buttons, skins, shields = {}, {}, {}
@@ -70,10 +69,12 @@ function H.Active() return enabled() and H.IsHealer() and H.Spell() ~= nil end
 ----------------------------------------------------------------------
 -- Frames
 ----------------------------------------------------------------------
-local CARD_W = (OMQ.Alerts and OMQ.Alerts.CARD_W) or 330
-local CARD_H = (OMQ.Alerts and OMQ.Alerts.CARD_H) or 50
+-- a small card right under the party frame of the dad (the raid-style party frames of the Dad UI,
+-- CompactPartyFrameMemberN with its unit); without such a frame the rows stack at a place of their own
+H.W, H.H = 144, 30
+local GAP = 3
 
-local function rowY(i) return -((i - 1) * (CARD_H + GAP)) end
+local function rowY(i) return -((i - 1) * (H.H + GAP)) end
 
 local function savePosition()
     local p, _, rp, x, y = holder:GetPoint()
@@ -81,7 +82,6 @@ local function savePosition()
 end
 local function applyPosition()
     if locked() then return end
-    -- default: right of the party frames on the left side of the screen (row N next to party member N)
     local p = (OMQ.db and OMQ.db.healCallPoint) or { "TOPLEFT", "TOPLEFT", 190, -200 }
     holder:ClearAllPoints()
     holder:SetPoint(p[1], UIParent, p[2], p[3], p[4])
@@ -93,19 +93,70 @@ function H.Macro(i, spell)
     return "/target " .. unit .. "\n/cast [@" .. unit .. "] " .. tostring(spell)
 end
 
+-- the party frame that shows this unit right now, nil when there is none
+function H.PartyFrame(unit)
+    local list = {}
+    local cpf = _G.CompactPartyFrame
+    if cpf and type(rawget(cpf, "memberUnitFrames")) == "table" then
+        for _, f in ipairs(cpf.memberUnitFrames) do list[#list + 1] = f end
+    end
+    for n = 1, 5 do
+        local f = _G["CompactPartyFrameMember" .. n]
+        if f then list[#list + 1] = f end
+    end
+    for _, f in ipairs(list) do
+        local u = rawget(f, "unit") or rawget(f, "displayedUnit")
+        if u == unit and f.IsShown and f:IsShown() then return f end
+    end
+    return nil
+end
+
+-- out of combat: every row under the frame of its dad, or in the stack
+local function place(i)
+    local b, f = buttons[i], H.PartyFrame("party" .. i)
+    b:ClearAllPoints()
+    if f then
+        b:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -2)
+        b:SetPoint("TOPRIGHT", f, "BOTTOMRIGHT", 0, -2)
+        b:SetHeight(H.H)
+        b.under = f
+    else
+        b:SetSize(H.W, H.H)
+        b:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, rowY(i))
+        b.under = nil
+    end
+end
+
+local function makeCard(b)
+    local s = CreateFrame("Frame", nil, UIParent)
+    s:SetFrameStrata("HIGH")
+    s:SetAllPoints(b)
+    s.bg = s:CreateTexture(nil, "BACKGROUND")
+    s.bg:SetAllPoints()
+    s.bg:SetColorTexture(0.32, 0.03, 0.03, 0.92)
+    s.edge = s:CreateTexture(nil, "BORDER")
+    s.edge:SetPoint("TOPLEFT", -1, 1); s.edge:SetPoint("BOTTOMRIGHT", 1, -1)
+    s.edge:SetColorTexture(RED[1], RED[2], RED[3], 1)
+    s.top = s:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    s.top:SetPoint("TOP", s, "TOP", 0, -3)
+    s.top:SetTextColor(1, 0.3, 0.25)
+    s.low = s:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    s.low:SetPoint("BOTTOM", s, "BOTTOM", 0, 3)
+    if s.EnableMouse then s:EnableMouse(false) end
+    s:Hide()
+    return s
+end
+
 local function build()
     if holder then return end
     holder = CreateFrame("Frame", "OneMoreQuestHealCall", UIParent)
-    holder:SetSize(CARD_W, H.ROWS * (CARD_H + GAP))
+    holder:SetSize(H.W, H.ROWS * (H.H + GAP))
     holder:SetFrameStrata("HIGH")
-    holder:SetScale(SCALE)
     holder:SetMovable(true)
     holder:SetClampedToScreen(true)
     applyPosition()
     for i = 1, H.ROWS do
         local b = CreateFrame("Button", "OneMoreQuestHealCall" .. i, holder, "SecureActionButtonTemplate")
-        b:SetSize(CARD_W, CARD_H)
-        b:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, rowY(i))
         -- the secure template fires on mouse down or up depending on the game setting (ActionButtonUseKeyDown)
         b:RegisterForClicks("AnyUp", "AnyDown")
         b:SetAttribute("type1", "macro")
@@ -117,45 +168,30 @@ local function build()
         b:SetScript("OnEnter", function(self)
             local c = calls[self.row]
             if not (c and GameTooltip) then return end
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
             GameTooltip:SetText("Low Life warning " .. tostring(c.name))
             GameTooltip:AddLine("Left click: target him and cast " .. tostring(H.Spell() or "your emergency heal") .. ".", 0.8, 0.8, 0.8, true)
             GameTooltip:AddLine("Right click: close the card.", 0.8, 0.8, 0.8, true)
             GameTooltip:Show()
         end)
         b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-        b:Hide()
         buttons[i] = b
+        place(i)
+        b:Hide()
         -- the card the healer sees: a plain frame over the button, free to come and go in combat
-        local s
-        if OMQ.Alerts and OMQ.Alerts.MakeSkin then
-            s = OMQ.Alerts.MakeSkin(UIParent)
-        else
-            s = CreateFrame("Frame", nil, UIParent)
-        end
-        s:SetFrameStrata("HIGH")
-        s:SetScale(SCALE)
-        s:ClearAllPoints()
-        s:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
-        if s.EnableMouse then s:EnableMouse(false) end
-        s:Hide()
-        skins[i] = s
+        skins[i] = makeCard(b)
         -- the shield: takes the clicks of a row without a call while its secure button waits for the fight
         local sh = CreateFrame("Frame", nil, UIParent)
         sh:SetFrameStrata("DIALOG")
-        sh:SetScale(SCALE)
-        sh:SetSize(CARD_W, CARD_H)
-        sh:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+        sh:SetAllPoints(b)
         sh:EnableMouse(true)
         sh:Hide()
         shields[i] = sh
     end
-    -- move mode: a plain frame over all rows drags the holder (out of combat)
+    -- move mode (only for the stack without party frames): a plain frame over all rows drags the holder
     mover = CreateFrame("Frame", nil, UIParent)
     mover:SetFrameStrata("DIALOG")
-    mover:SetScale(SCALE)
-    mover:SetSize(CARD_W, H.ROWS * (CARD_H + GAP))
-    mover:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, 0)
+    mover:SetAllPoints(holder)
     mover:EnableMouse(true)
     mover:RegisterForDrag("LeftButton")
     mover:SetScript("OnDragStart", function() if not locked() then holder:StartMoving() end end)
@@ -184,41 +220,41 @@ end
 ----------------------------------------------------------------------
 -- Showing
 ----------------------------------------------------------------------
-local function fillSkin(i, c)
+local function fillCard(i, c)
     local s = skins[i]
-    local _, id = H.Spell()
-    local icon = id and C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(id)
-    local data = { title = "Low Life warning " .. tostring(c and c.name or ("Dad " .. i)),
-                   sub = armed[i] and "Left click for emergency heal" or "Shift + left click his party frame to heal",
-                   tag = "LOW LIFE", color = RED,
-                   icon = icon or "Interface\\Icons\\Spell_Holy_FlashHeal" }
-    if OMQ.Alerts and OMQ.Alerts.FillSkin and s.tag then OMQ.Alerts.FillSkin(s, data) end
-    s.callTitle, s.callSub = data.title, data.sub
+    -- clickable: LOW LIFE / HEAL; a row that is not ready in this fight points to the Shift-click heal
+    local top, low = "LOW LIFE", (armed[i] or moveMode) and "HEAL" or "SHIFT-CLICK"
+    s.top:SetText(top)
+    s.low:SetText(low)
+    s.callTitle, s.callSub = top, low
 end
 
 -- brings every frame in line with the calls; secure parts only when allowed
 function H.Render()
     if not holder then return end
     local lock = locked()
+    local stacked = false
     for i = 1, H.ROWS do
         local c = calls[i]
         local want = moveMode or (c ~= nil)
         if not lock then
+            place(i)
+            if not buttons[i].under then stacked = true end
             -- out of combat: a secure button only where a call is (or in the move mode)
             if (want and not moveMode) or (fight[i] and not moveMode) then buttons[i]:Show(); armed[i] = true
             else buttons[i]:Hide(); armed[i] = nil end
         end
         if want then
-            fillSkin(i, c)
+            fillCard(i, c)
             skins[i]:Show()
-            skins[i]:SetAlpha(armed[i] and 1 or (moveMode and 1 or 0.75))
+            skins[i]:SetAlpha((armed[i] or moveMode) and 1 or 0.75)
         else
             skins[i]:Hide()
         end
         -- a shown secure button without a call (armed for the fight) gets the shield
         if armed[i] and not c then shields[i]:Show() else shields[i]:Hide() end
     end
-    if mover then if moveMode and not lock then mover:Show() else mover:Hide() end end
+    if mover then if moveMode and stacked and not lock then mover:Show() else mover:Hide() end end
 end
 
 -- the fight starts (before the lockdown): the rows of the dads in the group are shown, transparent and shielded
@@ -338,7 +374,11 @@ ev:SetScript("OnEvent", function(_, event)
     local ok, err = pcall(function()
         if event == "PLAYER_REGEN_DISABLED" then H.Arm()
         elseif event == "PLAYER_REGEN_ENABLED" then setup(); setAttributes(); H.Disarm()
-        elseif not locked() then setAttributes(); H.Render() end
+        elseif not locked() then
+            setAttributes(); H.Render()
+            -- the party frames take their new units a moment later
+            C_Timer.After(0.5, function() if not locked() then pcall(H.Render) end end)
+        end
     end)
     if not ok then OMQ:Error("healcall " .. event, err) end
 end)
