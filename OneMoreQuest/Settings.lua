@@ -174,6 +174,11 @@ local function allSections()
                   OMQ.db.options.clickHeals = v and true or false
                   if OMQ.ClickHeals then OMQ.ClickHeals.Soon() end
               end },
+            -- decision 423: a dad at low life calls the healer, a click on the card heals him
+            { type = "check", label = "Low life calls for healers",
+              tip = "When a dad's screen flashes red at low life, the healers of the group (preferred role Healer, or the healer role in the group) get a red card with a warning sound, also in a fight. Left click on the card targets him and casts your emergency heal. In a fight the empty card places next to the party frames take no clicks. Place the cards in the move mode.",
+              get = function() return OMQ.db.options.healCall ~= false end,
+              set = function(v) OMQ.db.options.healCall = v and true or false end },
             -- decision 250: an invisible unit button over the personal resource display
             { type = "check", indent = true, label = "Click casting on your resource display",
               tip = "Shift-click heals (and every click casting binding) also work on the health and mana bars under your character - also solo. Shows only when the resource display shows.",

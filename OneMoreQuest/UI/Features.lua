@@ -63,6 +63,7 @@ FE.SECTIONS = {
     } },
     { "Healing and click casting", {
         "Shift-click heals for healers on the party frames",
+        "Low life call: a dad at low life shows healers a red card with a warning sound, a click targets him and casts the emergency heal",
         "Click casting on your own resource display, also when solo",
     } },
     { "Comfort", {
