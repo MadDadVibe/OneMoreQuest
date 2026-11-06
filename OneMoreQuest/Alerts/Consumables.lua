@@ -128,7 +128,9 @@ function C.Check()
                 seen[id] = true
                 local name, _, _, _, minLevel, _, _, _, _, icon = info(id)
                 local s = (kind == "stone" or kind == "oil") and "weapon" or (kind == "food" and "food") or spellOf(id)
-                if name and (minLevel or 0) <= level and s and not spells[s] and C.Active(id, kind, auras) == false then
+                local fits = kind ~= "stone" or not OMQ.AuctionBuy or not OMQ.AuctionBuy.StoneFits
+                    or OMQ.AuctionBuy.StoneFits(id) ~= false                      -- weightstone not on a blade (decision 426)
+                if name and fits and (minLevel or 0) <= level and s and not spells[s] and C.Active(id, kind, auras) == false then
                     spells[s] = true
                     local how = (kind == "stone" or kind == "oil") and "left click, then click your weapon" or "left click uses it"
                     out[#out + 1] = {
@@ -174,6 +176,8 @@ function C.Explain()
                 if not C.KINDS[kind] then why = "not reminded (" .. kind .. ")"
                 elseif not name then why = "item data not loaded yet"
                 elseif (minLevel or 0) > level then why = "needs level " .. minLevel
+                elseif kind == "stone" and OMQ.AuctionBuy and OMQ.AuctionBuy.StoneFits
+                    and OMQ.AuctionBuy.StoneFits(id) == false then why = "does not fit your weapon (blade: sharpening stone, blunt: weightstone)"
                 elseif not s then why = "its buff spell is not known yet"
                 else
                     local a = C.Active(id, kind, auras)

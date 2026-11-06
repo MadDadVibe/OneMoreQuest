@@ -143,14 +143,27 @@ end
 -- blade or blunt: which stone the main hand weapon takes
 local BLADE = { [0] = true, [1] = true, [6] = true, [7] = true, [8] = true, [15] = true }
 local BLUNT = { [4] = true, [5] = true, [10] = true, [13] = true }
-function B.StoneLine()
-    local link = GetInventoryItemLink and GetInventoryItemLink("player", 16)
+function B.StoneLine(slot)
+    local link = GetInventoryItemLink and GetInventoryItemLink("player", slot or 16)
     if not link or isSecret(link) then return nil end
     local _, _, _, _, _, classID, subID = instant(link)
     if classID ~= 2 then return nil end
     if BLADE[subID] then return "stone_sharp" end
     if BLUNT[subID] then return "stone_weight" end
     return nil
+end
+-- does this weapon stone fit a weapon in my hands? A sharpening stone takes a blade, a weightstone a
+-- blunt weapon (decision 426). true, false, or nil when it is no stone of a line or no weapon can be read
+function B.StoneFits(id)
+    local line
+    for _, key in ipairs({ "stone_sharp", "stone_weight" }) do
+        local l = OMQ.BuyLines and OMQ.BuyLines[key]
+        for _, e in ipairs(l and l[2] or {}) do if e[1] == id then line = key end end
+    end
+    if not line then return nil end
+    local main, off = B.StoneLine(16), B.StoneLine(17)
+    if not main and not off then return nil end
+    return main == line or off == line
 end
 
 local function enchanted(slot)
