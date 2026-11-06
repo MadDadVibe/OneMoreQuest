@@ -2,6 +2,8 @@
 -- Boss loot replaces the AtlasLoot classic lists for these dungeons (WoW Forever changed their loot and
 -- added four new dungeons); trash drops and items without a known ID are left out. Quest starts only fill gaps of
 -- Data/DungeonGuide.lua. kind "inside" = the quest giver stands inside the dungeon (no arrow).
+-- v1.3.26: quest starts of the new dungeons follow Wowhead "Every dungeon quest location" of 2026-11-05 (new prerequisite
+-- chains on live servers); coordinates of classic quest givers from QuestieDB.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 OMQ.DungeonLoot = OMQ.DungeonLoot or {}
@@ -26,8 +28,8 @@ S[96393] = { 96391, "Underground Map", "Dark Iron Spies", nil, 1426, 77.0, 60.0,
 S[98423] = { 98423, "The Treaty of Understanding", "Stone Tablet", nil, 0, 0.0, 0.0, "inside" }
 S[96395] = { 96395, "An Ancient Grudge", "Ghostly Attendant", nil, 0, 0.0, 0.0, "inside" }
 S[92401] = { 92401, "A Frightened Request", "Tabitha Heartweaver", nil, 1421, 44.5, 43.0, "npc" }
-S[92422] = { 92422, "The Wrath of Rath'mael", "Deathguard Kristof", nil, 1420, 65.2, 60.2, "npc" }
-S[95216] = { 95216, "The New Plague", "Theodore Griffs", nil, 1458, 46.5, 71.6, "npc" }
+S[92422] = { 356, "Rear Guard Patrol", "Deathguard Linnea", nil, 1420, 65.5, 60.3, "npc" }
+S[95216] = { 447, "A Recipe For Death", "Apothecary Renferrel", nil, 1421, 42.8, 40.9, "npc" }
 S[92421] = { 92421, "Light's Justice", "Morbin Lightbane", nil, 1458, 57.9, 89.5, "npc" }
 S[97288] = { 97288, "Unending Torment", "", nil, 0, 0.0, 0.0, "item" }
 S[95250] = { 95250, "Abominable Creatures", "Captain Truman", nil, 0, 0.0, 0.0, "inside" }
@@ -37,12 +39,16 @@ S[95189] = { 95189, "Crest of Lordaeron", "", nil, 0, 0.0, 0.0, "item" }
 S[95204] = { 95204, "Crest of Lordaeron", "", nil, 0, 0.0, 0.0, "item" }
 S[92753] = { 92742, "Testing the Wells", "Alba Fairmoon", nil, 1436, 53.0, 53.3, "npc" }
 S[6562] = { 6562, "Trouble in the Deeps", "Tsunaman", nil, 1442, 47.2, 64.2, "npc" }
-S[98815] = { 484, "Young Crocolisk Skins", "James Halloran", nil, 1437, 8.0, 55.0, "npc" }
+S[98815] = { 469, "Daily Delivery", "Einar Stonegrip", nil, 1437, 49.9, 39.4, "npc" }
 S[95772] = { 95772, "Songblade Search", "Dorin Songblade", nil, 1433, 25.6, 46.6, "npc" }
-S[95646] = { 463, "The Greenwarden", "First Mate Fitzsimmons", nil, 1437, 10.8, 59.6, "npc" }
-S[95809] = { 95647, "Lost in the Thicket Things", "Caitlin Grassman", nil, 1437, 11.9, 58.8, "npc" }
+S[95646] = { 95646, "Horrors in the Highland", "Rethiel the Greenwarden", nil, 1437, 56.4, 40.4, "npc" }
+S[95647] = { 95737, "Seeking Caitlin", "Llana", nil, 1440, 35.0, 48.5, "npc" }
+S[95809] = { 95737, "Seeking Caitlin", "Llana", nil, 1440, 35.0, 48.5, "npc" }
+S[95810] = { 95810, "Lost Relic Carry", "Titan Relic", nil, 0, 0.0, 0.0, "item" }
+S[98824] = { 95810, "Lost Relic Carry", "Titan Relic", nil, 0, 0.0, 0.0, "item" }
+S[95664] = { 95664, "Elder Knowledge", "Titan Relic", nil, 0, 0.0, 0.0, "item" }
 S[95697] = { 95697, "Changing Tastes", "Borstan", nil, 1454, 57.2, 53.3, "npc" }
-S[98823] = { 98823, "Earthen Echo", "Bashana Runetotem", nil, 1456, 70.8, 33.4, "npc" }
+S[98823] = { 95664, "Elder Knowledge", "Titan Relic", nil, 0, 0.0, 0.0, "item" }
 S[95682] = { 95663, "Dragonmaw Rumors", "Zaruk", nil, 1417, 74.0, 36.0, "npc" }
 S[95795] = { 95795, "Fallen in the Fen", "Daewyn Songblade", nil, 0, 0.0, 0.0, "inside" }
 S[2948] = { 2948, "Gnome Improvement", "Talvash del Kissel", nil, 1455, 35.7, 4.0, "npc" }

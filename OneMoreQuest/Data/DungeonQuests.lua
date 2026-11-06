@@ -25,11 +25,11 @@ OMQ.Dungeons = {
         { id = 5724, name = "Returning the Lost Satchel", level = 9, faction = "H" },  -- WoW Forever (decision 255)
     } },
     { key = "hot", abbr = "HoT", name = "Hall of Thanes", min = 11, max = 19, quests = {
-        { id = 96403, name = "Important Heirlooms", level = 14, faction = "A" },
-        { id = 96394, name = "The Restless Dead", level = 15, faction = "A" },
-        { id = 96393, name = "Old Ironforge Incursion", level = 15, faction = "A" },
-        { id = 98423, name = "The Treaty of Understanding", level = 16, faction = "A" },
-        { id = 96395, name = "An Ancient Grudge", level = 14, faction = "A" },
+        { id = 96403, name = "Important Heirlooms", level = 10, faction = "A" },
+        { id = 96394, name = "The Restless Dead", level = 10, faction = "A" },
+        { id = 96393, name = "Old Ironforge Incursion", level = 9, faction = "A" },
+        { id = 98423, name = "The Treaty of Understanding", level = 9, faction = "A" },
+        { id = 96395, name = "An Ancient Grudge", level = 10, faction = "A" },
     } },
     { key = "wc", abbr = "WC", name = "Wailing Caverns", min = 15, max = 24, quests = {
         { id = 962, name = "Serpentbloom", level = 14, faction = "H" },
@@ -45,12 +45,12 @@ OMQ.Dungeons = {
         { id = 92422, name = "The Wrath of Rath'mael", level = 15, faction = "H" },
         { id = 95216, name = "The New Plague", level = 16, faction = "H" },
         { id = 92421, name = "Light's Justice", level = 15, faction = "H" },
-        { id = 97288, name = "Unending Torment", level = 15, faction = "H" },
+        { id = 97288, name = "Unending Torment", level = 16, faction = "H" },
         { id = 95250, name = "Abominable Creatures", level = 16, faction = "A" },
         { id = 95195, name = "Bloodied Insignia", level = 16, faction = "A" },
         { id = 92415, name = "Remember That I Love You", level = 15, faction = "A" },
-        { id = 95189, name = "Crest of Lordaeron", level = 16, faction = "A" },  -- WoW Forever (decision 255)
-        { id = 95204, name = "Crest of Lordaeron", level = 16, faction = "H" },  -- WoW Forever (decision 255)
+        { id = 95189, name = "Crest of Lordaeron", level = 14, faction = "A" },  -- WoW Forever (decision 255)
+        { id = 95204, name = "Crest of Lordaeron", level = 14, faction = "H" },  -- WoW Forever (decision 255)
     } },
     { key = "dm", abbr = "DM", name = "The Deadmines", min = 14, max = 24, quests = {
         { id = 168, name = "Collecting Memories", level = 14, faction = "A" },
