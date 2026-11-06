@@ -173,6 +173,15 @@ function Q:BuyWater()
         end
     end
     if not best then return end
+    -- only the water of my own level tier: at 15 Melon Juice, never Ice Cold Milk, even when the
+    -- merchant has nothing better (decision 418)
+    local my = UnitLevel("player") or 1
+    local tier = 1
+    for _, id in ipairs(WATER) do
+        local lvl = DRINK_LEVEL[id]
+        if lvl <= my and lvl > tier then tier = lvl end
+    end
+    if (DRINK_LEVEL[best.id] or 1) < tier then return end
     -- a better drink I already carry counts too: no weaker water on top of 20 melon juice (decision 406)
     local have = drinksAtLeast(DRINK_LEVEL[best.id] or 1)
     if not have then have = itemCount(best.id) end
