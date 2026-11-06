@@ -18,6 +18,9 @@ local TOAST_HOLD, INTRO_HOLD, FLEX_HOLD, COUNTER_HOLD = 4, 8, 8, 5
 local REST = 300
 local RESULT_AFTER = FLEX_HOLD + 3   -- seconds until the one who showed a card hears how it went
 local MAX_TOASTS = 6
+-- a new card first shows large in the middle of the screen and then glides to its place next to the icon
+local CARD_HOLD = 5                      -- seconds at its place (hover pauses them)
+local GROW_SCALE, GROW_IN, GROW_STAY, GROW_MOVE = 2.5, 0.25, 1.0, 0.8
 
 local QCOLOR = { [0] = { .62, .62, .62 }, { 1, 1, 1 }, { .12, 1, 0 }, { 0, .44, .87 }, { .64, .21, .93 }, { 1, .5, 0 } }
 local QNAME = { "Common", "Uncommon", "Rare", "Epic", "Legendary" }
@@ -367,10 +370,59 @@ local function buildToast()
     toast.line:SetPoint("TOPLEFT", toast.title, "BOTTOMLEFT", 0, -2); toast.line:SetWidth(190)
     toast.line:SetJustifyH("LEFT")
     toast.card = false
-    toast:SetScript("OnEnter", function(self) if self.card then tooltip(self, self.card) end end)
-    toast:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    -- the mouse over a toast holds its time
+    toast:SetScript("OnEnter", function(self)
+        self.hover = true; self.hoverAt = GetTime()
+        if self.card then tooltip(self, self.card) end
+    end)
+    toast:SetScript("OnLeave", function(self)
+        local item = U.toastShown
+        if self.hover and item and item.deadline then item.deadline = item.deadline + (GetTime() - (self.hoverAt or GetTime())) end
+        self.hover = false
+        if GameTooltip then GameTooltip:Hide() end
+    end)
     toast:Hide()
 end
+
+-- the toast's place next to the icon and the middle of the screen, in UIParent units (nil when unknown)
+local function homeAndMiddle(f)
+    local a = anchor()
+    local l = a.GetLeft and a:GetLeft()
+    local _, ay = a:GetCenter()
+    local es, ues = a:GetEffectiveScale(), UIParent:GetEffectiveScale()
+    local uw, uh = UIParent:GetWidth(), UIParent:GetHeight()
+    if type(l) ~= "number" or type(ay) ~= "number" or type(es) ~= "number" or type(ues) ~= "number"
+        or type(uw) ~= "number" or type(uh) ~= "number" or ues <= 0 then return end
+    local k = es / ues
+    return l * k - 8 - (f.w or 200) / 2, ay * k, uw / 2, uh / 2
+end
+
+-- large in the middle (fades in), a moment there, then it glides and shrinks to its place
+local function grow(f, done)
+    local hx, hy, cx, cy = homeAndMiddle(f)
+    if not hx then if done then done() end; return end
+    local S, total = GROW_SCALE, GROW_IN + GROW_STAY + GROW_MOVE
+    local function place(x, y, s)
+        f:SetScale(s); f:ClearAllPoints(); f:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x / s, y / s)
+    end
+    f.growing = true
+    animate(f, total, function(p)
+        local t = p * total
+        if t < GROW_IN + GROW_STAY then
+            local q = math.min(1, t / GROW_IN)
+            place(cx, cy, S * (0.85 + 0.15 * q)); f:SetAlpha(q)
+        else
+            local q = math.min(1, (t - GROW_IN - GROW_STAY) / GROW_MOVE)
+            local e = 1 - (1 - q) ^ 3
+            place(cx + (hx - cx) * e, cy + (hy - cy) * e, S + (1 - S) * e); f:SetAlpha(1)
+        end
+    end, function()
+        f.growing = false
+        f:SetScale(1); f:SetAlpha(1); f:ClearAllPoints(); f:SetPoint("RIGHT", anchor(), "LEFT", -8, 0)
+        if done then done() end
+    end)
+end
+U._Grow = grow
 
 local nextToast
 local function showToast(item)
@@ -388,15 +440,24 @@ local function showToast(item)
     toast.title:SetTextColor(r, g, b)
     toast.line:SetText(item.line or L:Goal(item.card, item.tier))
     toast:SetScale(1); toast:SetAlpha(1)
+    toast.hover = false
     toast:ClearAllPoints()
     toast:SetPoint("RIGHT", anchor(), "LEFT", -8, 0)
     toast:Show()
     if item.sound then U:Sound(item.sound) end
-    local hold = item.hold or TOAST_HOLD
+    local hold = item.hold or (item.big and CARD_HOLD) or TOAST_HOLD
+    -- a new card comes large from the middle of the screen (not in a fight: there it just appears)
+    item.grown = false
+    if item.big and not item.ended and not (InCombatLockdown and InCombatLockdown()) then
+        item.grown = true
+        hold = hold + GROW_IN + GROW_STAY + GROW_MOVE
+        grow(toast)
+    end
     if item.ended then hold = 0 end
     item.close = function()
         if item.closing or U.toastShown ~= item then return end
         item.closing = true
+        toast.growing = false
         fly(toast, false, 0.4, function()
             toast:Hide(); toast:SetScale(1); toast:SetAlpha(1)
             glowIcon()
@@ -405,7 +466,15 @@ local function showToast(item)
             nextToast()
         end)
     end
-    C_Timer.After(hold, item.close)
+    -- the time runs out only while the mouse is not over the toast
+    item.deadline = GetTime() + hold
+    local function due()
+        if item.closing or U.toastShown ~= item then return end
+        if toast.hover then C_Timer.After(0.25, due); return end
+        local left = item.deadline - GetTime()
+        if left > 0.05 then C_Timer.After(left, due) else item.close() end
+    end
+    C_Timer.After(hold, due)
     if item.tick then
         local function again()
             if U.toastShown ~= item then return end
@@ -446,7 +515,7 @@ OMQ:On("LEDGER_NEW", function(fresh, tabs, first)
     for _, n in ipairs(fresh or {}) do
         shown = shown + 1
         if shown > MAX_TOASTS then break end
-        U:Toast({ card = n.card, tier = n.tier, sound = "card" })
+        U:Toast({ card = n.card, tier = n.tier, sound = "card", big = true })
     end
     if #(fresh or {}) > MAX_TOASTS then
         U:Toast({ head = "Forever Journey", title = "+" .. (#fresh - MAX_TOASTS) .. " more cards",
@@ -885,7 +954,7 @@ U._Paint, U._NewCard = paint, newCard
 ----------------------------------------------------------------------
 local function demo()
     local c = L:Card("dragon")
-    U:Toast({ card = c, tier = 3, sound = "card" })
+    U:Toast({ card = c, tier = 3, sound = "card", big = true })
     if not flexCard then buildFlex() end
     flexQueue[#flexQueue + 1] = { guid = "demo", name = "Demo", card = L:Card("lava"), tier = 1, fid = "demo" }
     nextFlex()
