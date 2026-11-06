@@ -58,6 +58,13 @@ local function itemIcon(id)
     if not ok(t) and GetItemIcon then t = call(GetItemIcon, id) end
     return ok(t) and t or nil
 end
+-- what the window shows as tooltip on hover: the item (with its random suffix) or the spell
+local function itemTip(id, sfx)
+    if not num(id) then return nil end
+    return num(sfx) and sfx ~= 0 and ("item:" .. id .. ":0:0:0:0:0:" .. sfx) or ("item:" .. id)
+end
+local function spellTip(id) return num(id) and ("spell:" .. id) or nil end
+Q.ItemTip, Q.SpellTip = itemTip, spellTip
 local function plural(n, one, many) return n .. " " .. (n == 1 and one or many) end
 local function money(c)
     c = math.floor(c or 0)
@@ -115,7 +122,7 @@ local function gear(b, filter)
     local out = {}
     for _, e in pairs(b.gear or {}) do
         if str(e.nm) and (e.q or 0) >= 1 and (not filter or filter(e)) then
-            out[#out + 1] = { label = e.nm, icon = itemIcon(e.id), e = e, t = e.t, wd = e.wd, wl = e.wl }
+            out[#out + 1] = { label = e.nm, icon = itemIcon(e.id), tip = itemTip(e.id, e.sfx), e = e, t = e.t, wd = e.wd, wl = e.wl }
         end
     end
     return out
@@ -192,14 +199,14 @@ local function numberQ(kind, text, v, fmt, reveal, extra)
     local opts = {}
     for i, x in ipairs(list) do opts[i] = { label = fmt and fmt(x) or tostring(x) } end
     return { kind = kind, text = text, options = opts, right = right, reveal = reveal, model = extra and extra.model,
-             icon = extra and extra.icon, numbers = true }
+             icon = extra and extra.icon, tip = extra and extra.tip, numbers = true }
 end
 -- a question over picked options: `sub(o)` is what each option shows after the answer
 local function bestQ(kind, text, pool, key, low, sub, reveal, n)
     local opts, right = pickBest(pool, key, low, n)
     if not opts then return nil end
     local out = {}
-    for i, o in ipairs(opts) do out[i] = { label = o.label, model = o.model, icon = o.icon, sub = sub and sub(o) or nil } end
+    for i, o in ipairs(opts) do out[i] = { label = o.label, model = o.model, icon = o.icon, tip = o.tip, sub = sub and sub(o) or nil } end
     return { kind = kind, text = text, options = out, right = right, reveal = reveal and reveal(opts[right]) or nil }
 end
 -- one right label and up to three others from a list of labels
@@ -213,7 +220,8 @@ local function labelQ(kind, text, right, others, reveal, extra)
     shuffle(list)
     local opts, idx = {}, nil
     for i, l in ipairs(list) do opts[i] = { label = l }; if l == right then idx = i end end
-    return { kind = kind, text = text, options = opts, right = idx, reveal = reveal, model = extra and extra.model, icon = extra and extra.icon }
+    return { kind = kind, text = text, options = opts, right = idx, reveal = reveal, model = extra and extra.model, icon = extra and extra.icon,
+             tip = extra and extra.tip }
 end
 local function ago(t)
     if not num(t) then return "" end
@@ -295,7 +303,7 @@ kind("A11", function(b)
     local g = pool[math.random(1, #pool)]
     local others = {}
     for k, v in pairs(SOURCE) do if k ~= g.e.src then others[#others + 1] = v end end
-    return labelQ("A11", "Where did " .. g.label .. " come from?", SOURCE[g.e.src], others, SOURCE[g.e.src] .. ".", { icon = g.icon })
+    return labelQ("A11", "Where did " .. g.label .. " come from?", SOURCE[g.e.src], others, SOURCE[g.e.src] .. ".", { icon = g.icon, tip = g.tip })
 end)
 kind("A12", function(b) return bestQ("A12", "Which of these did you wear on the most days?", gear(b, function(e) return (e.wd or 0) > 0 end), "wd", false,
     function(o) return plural(o.wd, "day", "days") end, function(o) return o.label .. ": " .. plural(o.wd, "day", "days") .. "." end) end)
@@ -312,7 +320,7 @@ kind("A14", function(b)
     local others = { "Need", "Greed", "Pass" }
     if r.c == "de" then others[#others + 1] = "Disenchant" end
     return labelQ("A14", "What did you roll on " .. r.nm .. "?", ROLL[r.c], others,
-        ROLL[r.c] .. (r.w and ", and you won it." or "."), { icon = itemIcon(r.id) })
+        ROLL[r.c] .. (r.w and ", and you won it." or "."), { icon = itemIcon(r.id), tip = itemTip(r.id, r.sfx) })
 end)
 kind("A15", function(b)
     local pool, seen = {}, {}
@@ -350,7 +358,7 @@ local function spells(b, field)
     local out = {}
     for id, v in pairs(b[field] or {}) do
         local nm = num(id) and OMQ.Tally.OwnSpell(id, b) and spellName(id)
-        if nm then out[#out + 1] = { label = nm, icon = spellIcon(id), v = v, n = (b.spells or {})[id] or 0 } end
+        if nm then out[#out + 1] = { label = nm, icon = spellIcon(id), tip = spellTip(id), v = v, n = (b.spells or {})[id] or 0 } end
     end
     return out
 end
@@ -399,7 +407,7 @@ end)
 local function crafts(b)
     local out = {}
     for id, c in pairs(b.craft or {}) do
-        if str(c.nm) then out[#out + 1] = { label = c.nm, icon = itemIcon(id), n = c.n or 0, lt = c.lt } end
+        if str(c.nm) then out[#out + 1] = { label = c.nm, icon = itemIcon(id), tip = itemTip(id), n = c.n or 0, lt = c.lt } end
     end
     return out
 end
@@ -438,7 +446,7 @@ kind("A34", function(b)
     end
     if not last then return nil end
     return numberQ("A34", "At what level did you find your last blue item?", last.l, function(x) return "Level " .. x end,
-        (last.nm or "It") .. ", at level " .. last.l .. ".", { small = true, level = true, icon = itemIcon(last.id) })
+        (last.nm or "It") .. ", at level " .. last.l .. ".", { small = true, level = true, icon = itemIcon(last.id), tip = itemTip(last.id, last.sfx) })
 end)
 kind("A35", function(b)
     local here = OMQ.Tally.map and OMQ.Tally.ZoneOf and OMQ.Tally.ZoneOf(OMQ.Tally.map)

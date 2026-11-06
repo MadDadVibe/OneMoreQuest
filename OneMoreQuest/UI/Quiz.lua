@@ -90,6 +90,27 @@ local function setPicture(p, model, icon)
 end
 W._SetPicture = setPicture
 
+-- hover over an item or spell answer (or the question's picture) shows the real game tooltip
+local function showTip(owner)
+    if not (GameTooltip and owner.omqTip) then return end
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    if not pcall(GameTooltip.SetHyperlink, GameTooltip, owner.omqTip) then GameTooltip:Hide(); return end
+    owner.omqTipShown = owner.omqTip
+    GameTooltip:Show()
+end
+local function hideTip(owner)
+    owner.omqTipShown = nil
+    if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(owner) then GameTooltip:Hide() end
+end
+-- a new question under a resting mouse: follow it
+local function setTip(owner, tip)
+    owner.omqTip = tip
+    local owned = GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(owner)
+    if owned and not tip then hideTip(owner)
+    elseif owned and owner.omqTipShown ~= tip then showTip(owner) end
+end
+W._ShowTip, W._SetTip = showTip, setTip
+
 function W:Build()
     if self.frame then return self.frame end
     local f = CreateFrame("Frame", "OneMoreQuestQuiz", UIParent, BACKDROP)
@@ -131,6 +152,9 @@ function W:Build()
     -- question
     f.qp = CreateFrame("Frame", nil, f); f.qp:SetAllPoints()
     f.subject = picture(f.qp, 56); f.subject:SetPoint("TOPLEFT", PAD, -48)
+    f.subject:EnableMouse(true)
+    f.subject:SetScript("OnEnter", showTip)
+    f.subject:SetScript("OnLeave", hideTip)
     f.qtext = font(f.qp:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge"), BODY_FONT, 16)
     f.qtext:SetJustifyH("LEFT")
     f.opts = {}
@@ -147,9 +171,11 @@ function W:Build()
         o:SetScript("OnClick", function() Q:Answer(i) end)
         o:SetScript("OnEnter", function(self)
             if Q.run and Q.run.phase == "question" then setEdge(self, GOLD); setBg(self, .2, .18, .1); color(self.label, { 1, 1, 1 }) end
+            showTip(self)
         end)
         o:SetScript("OnLeave", function(self)
             if Q.run and Q.run.phase == "question" then setEdge(self, EDGE_PLAIN); setBg(self, .12, .12, .13); color(self.label, TEXT) end
+            hideTip(self)
         end)
         f.opts[i] = o
     end
@@ -228,6 +254,7 @@ function W:Refresh()
         f.title:SetText("Flight Quiz · " .. run.i .. " / " .. #run.list)
         f.qp:Show()
         local hasPic = setPicture(f.subject, q.model, q.icon)
+        setTip(f.subject, hasPic and q.tip or nil)
         f.qtext:ClearAllPoints()
         f.qtext:SetPoint("TOPLEFT", hasPic and (PAD + 68) or PAD, -54)
         f.qtext:SetWidth(WIDTH - 2 * PAD - (hasPic and 68 or 0))
@@ -246,12 +273,15 @@ function W:Refresh()
                 o.label:SetText(opt.label)
                 o.sub:ClearAllPoints(); o.sub:SetPoint("TOPLEFT", o.label, "BOTTOMLEFT", 0, -3)
                 o.sub:SetText(answered and opt.sub or "")
-                o:EnableMouse(not answered)
+                -- stays hoverable after the answer so the item can still be looked at (Answer ignores clicks then)
+                o:EnableMouse(true)
+                setTip(o, opt.tip)
                 if answered and i == q.right then setEdge(o, RIGHT); setBg(o, .08, .19, .1); color(o.label, { 1, 1, 1 }); color(o.sub, { .56, .88, .56 })
                 elseif answered and i == run.choice then setEdge(o, WRONG); setBg(o, .23, .09, .09); color(o.label, { 1, 1, 1 }); color(o.sub, { 1, .6, .6 })
                 elseif answered then setEdge(o, OPEN); setBg(o, .09, .09, .1); color(o.label, DIM); color(o.sub, DIM)
                 else setEdge(o, EDGE_PLAIN); setBg(o, .12, .12, .13); color(o.label, TEXT) end
             else
+                setTip(o, nil)
                 o:Hide()
             end
         end
