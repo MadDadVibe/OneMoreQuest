@@ -1,6 +1,8 @@
 -- One More Quest: distance arrow (section 6)
--- Shown only to the straggler: when every other group member is farther away
--- than the threshold (or in another zone), an arrow points at one of them.
+-- Shows the way to a guidance destination (Guide\Guide.lua). The arrow to the
+-- group no longer appears by itself (decision 419): a dad who fell behind clicks
+-- the group icon next to the meeting point and the arrow points at the nearest
+-- group member (Guide kind "group", which uses A:Evaluate below).
 -- Positions are broadcast by every client (message "P"), so the arrow does not
 -- depend on UnitPosition working for other players.
 local ADDON, OMQ = ...
@@ -8,16 +10,13 @@ OMQ = _G.OneMoreQuest
 
 local POS_INTERVAL = 2          -- seconds between position messages
 local POS_STALE = 8             -- a position older than this is ignored
-local HIDE_SECONDS = 300        -- decision 7: right click hides for 5 minutes
 local DEFAULT_THRESHOLD = 120   -- decision 4
-local MAX_THRESHOLD = 500       -- decision 62
 local TWO_PI = math.pi * 2
 
 local A = {}
 OMQ.Arrow = A
 
 local arrowFrame, texture, detail, nameText, distText
-local hideUntil = 0             -- memory only: a reload resets the timer (decision 39)
 local selectedGuid, manual = nil, false
 local moveMode = false
 
@@ -113,14 +112,17 @@ end
 OMQ:RegisterMessage("P", handlePosition)
 
 ----------------------------------------------------------------------
--- Straggler logic (pure enough to test): returns the display state.
+-- Group target logic (pure enough to test): returns the display state.
 ----------------------------------------------------------------------
 -- state = { show = bool, reason = string, target = member, otherZone = bool,
 --           distance = yards, ratio = distance / threshold }
+-- limit: the arrow is not needed within this many yards of the nearest member
+-- (the group arrow passes its arrival distance); without it the old threshold
+-- of 120 yards with hysteresis applies.
 local HYSTERESIS = 0.5         -- the arrow goes away again at 50 percent of the threshold
 local wasShown = false
 
-function A:Evaluate()
+function A:Evaluate(limit)
     local state = { show = false }
     local prevShown = wasShown
     wasShown = false
@@ -128,12 +130,12 @@ function A:Evaluate()
     local mine = myPosition()
     if not me or not mine then state.reason = "no position"; return state end
     if not (OMQ:GetChannel()) then state.reason = "not grouped"; return state end
-    if OMQ.db.arrow.enabled == false or not OMQ:Master("guidance") then state.reason = "turned off"; return state end
+    if not OMQ:Master("guidance") then state.reason = "turned off"; return state end
     if IsInInstance and IsInInstance() then state.reason = "instance"; return state end
     if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then state.reason = "dead"; return state end
     if UnitOnTaxi and UnitOnTaxi("player") then state.reason = "on a flight"; return state end
 
-    local threshold = OMQ.db.arrow.threshold or DEFAULT_THRESHOLD
+    local threshold = DEFAULT_THRESHOLD
     local now = GetTime()
     local members = {}
     for guid, u in pairs(OMQ.users) do
@@ -169,7 +171,7 @@ function A:Evaluate()
     for _, m in ipairs(members) do
         if m.sameZone and m.distance and (not nearest or m.distance < nearest.distance) then nearest = m end
     end
-    local limit = prevShown and threshold * HYSTERESIS or threshold
+    limit = limit or (prevShown and threshold * HYSTERESIS or threshold)
     if nearest and nearest.distance <= limit then
         state.reason = "close enough"; state.members = members
         return state
@@ -214,13 +216,6 @@ function A:CycleTarget(step)
     if idx == 0 and (step or 1) < 0 then idx = 1 end
     local nextMember = members[((idx - 1 + (step or 1)) % #members) + 1]
     selectedGuid, manual = nextMember.guid, true
-end
-
--- true while the straggler arrow is on screen (as of the last evaluation)
-function A:IsStragglerShown() return wasShown and true or false end
-
-function A:HideForFiveMinutes()
-    hideUntil = GetTime() + HIDE_SECONDS
 end
 
 ----------------------------------------------------------------------
@@ -332,8 +327,6 @@ local function build()
             else OMQ.Guide:Clear() end
             return
         end
-        local back = IsShiftKeyDown and IsShiftKeyDown()
-        if button == "LeftButton" then A:CycleTarget(back and -1 or 1) else A:HideForFiveMinutes() end
     end)
     arrowFrame:SetScript("OnDragStart", function(self) if moveMode then self:StartMoving() end end)
     arrowFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing(); savePosition() end)
@@ -355,9 +348,9 @@ local function render()
     local g = OMQ.Guide and OMQ.Guide:Current()
     if g then
         nameText:SetText(g.name)
-        nameText:SetTextColor(0.55, 0.85, 1)
+        if g.class then nameText:SetTextColor(classColor(g.class)) else nameText:SetTextColor(0.55, 0.85, 1) end
         if g.otherZone then
-            distText:SetText("other continent")
+            distText:SetText(g.where or "other continent")
             rotate(0)
             texture:SetVertexColor(0.6, 0.63, 0.68)
         else
@@ -368,26 +361,7 @@ local function render()
         arrowFrame:Show()
         return
     end
-    if GetTime() < hideUntil then arrowFrame:Hide(); return end
-    local state = A:Evaluate()
-    if not state.show then arrowFrame:Hide(); return end
-    local target = state.target
-    nameText:SetText(target.name or "?")
-    nameText:SetTextColor(classColor(target.class))
-    if state.otherZone then
-        -- 0 and 1 are the two continents; any other world is a dungeon or another instance
-        local inst = target.pos and target.pos.inst
-        distText:SetText((inst == 0 or inst == 1) and "other continent" or "in a dungeon")
-        rotate(0)
-        texture:SetVertexColor(0.6, 0.63, 0.68)
-    else
-        distText:SetText(string.format("%d yd", math.floor(state.distance + 0.5)))
-        -- yellow at the threshold, red at twice the threshold
-        local t = math.min(math.max(state.ratio - 1, 0), 1)
-        texture:SetVertexColor(1, 0.82 - 0.72 * t, 0.1 * (1 - t))
-        if state.heading then point(state.heading) end
-    end
-    arrowFrame:Show()
+    arrowFrame:Hide()
 end
 
 function A:SetMoveMode(on)
@@ -398,10 +372,6 @@ function A:SetMoveMode(on)
 end
 
 function A:ToggleMoveMode() self:SetMoveMode(not moveMode) end
-function A:SetThreshold(n)
-    OMQ.db.arrow.threshold = n
-    wasShown = false          -- judge the new value fresh, without hysteresis
-end
 function A:IsMoveMode() return moveMode end
 
 ----------------------------------------------------------------------
@@ -435,27 +405,16 @@ end)
 OMQ:On("MINIMAP_SHIFT_CLICK", function() A:ToggleMoveMode() end)
 
 OMQ:RegisterCommand("arrow", function(arg)
-    local cmd, value = (arg or ""):match("^(%S*)%s*(.-)$")
-    if cmd == "threshold" then
-        local n = tonumber(value)
-        if not n or n < 20 or n > MAX_THRESHOLD then
-            OMQ:Print("threshold must be a number between 20 and " .. MAX_THRESHOLD .. " yards")
-            return
-        end
-        OMQ.db.arrow.threshold = n
-        wasShown = false          -- judge the new threshold fresh, without hysteresis
-        OMQ:Print("arrow threshold set to " .. n .. " yards")
-    elseif cmd == "on" or cmd == "off" then
-        OMQ.db.arrow.enabled = (cmd == "on")
-        OMQ:Print("straggler arrow " .. cmd)
+    local cmd = (arg or ""):match("^(%S*)")
+    if cmd == "group" then
+        if OMQ.Guide then OMQ.Guide:ToggleGroup() end
     elseif cmd == "move" then
         A:ToggleMoveMode()
         OMQ:Print("move mode " .. (moveMode and "on" or "off"))
     elseif cmd == "reset" then
         OMQ.db.arrow.point = nil
         applyPosition()
-        hideUntil = 0
-        OMQ:Print("arrow position and hide timer reset")
+        OMQ:Print("arrow position reset")
     elseif cmd == "recalibrate" then
         cal = nil; OMQ.db.arrow.cal = nil
         for i = 1, #votes do votes[i] = 0 end
@@ -463,9 +422,9 @@ OMQ:RegisterCommand("arrow", function(arg)
     else
         local h, learned = A.GetCalibration()
         local state = A:Evaluate()
-        OMQ:Print(string.format("arrow: threshold %d yd, axes %s (s=%d k=%d), now: %s",
-            OMQ.db.arrow.threshold or DEFAULT_THRESHOLD, learned and "learned" or "default guess",
-            h.s, h.k, state.show and "showing" or ("hidden (" .. tostring(state.reason) .. ")")))
-        print("  /omq arrow threshold <20-500> | move | reset | recalibrate")
+        OMQ:Print(string.format("arrow: axes %s (s=%d k=%d), group: %s",
+            learned and "learned" or "default guess",
+            h.s, h.k, state.show and "far away" or tostring(state.reason)))
+        print("  /omq arrow group | move | reset | recalibrate")
     end
-end, "distance arrow: threshold, move, reset, recalibrate")
+end, "distance arrow: group, move, reset, recalibrate")

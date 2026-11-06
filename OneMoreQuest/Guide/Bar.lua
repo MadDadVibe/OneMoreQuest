@@ -2,7 +2,8 @@
 -- Only the meeting point button is always visible. Hovering it slides out the
 -- other icons; every click folds the menu in again. One click starts the arrow
 -- towards the nearest place of that kind; clicking the active icon cancels it.
--- The meeting point button sets a point for the whole group.
+-- The meeting point button sets a point for the whole group. Right next to it
+-- the group button shows the way to the nearest group member (decision 419).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -15,6 +16,7 @@ local frame, buttons = nil, {}
 local moveMode = false
 local expanded, suppressed = false, false
 local MEET = { id = "meet", label = "Meeting point", icon = "Interface\\Icons\\INV_BannerPVP_02" }
+local GROUP = { id = "group", label = "Arrow to the group", icon = "Interface\\Icons\\Ability_Rogue_Sprint" }
 
 -- The position is stored as the left edge and vertical centre of the collapsed
 -- bar (relative to the bottom left of the screen). The bar always grows to the
@@ -121,6 +123,8 @@ local function click(k)
     if moveMode then return end
     if k.id == "meet" then
         OMQ.Guide:SetMeetingPoint()
+    elseif k.id == "group" then
+        OMQ.Guide:ToggleGroup()
     elseif OMQ.Guide:Kind() == k.id then
         OMQ.Guide:Clear()
     else
@@ -154,6 +158,9 @@ local function makeButton()
         GameTooltip:SetText(k.label)
         if k.id == "meet" then
             GameTooltip:AddLine("Click: arrow to here for the whole group", 0.8, 0.8, 0.8)
+        elseif k.id == "group" then
+            GameTooltip:AddLine(OMQ.Guide:Kind() == "group" and "Click: cancel"
+                or "Click: arrow to the nearest dad (only for you)", 0.8, 0.8, 0.8)
         else
             GameTooltip:AddLine(OMQ.Guide:Kind() == k.id and "Click: cancel" or "Click: show the way", 0.8, 0.8, 0.8)
         end
@@ -163,7 +170,7 @@ local function makeButton()
     return b
 end
 
--- (Re)builds the item list: meeting point, the fixed kinds and one trainer
+-- (Re)builds the item list: meeting point, group, the fixed kinds and one trainer
 -- button for every profession the player has.
 local profSignature = ""
 local function professionItems()
@@ -181,7 +188,7 @@ end
 
 function B:Rebuild()
     if not frame then return end
-    local items = { MEET }
+    local items = { MEET, GROUP }
     for _, k in ipairs(OMQ.Guide.kinds) do items[#items + 1] = k end
     local profs = professionItems()
     local sig = {}
@@ -240,6 +247,7 @@ function B:AnchorLeft() return anchorLeft end       -- left edge of the meeting 
 function B:AnchorButton() return buttons[1] end     -- the meeting point button (always shown)
 function B:Count() return count end
 function B:ItemId(i) return buttons[i] and buttons[i].kind end
+function B:Button(i) return buttons[i] end
 
 function B:ProfessionsChanged()
     local sig = {}

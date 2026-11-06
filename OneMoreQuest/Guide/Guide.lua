@@ -1,12 +1,13 @@
 -- One More Quest: guidance (destinations for the arrow)
--- A destination beats the straggler mode of the arrow until the player arrives
--- or cancels it. Sources: fixed places (Data\Places.lua, map percent coordinates
+-- A destination is shown by the arrow until the player arrives or cancels it. Sources: fixed places (Data\Places.lua, map percent coordinates
 -- converted to world coordinates at runtime), learned places (Guide\Places.lua),
--- the map pin, the corpse and a shared meeting point.
+-- the map pin, the corpse, a shared meeting point and the group (decision 419:
+-- the nearest group member with the addon, only when asked for with the icon).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
 local ARRIVE_YARDS = 12
+local GROUP_ARRIVE_YARDS = 30   -- the group arrow ends this close to the nearest member
 
 local G = {}
 OMQ.Guide = G
@@ -255,6 +256,47 @@ function G:StartAt(label, a, b, inst, tag, src, opts)
     OMQ:Fire("GUIDE_CHANGED", "point")
 end
 
+-- The group arrow (decision 419): points at the nearest group member with the addon,
+-- left click on the arrow goes to the next one, it ends close to a member.
+function G:StartGroup()
+    if not OMQ:Master("guidance") or not OMQ.Arrow then return false end
+    local st = OMQ.Arrow:Evaluate(GROUP_ARRIVE_YARDS)
+    if not st.show then
+        local why = ({
+            ["not grouped"] = "you are not in a group",
+            ["close enough"] = "you are already with the group",
+            ["instance"] = "not inside a dungeon",
+        })[st.reason] or "no group member with the addon to point at"
+        OMQ:Print("Group arrow: " .. why)
+        return false
+    end
+    dest = { kind = "group", label = "Group", cands = {}, idx = 1 }
+    OMQ:Fire("GUIDE_CHANGED", "group")
+    return true
+end
+
+function G:ToggleGroup()
+    if dest and dest.kind == "group" then self:Clear() else self:StartGroup() end
+end
+
+local function groupCurrent()
+    local st = OMQ.Arrow:Evaluate(GROUP_ARRIVE_YARDS)
+    if st.reason == "close enough" or st.reason == "not grouped" or st.reason == "turned off" then
+        G:Clear()
+        return nil
+    end
+    if not st.show then return nil end          -- dead, on a flight, positions not fresh: wait
+    local t = st.target
+    local where
+    if st.otherZone then
+        local inst = t.pos and t.pos.inst
+        where = (inst == 0 or inst == 1) and "other continent" or "in a dungeon"
+    end
+    return { label = "Group", name = t.name or "?", class = t.class, distance = st.distance,
+             heading = st.heading, otherZone = st.otherZone, where = where,
+             count = st.members and #st.members or 1, idx = 1 }
+end
+
 function G:Clear()
     if dest then
         dest = nil
@@ -272,6 +314,7 @@ end
 
 -- next candidate of the same kind (left click on the arrow); step -1 goes back (shift + left click)
 function G:Cycle(step)
+    if dest and dest.kind == "group" then OMQ.Arrow:CycleTarget(step); return end
     if not dest or #dest.cands < 2 then return end
     dest.idx = ((dest.idx - 1 + (step or 1)) % #dest.cands) + 1
     dest.manual = true
@@ -282,6 +325,7 @@ end
 function G:Current()
     if not dest then return nil end
     if IsInInstance and IsInInstance() then return nil end
+    if dest.kind == "group" then return groupCurrent() end
     local mine = myPos()
     if not mine then return nil end
     -- pin and corpse can move: refresh them
@@ -332,9 +376,10 @@ OMQ:RegisterCommand("go", function(arg)
     end
     if arg == "off" or arg == "stop" then G:Clear(); OMQ:Print("guidance cancelled"); return end
     if arg == "here" or arg == "meet" then G:SetMeetingPoint(); return end
+    if arg == "group" then G:ToggleGroup(); return end
     if not KIND[arg] then OMQ:Print("unknown destination: " .. arg); return end
     G:Start(arg)
-end, "guidance: /omq go trainer|vendor|repair|auction|bank|flight|mailbox|inn|pin|corpse|off")
+end, "guidance: /omq go group|trainer|vendor|repair|auction|bank|flight|mailbox|inn|pin|corpse|off")
 
 -- Prints what the fixed database resolves to (for checking the data in game).
 OMQ:RegisterCommand("goinfo", function()

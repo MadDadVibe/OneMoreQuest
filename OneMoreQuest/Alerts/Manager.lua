@@ -528,8 +528,7 @@ local function makeCard(i)
         local go = self.go
         if self.key then M:Dismiss(self.key, false) end
         -- a left click starts the arrow, unless another arrow is already active
-        if go and OMQ.Guide and not OMQ.Guide:IsActive()
-            and not (OMQ.Arrow and OMQ.Arrow.IsStragglerShown and OMQ.Arrow:IsStragglerShown()) then
+        if go and OMQ.Guide and not OMQ.Guide:IsActive() then
             OMQ.Guide:Start(go)
         end
     end)

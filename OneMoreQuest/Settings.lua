@@ -220,12 +220,6 @@ local function allSections()
               end },
         } },
         { title = "GUIDANCE", master = "guidance", col = 2, items = {
-            { type = "check", label = "Arrow to far away group members",
-              get = function() return OMQ.db.arrow.enabled ~= false end,
-              set = function(v) OMQ.db.arrow.enabled = v and true or false end },
-            { type = "step", label = "Arrow appears beyond", unit = "yd", min = 20, max = 500, by = 10,
-              get = function() return OMQ.db.arrow.threshold or 120 end,
-              set = function(v) OMQ.Arrow:SetThreshold(v) end },
             { type = "check", label = "Show the icon bar",
               get = function() return OMQ.db.guide.bar end,
               set = function(v) OMQ.GuideBar:SetShown(v) end },

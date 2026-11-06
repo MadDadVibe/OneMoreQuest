@@ -33,7 +33,7 @@ FE.SECTIONS = {
         "Progress Check: the milestones of your class, the dungeons and, on request, the quest zones by level; a click on a zone leads to its quest hub",
     } },
     { "Finding your way", {
-        "Distance arrow to dads who fell behind",
+        "Arrow to the nearest dad from the icon bar, when you fell behind",
         "Arrows to class and profession trainers, vendors, repair, flight masters, mailboxes, inns, banks, auction houses, map pins, the meeting point and your corpse",
         "Places the dads visit are learned and shared, also in the new Forever zones",
     } },
