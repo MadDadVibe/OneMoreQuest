@@ -28,6 +28,7 @@ OMQ.AuctionHelper = AH
 
 AH.CUT, AH.MARGIN, AH.DURATION = 0.05, 1.05, 2          -- duration index 2 = 24 hours
 AH.MARGIN_HIGH = 1.30      -- green items and trade goods: at least 30% over the vendor price (decision 431)
+AH.MIN_GAIN = 300          -- and at least 3 silver more than the vendor pays for what is posted (decision 445)
 -- the worth rule of one item: +30% for green items of any kind and for trade goods of any quality, else +5%
 function AH.MarginFor(e)
     if e and (e.quality == 2 or e.classID == 7) then return AH.MARGIN_HIGH end
@@ -257,8 +258,10 @@ function AH.Evaluate()
             e.value = math.floor(gross)                         -- the listing value (decision 268)
             local margin = AH.MarginFor(e)
             e.margin = margin
-            if not e.keep then db().worth[e.itemID] = (net >= vend * margin and net > vend) end   -- kept until the next scan (decision 292)
-            if net >= vend * margin and net > vend then
+            local worth = net >= vend * margin and net > vend and net - vend >= AH.MIN_GAIN
+            e.lowGain = net >= vend * margin and net - vend < AH.MIN_GAIN or nil
+            if not e.keep then db().worth[e.itemID] = worth end   -- kept until the next scan (decision 292)
+            if worth then
                 e.state = "ok"
                 if not e.keep then db().low[e.itemID] = nil; db().lowDay[e.itemID] = nil end
             else
@@ -1025,7 +1028,7 @@ local function outText(L)
     local names = {}
     for i = 1, math.min(3, #L.out) do
         local e = L.out[i]
-        local low = string.format("under +%d%%", math.floor(((e.margin or AH.MARGIN) - 1) * 100 + 0.5))
+        local low = e.lowGain and "under 3s more" or string.format("under +%d%%", math.floor(((e.margin or AH.MARGIN) - 1) * 100 + 0.5))
         local why = ({ low = low, noprice = "no price yet", upgrade = "upgrade for you", needed = "a dad needs it" })[e.state] or e.state
         names[#names + 1] = e.name .. " (" .. why .. ")"
     end
