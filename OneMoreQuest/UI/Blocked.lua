@@ -35,6 +35,7 @@ function B.Record(event, addon, func)
     entries[#entries + 1] = e
     trim()
     if OMQ.db then OMQ.db.blockedLog = entries end
+    if OMQ.Errors then OMQ.Errors.Blocked(addon, func) end
     return e
 end
 
