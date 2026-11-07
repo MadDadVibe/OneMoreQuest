@@ -59,6 +59,7 @@ end
 local function allowed()
     if M:IsSnoozed() or not M:IsRuleEnabled("drink") then return false end
     if InCombatLockdown() or UnitIsDeadOrGhost("player") or (IsMounted and IsMounted()) then return false end
+    if UnitOnTaxi and UnitOnTaxi("player") then return false end                           -- not on a flight
     if (UnitPowerType("player")) ~= (Enum and Enum.PowerType and Enum.PowerType.Mana or 0) then return false end
     local last = OMQ.Alerts.leftCombatAt and OMQ.Alerts.leftCombatAt() or 0
     if (GetTime() - last) < 3 then return false end

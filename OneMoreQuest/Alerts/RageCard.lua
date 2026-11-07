@@ -74,7 +74,7 @@ function RC.Wanted()
     local _, class = UnitClass("player")
     if class ~= "WARRIOR" then return nil end
     if M:IsSnoozed() or not M:IsRuleEnabled("buff") then return nil end
-    if UnitIsDeadOrGhost("player") or (IsMounted and IsMounted()) then return nil end
+    if UnitIsDeadOrGhost("player") or (IsMounted and IsMounted()) or (UnitOnTaxi and UnitOnTaxi("player")) then return nil end
     local g = group()
     if not g then return nil end
     local castId

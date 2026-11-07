@@ -235,6 +235,7 @@ ev:SetScript("OnEvent", function(_, event, ...)
 end)
 
 M:Register({ id = "buffback", name = "Buff back a player who buffed you", check = function()
+    if (IsMounted and IsMounted()) or (UnitOnTaxi and UnitOnTaxi("player")) then return nil end   -- not on a flight or a mount
     local r = B.Check()
     if type(r) == "table" and #r == 0 then return nil end
     return r

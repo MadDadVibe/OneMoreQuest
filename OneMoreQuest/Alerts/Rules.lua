@@ -1224,6 +1224,8 @@ M:Register({
     check = function()
         if InCombatLockdown() then return "keep" end
         if UnitIsDeadOrGhost("player") then return nil end
+        -- not on a flight or a mount: a cast is not possible there or would dismount (like the buff items)
+        if (IsMounted and IsMounted()) or (UnitOnTaxi and UnitOnTaxi("player")) then return nil end
         local _, class = UnitClass("player")
         local groups = OMQ.buffGroups and OMQ.buffGroups[class]
         if not groups then return nil end
