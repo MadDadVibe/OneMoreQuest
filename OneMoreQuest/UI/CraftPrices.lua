@@ -156,6 +156,10 @@ P.PAGES = 200              -- at most this many pages of the list, so a scan alw
 -- unanswered. The scan waits FIRST_WAIT seconds after the start, and asks again (TRIES times) when no list came
 -- within ANSWER_WAIT seconds or the game reports a failed browse.
 P.FIRST_WAIT, P.ANSWER_WAIT, P.TRIES = 2, 5, 3
+-- decision 448: a scan of 500 lines and 209 items came "complete" in 3 s - the answer to another search (one
+-- page of gear). The scan waits for a search of the helper still on its way (at most HELPER_WAIT seconds), and a
+-- complete list with less than SHRINK of the items of the last complete scan only counts as partial.
+P.HELPER_WAIT, P.SHRINK = 6, 0.5
 
 local function helper() return OMQ.AuctionHelper end
 local function A() return C_AuctionHouse end
@@ -176,6 +180,9 @@ local function finish(ok, why, partial)
         end
         st.items = scan.items
         st.at, st.n = stamp(), n
+        local cnt = 0
+        for _ in pairs(scan.seen) do cnt = cnt + 1 end
+        st.fullN = cnt
         st.check = {}
         sessionAt = now()
     elseif partial and n > 0 then
@@ -241,6 +248,11 @@ local function yielding()
     if not H then return false end
     if H.Busy and H.Busy() then return true end
     if H.quietUntil and now() < H.quietUntil then return true end
+    -- a search of the helper still on its way: its answer would be read as ours (decision 448)
+    if H._Asking then
+        local q, age = H._Asking()
+        if q and age < P.HELPER_WAIT then return true end
+    end
     -- the dad's own window no longer holds the scan back: it is covered while the scan runs (decision 431)
     return false
 end
@@ -257,6 +269,16 @@ P.QUERY = function()
     return { searchString = "", sorts = { { sortOrder = sort, reverseSort = false } }, itemClassFilters = {} }
 end
 
+-- the whole list came: done, unless it is far smaller than the last complete one (decision 448)
+local function complete()
+    local items = 0
+    for _ in pairs(scan.seen) do items = items + 1 end
+    local last = store().fullN
+    if last and items < last * P.SHRINK then
+        finish(false, string.format("only %d items, the last complete scan had %d", items, last), true)
+    else finish(true) end
+end
+
 -- an answer of the auction house came (first page or more): ask for the next page or end
 local function onAnswer()
     if not scan or scan.state ~= "browsing" then return end
@@ -264,7 +286,7 @@ local function onAnswer()
     local n = readList()
     if n == 0 then return end                              -- an empty first answer: the list comes a moment later (decision 326)
     scan.answered = true
-    if full() then finish(true)
+    if full() then complete()
     elseif scan.pages >= P.PAGES then finish(false, "the list did not end after " .. scan.pages .. " pages", true)
     else scan.more = true; P.Step() end
 end
@@ -302,7 +324,7 @@ function P.Step()
             if not ok then finish(false, "RequestMoreBrowseResults failed: " .. tostring(err), true) end
         elseif now() - scan.lastAt > P.WAIT then
             if readList() == 0 then finish(false, "the auction house sent no list")
-            elseif full() then finish(true)
+            elseif full() then complete()
             else finish(false, "the auction house stopped answering after " .. scan.results .. " items", true) end
         end
     end
