@@ -28,6 +28,7 @@ local LABEL = {
     buff = "Missing buffs",
     talent = "Unspent talent points",
     ammo = "Ammo below 200",
+    upgrade = "Upgrade in your bags: put it on",
 }
 
 local function alertItems()

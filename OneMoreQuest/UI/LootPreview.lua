@@ -45,7 +45,8 @@ end
 
 -- the score of an item against my gear: the best slot it can go into (for rings and trinkets the
 -- weaker one is replaced, an empty slot counts the full value); a two-hander replaces both hands
-function LP.Gain(link, equipLoc, class, role, wornOf)
+-- the gain and the slot of that gain (the upgrade card puts the item there, decision 432)
+function LP.GainAt(link, equipLoc, class, role, wornOf)
     local S = SC()
     local slots = OMQ.Compare and OMQ.Compare.SLOTS and OMQ.Compare.SLOTS[equipLoc or ""]
     if not (S and slots) then return nil end
@@ -54,10 +55,10 @@ function LP.Gain(link, equipLoc, class, role, wornOf)
     role = role or (S.MyRole and S.MyRole())
     wornOf = wornOf or function(slot) return GetInventoryItemLink and GetInventoryItemLink("player", slot) end
     -- two-hander against both hands, no off-hand next to a two-hander (decision 285)
-    local best
+    local best, at
     for _, slot in ipairs(slots) do
         local d = S.HandDelta(link, equipLoc, wornOf(slot), wornOf(16), wornOf(17), class, role)
-        if d and (not best or d > best) then best = d end
+        if d and (not best or d > best) then best, at = d, slot end
     end
     -- a one-hander for a dad who fights with two weapons (a weapon in the off hand) may replace the off-hand one too (decision 402)
     if equipLoc == "INVTYPE_WEAPON" then
@@ -65,11 +66,12 @@ function LP.Gain(link, equipLoc, class, role, wornOf)
         local ohLoc = type(oh) == "string" and select(4, instant(oh))
         if ohLoc == "INVTYPE_WEAPON" or ohLoc == "INVTYPE_WEAPONOFFHAND" then
             local d = S.Delta(link, oh, class, role)
-            if d and (not best or d > best) then best = d end
+            if d and (not best or d > best) then best, at = d, 17 end
         end
     end
-    return best
+    return best, at
 end
+function LP.Gain(link, equipLoc, class, role, wornOf) return (LP.GainAt(link, equipLoc, class, role, wornOf)) end
 
 -- the best upgrades: list of { id, link, gain, equipLoc, minLevel, quality, icon }, and how many
 -- items are still loading

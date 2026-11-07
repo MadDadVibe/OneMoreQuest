@@ -7,7 +7,7 @@ A World of Warcraft addon for **WoW Forever**, made for a small group of friends
 - **Playing together:** session and lifetime stats for the party, an arrow to whoever drifts too far away, automatic quest sharing, a shared quest tracker, and Alt on an item shows what it means for every party member.
 - **One more quest?** `/omq` starts a vote: one more quest or bed time. If it is one more quest, the arrow leads the group to the best next quest.
 - **Finding your way:** arrows to trainers, vendors, flight masters, dungeon entrances, quest hubs and a meeting point.
-- **Alert cards:** small reminders for training, repairs, drinks, missing buffs, spells not on a bar, consumables and more.
+- **Alert cards:** small reminders for training, repairs, drinks, missing buffs, spells not on a bar, consumables, gear upgrades in your bags and more.
 - **Dungeons:** a group check for durability, bags and supplies, the dungeon quests, and the best boss loot for you.
 - **Comfort:** auction house and vendor helpers, quests accepted and turned in automatically with the best reward marked, Shift-click heals.
 - **Fun:** bets between friends and titles at bed time.

@@ -99,7 +99,7 @@ function M:Evaluate()
                                 cur.text, cur.icon, cur.color = a.text, a.icon or cur.icon, a.color or cur.color
                                 cur.cast, cur.unit, cur.go, cur.open = a.cast, a.unit, a.go, a.open
                                 cur.useItem, cur.weapon = a.useItem, a.weapon
-                                cur.tipLines = a.tipLines
+                                cur.tipLines, cur.tipLink = a.tipLines, a.tipLink
                                 cur.title, cur.sub, cur.tag = a.title, a.sub, a.tag
                             end
                         end
@@ -135,9 +135,13 @@ local function rankStore(create)
     return a.rankDismissed[guid]
 end
 
--- profession tool cards (key "tool:...", decision 251) the same way, when clicked away with the right button
+-- profession tool cards (key "tool:...", decision 251) the same way, when clicked away with the right button;
+-- so do the consumable cards (decision 266) and the upgrade cards (key "upg:<item id>", decision 432)
+local function foreverKind(key)
+    return key:find("^tool:") or key:find("^consd?:") or key:find("^upg:")
+end
 local function permanentKind(key)
-    return type(key) == "string" and (key:find("^rank:") or key:find("^tool:") or key:find("^consd?:")) and true or false
+    return type(key) == "string" and (key:find("^rank:") or foreverKind(key)) and true or false
 end
 
 function permanentlyDismissed(key)
@@ -154,7 +158,7 @@ end
 function M:Dismiss(key, forGood, snooze)
     local persisted = false
     if type(key) == "string" and not snooze
-        and (key:find("^rank:") or (forGood and (key:find("^tool:") or key:find("^consd?:")))) then
+        and (key:find("^rank:") or (forGood and foreverKind(key))) then
         local s = rankStore(true)
         if s then s[key] = true; persisted = true end
     end
@@ -476,6 +480,14 @@ local function makeCard(i)
     place(card.skin, 0, 0)
     -- cards with more to say show it on hover (decision 237): tipLines = { "line", { "left", "right" }, ... }
     card:SetScript("OnEnter", function(self)
+        -- an upgrade card shows the game's tooltip of its item (decision 432)
+        local link = rawget(self, "tipLink")
+        if link and GameTooltip and GameTooltip.SetHyperlink then
+            GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+            GameTooltip:SetHyperlink(link)
+            GameTooltip:Show()
+            return
+        end
         local lines = rawget(self, "tipLines")
         if not (lines and GameTooltip) then return end
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
@@ -600,6 +612,7 @@ function M:Render()
             card.weapon = a.weapon and a.useItem or false
             card.open = a.open or false
             card.tipLines = a.tipLines or false
+            card.tipLink = a.tipLink or false
             if card.SetAttribute and not (InCombatLockdown and InCombatLockdown()) then
                 if a.cast and not moveMode then
                     card:SetAttribute("type1", "spell")
