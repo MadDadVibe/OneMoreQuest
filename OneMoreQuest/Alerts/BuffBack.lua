@@ -5,8 +5,9 @@
 -- (the card frame is hidden in a fight), at most two cards, each for a minute after the buff (or after
 -- the end of the fight it came in). The card goes once my cast went out or he carries my buff already.
 -- The dads of the group are left out: the "Missing buffs" cards look after them.
--- Seen through the combat log (WoW Forever); where the combat log is closed (retail), through the
--- aura's caster unit when the game tells it.
+-- Seen through the new aura on me (UNIT_AURA addedAuras): its caster unit (name plate, mouseover, target)
+-- names the player. Never the combat log: on WoW Forever already registering it brings the game's
+-- "blocked" popup (decision 435 fix, see the combat log probe of v0.16.4).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -17,7 +18,6 @@ OMQ.BuffBack = B
 B.KEEP = 60                       -- seconds a card stays after the buff
 B.MAX = 2                         -- at most two cards at a time, the newest
 local COLOR = { 0.95, 0.80, 0.30 }
-local PLAYER_FLAG = 0x400         -- COMBATLOG_OBJECT_TYPE_PLAYER
 -- classes without mana get no Arcane Intellect, and no Blessing of Wisdom
 local NO_MANA = { WARRIOR = true, ROGUE = true, DEATHKNIGHT = true, DEMONHUNTER = true }
 local CASTER = { MAGE = true, PRIEST = true, WARLOCK = true }
@@ -201,21 +201,9 @@ end
 -- Wiring
 ----------------------------------------------------------------------
 local ev = CreateFrame("Frame")
-local hasLog = pcall(ev.RegisterEvent, ev, "COMBAT_LOG_EVENT_UNFILTERED")
-B.hasLog = hasLog
 for _, e in ipairs({ "UNIT_AURA", "UNIT_SPELLCAST_SENT", "PLAYER_REGEN_ENABLED" }) do pcall(ev.RegisterEvent, ev, e) end
 
--- one combat log line (the values of CombatLogGetCurrentEventInfo)
-function B.FromLog(_, sub, _, srcGUID, srcName, srcFlags, _, dstGUID, _, _, _, _, spell, _, auraType)
-    if sub ~= "SPELL_AURA_APPLIED" and sub ~= "SPELL_AURA_REFRESH" then return end
-    if auraType ~= "BUFF" then return end
-    local me = UnitGUID and UnitGUID("player")
-    if not me or dstGUID ~= me or srcGUID == me then return end
-    if type(srcFlags) == "number" and bit and bit.band and bit.band(srcFlags, PLAYER_FLAG) == 0 then return end
-    B.Note(srcGUID, srcName, spell)
-end
-
--- retail has no combat log: the new aura names its caster unit (when the game tells it); both ways merge in Note
+-- the new aura names its caster unit (when the game tells it)
 function B.FromAura(unit, info)
     if unit ~= "player" or type(info) ~= "table" or info.isFullUpdate then return end
     for _, a in ipairs(info.addedAuras or {}) do
@@ -231,9 +219,7 @@ end
 ev:SetScript("OnEvent", function(_, event, ...)
     local args = { ... }
     local ok, err = pcall(function()
-        if event == "COMBAT_LOG_EVENT_UNFILTERED" then
-            if CombatLogGetCurrentEventInfo then B.FromLog(CombatLogGetCurrentEventInfo()) end
-        elseif event == "UNIT_AURA" then
+        if event == "UNIT_AURA" then
             B.FromAura(args[1], args[2])
         elseif event == "UNIT_SPELLCAST_SENT" then
             if args[1] == "player" then
