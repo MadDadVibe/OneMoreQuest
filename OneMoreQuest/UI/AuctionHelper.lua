@@ -391,8 +391,7 @@ AH.PaintScan = paintScan
 function AH.VeilText()
     local pr = OMQ.Prices and OMQ.Prices.Progress and OMQ.Prices.Progress()
     if not pr then return "" end
-    if pr.state == "loading" then return string.format("loading %d items the game did not know yet...", pr.later or 0) end
-    if (pr.total or 0) > 0 and pr.state == "reading" then return string.format("%d of %d auctions", pr.results or 0, pr.total) end
+    if (pr.results or 0) > 0 then return string.format("%d items read, page %d...", pr.results, pr.pages or 1) end
     return "waiting for the auction house..."
 end
 local function cancelButton(parent)

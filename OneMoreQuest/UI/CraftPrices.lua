@@ -1,15 +1,14 @@
 -- One More Quest: auction house prices of everything (decision 341, step 1 of the crafting profit)
--- The whole auction house is read once with C_AuctionHouse.ReplicateItems (a dump of all auctions, decision 342), and the
+-- The whole auction house is read once with an empty browse search, page by page (decision 432; the
+-- ReplicateItems dump of decision 342 gave a frozen old list on Forever), and the
 -- lowest price of every item is kept in the saved variables (per realm) until the next scan replaces it.
 -- The crafting profit (UI/CraftProfit.lua) reads these prices. The scan starts by itself when the auction
 -- house opens and the last one is older than 4 hours (option, decision 428), or with
 -- /omq prices scan. It gives way to the auction helper: it never starts while the helper asks for something,
 -- and it waits while a post or a purchase is going on. While it runs, the helper's panel and the game's auction
 -- house window are covered (decision 431); the dad's own window no longer pauses it.
--- Decision 431: the dump only serves the crafting profit and the tooltip price. Selling and buying search live.
--- An auction whose item the game has not loaded yet (hasAllInfo false) is not taken as it comes: the item is
--- asked for and the auction is read again a moment later. The first live answers of a visit are compared with
--- the dump (/omq prices check), so a wrong dump shows.
+-- Decision 431: the scan only serves the crafting profit and the tooltip price. Selling and buying search live.
+-- The first live answers of a visit are compared with the scan (/omq prices check), so a wrong scan shows.
 -- Vendor prices are learned too: every merchant window written down what an item costs there, so reagents
 -- from a vendor (thread, vials) count in the profit with their vendor price.
 local ADDON, OMQ = ...
@@ -139,33 +138,32 @@ function P.ScannedAt() local at = store().at; return at and at > 0 and at or nil
 function P.Count() return store().n or 0 end
 
 ----------------------------------------------------------------------
--- The scan: C_AuctionHouse.ReplicateItems gives a dump of the whole auction house (decision 342)
+-- The scan: the browse list of everything, page by page (decision 432)
 ----------------------------------------------------------------------
-local scan = nil           -- { state "start" | "requested" | "reading", n, i, seen, results, startedAt }
+local scan = nil           -- { state "start" | "browsing", items, seen, results, startedAt, more, lastAt, pages }
 function P.Busy() return scan ~= nil end
--- the dump is good for this window: a scan finished, or the last one is fresh (decision 343)
+-- the scan is good for this window: a scan finished, or the last one is fresh (decision 343)
 local sessionAt = nil
 function P.Session() return sessionAt ~= nil and not scan end
 function P.SessionAt() return sessionAt end
 function P.EndSession() sessionAt = nil end
 function P.Items() return store().items end
-function P.Progress() return scan and { results = scan.results, total = scan.n, state = scan.state, later = scan.later and #scan.later or 0 } or nil end
-P.last = nil               -- how the last scan ended: { ok, items, secs, results, why }
-P.CHUNK = 400              -- auctions read per step, so a dump of many thousands does not freeze the game
-P.WAIT = 30                -- seconds to wait for the dump
-P.SETTLE = 1               -- the dump counts as complete once its size stayed the same this long (decision 431)
-P.LOAD_WAIT, P.LOAD_ROUNDS = 1, 5   -- auctions of items not loaded yet: read again after LOAD_WAIT, at most LOAD_ROUNDS times
+function P.Progress() return scan and { results = scan.results, total = scan.results, state = scan.state, pages = scan.pages } or nil end
+P.last = nil               -- how the last scan ended: { ok, items, secs, results, pages, why, partial }
+P.WAIT = 30                -- seconds to wait for the next answer of the auction house
+P.PAGES = 200              -- at most this many pages of the list, so a scan always ends
 
 local function helper() return OMQ.AuctionHelper end
 local function A() return C_AuctionHouse end
 
-local function finish(ok, why)
+-- ok: the whole list came; partial: only a part came, its prices are kept but nothing is removed (decision 432)
+local function finish(ok, why, partial)
     if not scan then return end
     local st = store()
     local n = 0
     for _ in pairs(scan.seen) do n = n + 1 end
     if ok then
-        -- the dump replaces the list: what was sold is gone; a live price of the last minutes stays (decision 427)
+        -- the scan replaces the list: what was sold is gone; a live price of the last minutes stays (decision 427)
         for id, e in pairs(st.items) do
             if e.t and stamp() - e.t <= P.MAX_AGE then
                 if not scan.items[id] then n = n + 1 end
@@ -176,49 +174,57 @@ local function finish(ok, why)
         st.at, st.n = stamp(), n
         st.check = {}
         sessionAt = now()
+    elseif partial and n > 0 then
+        for id, e in pairs(scan.items) do
+            local old = st.items[id]
+            if not (old and old.t and stamp() - old.t <= P.MAX_AGE) then
+                if not old then st.n = (st.n or 0) + 1 end
+                st.items[id] = e
+            end
+        end
     end
-    P.last = { ok = ok, items = n, secs = now() - scan.startedAt, results = scan.results, why = why,
-               incomplete = scan.incomplete or 0, reloaded = scan.reloaded or 0, dropped = scan.dropped or 0, rounds = scan.rounds or 0 }
+    P.last = { ok = ok, items = n, secs = now() - scan.startedAt, results = scan.results, pages = scan.pages, why = why,
+               partial = partial and true or nil }
     if OMQDB then OMQDB.priceScanLast = P.last end
     scan = nil
     local H = helper()
-    if ok and H and H.Evaluate then pcall(H.Evaluate) end
+    if (ok or partial) and H and H.Evaluate then pcall(H.Evaluate) end
     if H and H.Refresh then pcall(H.Refresh) end
     if H and H.Pump then pcall(H.Pump) end
     if OMQ.Fire then OMQ:Fire("PRICES_UPDATED", ok) end
 end
 
--- one auction of the dump: the lowest buyout per piece of every item, and the pieces on offer.
--- last: the final reading, an auction still without its full data is taken when its numbers are usable.
--- Returns "later" when the auction should be read again once its item is loaded (decision 431).
-local function take(i, last)
+-- the browse list of the whole auction house (decision 432): one line per item with the lowest price of one
+-- piece and the pieces on offer, the same list the game's own window shows. Gear of one item with different
+-- item levels comes as several lines: the cheapest counts, the pieces add up.
+local function readList()
     local api = A()
-    local ok, _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID, hasAll = pcall(api.GetReplicateItemInfo, i)
-    if not ok then return end
-    if isSecret(itemID) or isSecret(buyout) or isSecret(count) then return end
-    count = tonumber(count)
-    if hasAll == false and not last then
-        if itemID and not scan.asked[itemID] and C_Item and C_Item.RequestLoadItemDataByID then
-            scan.asked[itemID] = true
-            pcall(C_Item.RequestLoadItemDataByID, itemID)
+    local ok, list = pcall(api.GetBrowseResults)
+    if not ok or type(list) ~= "table" then return 0 end
+    scan.items, scan.seen = {}, {}
+    for _, res in ipairs(list) do
+        local k = res.itemKey
+        local id, price, qty = k and k.itemID, res.minPrice, res.totalQuantity
+        if id and not isSecret(id) and not isSecret(price) and type(price) == "number" and price > 0 then
+            qty = (not isSecret(qty) and tonumber(qty)) or 0
+            local e = scan.items[id]
+            if e then
+                if price < e.p then e.p = math.floor(price) end
+                e.q = e.q + qty
+            else
+                scan.items[id] = { p = math.floor(price), q = qty }
+                scan.seen[id] = true
+            end
         end
-        return "later"
     end
-    if hasAll == false then
-        if not (count and count >= 1) then scan.dropped = (scan.dropped or 0) + 1; return "dropped" end
-    end
-    count = count or 1
-    if count < 1 then count = 1 end
-    if not (itemID and type(buyout) == "number" and buyout > 0) then return end   -- bid only: no price to count on
-    local unit = math.max(1, math.floor(buyout / count))
-    local e = scan.items[itemID]
-    if e then
-        if unit < e.p then e.p = unit end
-        e.q = e.q + count
-    else
-        scan.items[itemID] = { p = unit, q = count }
-        scan.seen[itemID] = true
-    end
+    scan.results = #list
+    return #list
+end
+local function full()
+    local api = A()
+    if not api.HasFullBrowseResults then return true end
+    local ok, f = pcall(api.HasFullBrowseResults)
+    return ok and f and true or false
 end
 
 local function throttleReady()
@@ -235,20 +241,31 @@ local function yielding()
     return false
 end
 
-local function numDump()
-    local api = A()
-    return api.GetNumReplicateItems and tonumber(api.GetNumReplicateItems()) or 0
-end
-local function beginReading()
-    scan.n = numDump()
-    scan.i, scan.state = 0, "reading"
-end
--- the dump arrived: wait until its size stays the same for SETTLE seconds (decision 431)
-local function settle()
-    scan.state, scan.n, scan.settledAt = "settling", numDump(), now()
+-- an own call of the addon: the helper does not count it as the dad's window (decision 427)
+local function own(fn, ...)
+    local H = helper()
+    if H and H.Own then return H.Own(fn, ...) end
+    return fn(...)
 end
 
--- the next step: send the request, wait for the dump, or read the next chunk of it
+P.QUERY = function()
+    local sort = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
+    return { searchString = "", sorts = { { sortOrder = sort, reverseSort = false } }, itemClassFilters = {} }
+end
+
+-- an answer of the auction house came (first page or more): ask for the next page or end
+local function onAnswer()
+    if not scan or scan.state ~= "browsing" then return end
+    scan.lastAt = now()
+    local n = readList()
+    if n == 0 then return end                              -- an empty first answer: the list comes a moment later (decision 326)
+    if full() then finish(true)
+    elseif scan.pages >= P.PAGES then finish(false, "the list did not end after " .. scan.pages .. " pages", true)
+    else scan.more = true; P.Step() end
+end
+P._onAnswer = onAnswer
+
+-- the next step: send the request, ask for the next page, or give up when the answers stop
 function P.Step()
     if not scan then return end
     local api = A()
@@ -256,44 +273,20 @@ function P.Step()
     if not (api and H and H.open) then finish(false, "the window closed"); return end
     if scan.state == "start" then
         if yielding() or not throttleReady() then return end
-        scan.state, scan.requestedAt = "requested", now()
-        local ok, err = pcall(api.ReplicateItems)
-        if not ok then finish(false, "ReplicateItems failed: " .. tostring(err)) end
-    elseif scan.state == "requested" then
-        if now() - scan.requestedAt > P.WAIT then
-            -- the dump may be there without an event (asked for a short while ago)
-            beginReading()
-            if scan.n == 0 then finish(false, "the game sent no dump") end
+        scan.state, scan.lastAt, scan.pages = "browsing", now(), 1
+        local ok, err = pcall(own, api.SendBrowseQuery, P.QUERY())
+        if not ok then finish(false, "SendBrowseQuery failed: " .. tostring(err)) end
+    elseif scan.state == "browsing" then
+        if scan.more then
+            if not throttleReady() then return end
+            scan.more, scan.lastAt, scan.pages = false, now(), scan.pages + 1
+            local ok, err = pcall(own, api.RequestMoreBrowseResults)
+            if not ok then finish(false, "RequestMoreBrowseResults failed: " .. tostring(err), true) end
+        elseif now() - scan.lastAt > P.WAIT then
+            if readList() == 0 then finish(false, "the auction house sent no list")
+            elseif full() then finish(true)
+            else finish(false, "the auction house stopped answering after " .. scan.results .. " items", true) end
         end
-    elseif scan.state == "settling" then
-        local n = numDump()
-        if n ~= scan.n then scan.n, scan.settledAt = n, now()
-        elseif now() - scan.settledAt >= P.SETTLE then beginReading() end
-    elseif scan.state == "reading" then
-        local last = math.min(scan.n, scan.i + P.CHUNK)
-        for i = scan.i + 1, last do
-            if take(i) == "later" then scan.later[#scan.later + 1] = i end
-            scan.results = scan.results + 1
-        end
-        scan.i = last
-        if scan.i >= scan.n then
-            scan.incomplete = #scan.later
-            if #scan.later == 0 then finish(true)
-            else scan.state, scan.loadAt, scan.rounds = "loading", now(), 0 end
-        end
-    elseif scan.state == "loading" then
-        -- the auctions of items that were not loaded: read again, the last round takes what is usable
-        if now() - scan.loadAt < P.LOAD_WAIT then return end
-        scan.rounds = scan.rounds + 1
-        local final = scan.rounds >= P.LOAD_ROUNDS
-        local still = {}
-        for _, i in ipairs(scan.later) do
-            local got = take(i, final)
-            if got == "later" then still[#still + 1] = i
-            elseif got ~= "dropped" then scan.reloaded = (scan.reloaded or 0) + 1 end
-        end
-        scan.later, scan.loadAt = still, now()
-        if #still == 0 then finish(true) end
     end
 end
 
@@ -302,11 +295,11 @@ function P.Start(manual)
     local H = helper()
     if not (H and H.open) then return false, "open the auction house first" end
     local api = A()
-    if not (api and api.ReplicateItems and api.GetNumReplicateItems and api.GetReplicateItemInfo) then
-        return false, "this client has no ReplicateItems"
+    if not (api and api.SendBrowseQuery and api.GetBrowseResults) then
+        return false, "this client has no browse list"
     end
-    scan = { state = "start", items = {}, seen = {}, results = 0, n = 0, i = 0, startedAt = now(), later = {}, asked = {} }
-    if manual then OMQ:Print("prices: asking the auction house for everything - the game answers in a moment") end
+    scan = { state = "start", items = {}, seen = {}, results = 0, pages = 0, startedAt = now() }
+    if manual then OMQ:Print("prices: asking the auction house for its whole list - the game answers in a moment") end
     sessionAt = nil
     if H.Refresh then pcall(H.Refresh) end
     P.Step()
@@ -319,7 +312,7 @@ function P.Cancel() if scan then finish(false, "stopped") end end
 -- Events and commands
 ----------------------------------------------------------------------
 local ev = CreateFrame("Frame")
-for _, e in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "REPLICATE_ITEM_LIST_UPDATE", "MERCHANT_SHOW", "MERCHANT_UPDATE",
+for _, e in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "MERCHANT_SHOW", "MERCHANT_UPDATE",
                      "COMMODITY_SEARCH_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
@@ -453,7 +446,8 @@ end)
 ev:SetScript("OnEvent", function(_, event, a1)
     local ok, err = pcall(function()
         if event == "COMMODITY_SEARCH_RESULTS_UPDATED" then learnCommodity(a1)
-        elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then learnBrowse()
+        elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
+            if scan then onAnswer() else learnBrowse() end
         elseif event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
             local n = P.LearnVendor()
             if event == "MERCHANT_SHOW" and C_Timer and C_Timer.After then
@@ -479,8 +473,6 @@ ev:SetScript("OnEvent", function(_, event, a1)
         elseif event == "AUCTION_HOUSE_CLOSED" then
             sessionAt = nil
             if scan then finish(false, "the window closed") end
-        elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
-            if scan and scan.state == "requested" then settle() end
         end
     end)
     if not ok then OMQ:Error("prices", err) end
@@ -517,23 +509,13 @@ OMQ:RegisterCommand("prices", function(arg)
         local r = P.CheckReport()
         local L = P.last or (OMQDB and OMQDB.priceScanLast)
         if L then
-            OMQ:Print(string.format("prices: last scan %s, %d auctions, %d not loaded at first, %d read again, %d left out, %d rounds",
-                L.ok and "complete" or "failed", L.results or 0, L.incomplete or 0, L.reloaded or 0, L.dropped or 0, L.rounds or 0))
+            OMQ:Print(string.format("prices: last scan %s, %d lines on %d pages, %d items%s",
+                L.ok and "complete" or (L.partial and "partial" or "failed"), L.results or 0, L.pages or 0, L.items or 0, L.why and (" (" .. L.why .. ")") or ""))
         end
         if r.n == 0 then OMQ:Print("prices: no live price compared with the scan yet - open the Sell or Buy tab first"); return end
         OMQ:Print(string.format("prices: %d items compared with live prices, %d more than 50%% off", r.n, r.off))
         for _, e in ipairs(r.worst) do
             OMQ:Print(string.format("  item %d: scan %s (%s on offer), live %s (%s on offer)", e.id, money(e.dp), tostring(e.dq or "?"), money(e.lp), tostring(e.lq or "?")))
-        end
-        return
-    end
-    if arg == "sample" then                                  -- the first auctions of the dump as the game gives them
-        local api = A()
-        local n = api and api.GetNumReplicateItems and tonumber(api.GetNumReplicateItems()) or 0
-        OMQ:Print("prices: the dump holds " .. n .. " auctions")
-        for i = 1, math.min(5, n) do
-            local ok, name, _, count, _, _, _, _, minBid, _, buyout, _, _, _, _, _, _, itemID = pcall(api.GetReplicateItemInfo, i)
-            if ok then OMQ:Print(string.format("  %d: %s x%s, bid %s, buyout %s, item %s", i, tostring(name), tostring(count), tostring(minBid), tostring(buyout), tostring(itemID))) end
         end
         return
     end
@@ -549,8 +531,7 @@ OMQ:RegisterCommand("prices", function(arg)
     local nv = 0
     for _ in pairs(vendorStore()) do nv = nv + 1 end
     local line = string.format("prices: %d auction items %s, %d vendor prices learned", P.Count(), at and ("scanned " .. ago(at)) or "- not scanned yet", nv)
-    if scan then line = line .. string.format("; scan running (%s): %d of %d auctions read", scan.state, scan.results, scan.n) end
-    if P.last then line = line .. string.format("; last scan %s: %d auctions, %d items, %.0f s%s", P.last.ok and "complete" or "failed", P.last.results, P.last.items, P.last.secs, P.last.why and (" (" .. P.last.why .. ")") or "") end
-    if P.last and (P.last.incomplete or 0) > 0 then line = line .. string.format(", %d auctions read again", P.last.incomplete) end
-    OMQ:Print(line .. ".  /omq prices scan | cancel | check | sample | <item id>")
-end, "auction prices: /omq prices | scan | cancel | check | sample | <item id>")
+    if scan then line = line .. string.format("; scan running: %d lines on %d pages", scan.results, scan.pages or 0) end
+    if P.last then line = line .. string.format("; last scan %s: %d lines, %d items, %.0f s%s", P.last.ok and "complete" or (P.last.partial and "partial" or "failed"), P.last.results, P.last.items, P.last.secs, P.last.why and (" (" .. P.last.why .. ")") or "") end
+    OMQ:Print(line .. ".  /omq prices scan | cancel | check | <item id>")
+end, "auction prices: /omq prices | scan | cancel | check | <item id>")

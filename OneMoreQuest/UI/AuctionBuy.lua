@@ -947,16 +947,9 @@ end
 -- (the dump of the whole house no longer feeds the weapons, bags and stock rows: decision 431)
 
 -- the next search the auction helper's queue should send (after its own price checks)
+-- Decision 432: the weapon and bag searches go first. They are a handful of searches; the consumables can be
+-- dozens, and behind them the weapons and bags did not come for minutes.
 function B.NextQuery()
-    for _, r in ipairs(rows) do
-        if r.state == "price" then r.onResult = onStock; return r end
-    end
-    for _, r in ipairs(foods) do
-        if r.state == "price" then r.onResult = onStock; return r end
-    end
-    for _, r in ipairs(alts) do
-        if r.state == "price" then r.onResult = onStock; return r end
-    end
     if B.want.weapons and browse.state == "wands" then
         local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
         local lvl = level()
@@ -989,6 +982,15 @@ function B.NextQuery()
     end
     for _, c in ipairs(bagCands) do
         if c.state == "price" then return c end
+    end
+    for _, r in ipairs(rows) do
+        if r.state == "price" then r.onResult = onStock; return r end
+    end
+    for _, r in ipairs(foods) do
+        if r.state == "price" then r.onResult = onStock; return r end
+    end
+    for _, r in ipairs(alts) do
+        if r.state == "price" then r.onResult = onStock; return r end
     end
     return nil
 end
@@ -1217,8 +1219,9 @@ function B.BatchRows()
     for _, list in ipairs({ rows, foods, alts }) do
         for _, r in ipairs(list) do
             if r.state == "price" and not tried[r.key] and not r.listed and not r.live then
+                -- consumables stack: one not loaded yet goes into the batch too, only shield spikes do not (decision 432)
                 local stack = select(8, info(r.itemID))
-                if (stack or 1) > 1 then r.listed = true; out[#out + 1] = r end
+                if (stack and stack > 1) or (stack == nil and r.kind and r.kind ~= "spike") then r.listed = true; out[#out + 1] = r end
             end
         end
     end
