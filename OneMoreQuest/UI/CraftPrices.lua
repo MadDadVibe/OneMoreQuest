@@ -140,7 +140,7 @@ function P.Count() return store().n or 0 end
 ----------------------------------------------------------------------
 -- The scan: the browse list of everything, page by page (decision 432)
 ----------------------------------------------------------------------
-local scan = nil           -- { state "start" | "browsing", items, seen, results, startedAt, more, lastAt, pages }
+local scan = nil           -- { state "start" | "browsing", queue, qi, q (the current search), items, seen, results, startedAt }
 function P.Busy() return scan ~= nil end
 -- the scan is good for this window: a scan finished, or the last one is fresh (decision 343)
 local sessionAt = nil
@@ -148,41 +148,53 @@ function P.Session() return sessionAt ~= nil and not scan end
 function P.SessionAt() return sessionAt end
 function P.EndSession() sessionAt = nil end
 function P.Items() return store().items end
-function P.Progress() return scan and { results = scan.results, total = scan.results, state = scan.state, pages = scan.pages, tries = scan.tries } or nil end
+function P.Progress()
+    if not scan then return nil end
+    local q = scan.q or {}
+    return { results = scan.results + (q.results or 0), total = scan.results + (q.results or 0), state = scan.state,
+             pages = q.pages, tries = q.tries, part = scan.qi, parts = #scan.queue }
+end
 P.last = nil               -- how the last scan ended: { ok, items, secs, results, pages, why, partial }
 P.WAIT = 30                -- seconds to wait for the next answer of the auction house
-P.PAGES = 200              -- at most this many pages of the list, so a scan always ends
+P.PAGES = 200              -- at most this many pages of one search, so a scan always ends
 -- decision 447: the game's own window searches when it opens; a search of ours in the same moment can go
 -- unanswered. The scan waits FIRST_WAIT seconds after the start, and asks again (TRIES times) when no list came
 -- within ANSWER_WAIT seconds or the game reports a failed browse.
 P.FIRST_WAIT, P.ANSWER_WAIT, P.TRIES = 2, 5, 3
--- decision 448: a scan of 500 lines and 209 items came "complete" in 3 s - the answer to another search (one
--- page of gear). The scan waits for a search of the helper still on its way (at most HELPER_WAIT seconds), and a
--- complete list with less than SHRINK of the items of the last complete scan only counts as partial.
+-- decision 448: the scan waits for a search of the helper still on its way (at most HELPER_WAIT seconds), and a
+-- complete scan with less than SHRINK of the items of the last complete scan only counts as partial.
 P.HELPER_WAIT, P.SHRINK = 6, 0.5
+-- decision 450: one search for everything now stops at 500 lines (the game says "complete" after the first
+-- page). The scan searches category by category, the way the weapon and bag searches of the buy mode do; a
+-- category that again stops at a full PAGE is searched once more per subcategory. An empty category answers with
+-- an empty list: it counts as done after EMPTY_WAIT seconds without another answer.
+P.CLASSES = { 0, 7, 5, 8, 9, 1, 11, 6, 3, 12, 15, 2, 4 }
+P.SUBCLASSES = { [2] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 13, 14, 15, 16, 17, 18, 19, 20 }, [4] = { 0, 1, 2, 3, 4, 6 } }
+P.PAGE, P.EMPTY_WAIT = 500, 1.5
 
 local function helper() return OMQ.AuctionHelper end
 local function A() return C_AuctionHouse end
+local function count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end
 
--- ok: the whole list came; partial: only a part came, its prices are kept but nothing is removed (decision 432)
+-- ok: every category came complete; partial: only a part came, its prices are kept but nothing is removed
 local function finish(ok, why, partial)
     if not scan then return end
     local st = store()
-    local n = 0
-    for _ in pairs(scan.seen) do n = n + 1 end
+    local n = count(scan.seen)
     if ok then
         -- the scan replaces the list: what was sold is gone; a live price of the last minutes stays (decision 427)
+        local own = n
         for id, e in pairs(st.items) do
-            if e.t and stamp() - e.t <= P.MAX_AGE then
+            -- a category that stopped at a full page may miss items: those keep their old price (decision 450)
+            if (e.t and stamp() - e.t <= P.MAX_AGE) or (scan.capped and not scan.items[id]) then
                 if not scan.items[id] then n = n + 1 end
                 scan.items[id] = e
             end
         end
         st.items = scan.items
         st.at, st.n = stamp(), n
-        local cnt = 0
-        for _ in pairs(scan.seen) do cnt = cnt + 1 end
-        st.fullN = cnt
+        st.full = own                                   -- decision 450 (fullN of 448 could hold a wrong scan)
+        st.fullN = nil
         st.check = {}
         sessionAt = now()
     elseif partial and n > 0 then
@@ -195,7 +207,7 @@ local function finish(ok, why, partial)
         end
     end
     P.last = { ok = ok, items = n, secs = now() - scan.startedAt, results = scan.results, pages = scan.pages, why = why,
-               partial = partial and true or nil }
+               partial = partial and true or nil, searches = math.min(scan.qi, #scan.queue), capped = scan.capped }
     if OMQDB then OMQDB.priceScanLast = P.last end
     scan = nil
     local H = helper()
@@ -205,31 +217,42 @@ local function finish(ok, why, partial)
     if OMQ.Fire then OMQ:Fire("PRICES_UPDATED", ok) end
 end
 
--- the browse list of the whole auction house (decision 432): one line per item with the lowest price of one
--- piece and the pieces on offer, the same list the game's own window shows. Gear of one item with different
--- item levels comes as several lines: the cheapest counts, the pieces add up.
+local function classOf(id)
+    local f = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    if not f then return nil end
+    local ok, _, _, _, _, _, c, sc = pcall(f, id)
+    if ok then return c, sc end
+end
+
+-- the browse list of the current search: one line per item with the lowest price of one piece and the pieces on
+-- offer, the same list the game's own window shows. Gear of one item with different item levels comes as several
+-- lines: the cheapest counts, the pieces add up. Returns the lines, and false when the list is not ours: its
+-- items belong to another category (decision 450, the answer to another search).
 local function readList()
-    local api = A()
+    local api, q = A(), scan.q
     local ok, list = pcall(api.GetBrowseResults)
-    if not ok or type(list) ~= "table" then return 0 end
-    scan.items, scan.seen = {}, {}
+    if not ok or type(list) ~= "table" then return 0, true end
+    local items, foreign, checked = {}, 0, 0
     for _, res in ipairs(list) do
         local k = res.itemKey
         local id, price, qty = k and k.itemID, res.minPrice, res.totalQuantity
         if id and not isSecret(id) and not isSecret(price) and type(price) == "number" and price > 0 then
+            if checked < 5 then
+                checked = checked + 1
+                local c = classOf(id)
+                if c and c ~= q.classID then foreign = foreign + 1 end
+            end
             qty = (not isSecret(qty) and tonumber(qty)) or 0
-            local e = scan.items[id]
+            local e = items[id]
             if e then
                 if price < e.p then e.p = math.floor(price) end
                 e.q = e.q + qty
-            else
-                scan.items[id] = { p = math.floor(price), q = qty }
-                scan.seen[id] = true
-            end
+            else items[id] = { p = math.floor(price), q = qty } end
         end
     end
-    scan.results = #list
-    return #list
+    if checked > 0 and foreign == checked then return #list, false end
+    q.items, q.results = items, #list
+    return #list, true
 end
 local function full()
     local api = A()
@@ -264,31 +287,79 @@ local function own(fn, ...)
     return fn(...)
 end
 
-P.QUERY = function()
-    local sort = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
-    return { searchString = "", sorts = { { sortOrder = sort, reverseSort = false } }, itemClassFilters = {} }
+-- the search of one category (and subcategory); two sort keys mark it as the scan's own (decision 450)
+P.QUERY = function(f)
+    local E = Enum and Enum.AuctionHouseSortOrder
+    local price, name = E and E.Price or 0, E and E.Name or 1
+    f = f or {}
+    return { searchString = "", sorts = { { sortOrder = price, reverseSort = false }, { sortOrder = name, reverseSort = false } },
+             itemClassFilters = { { classID = f.classID, subClassID = f.subClassID } } }
 end
 
--- the whole list came: done, unless it is far smaller than the last complete one (decision 448)
-local function complete()
-    local items = 0
-    for _ in pairs(scan.seen) do items = items + 1 end
-    local last = store().fullN
-    if last and items < last * P.SHRINK then
-        finish(false, string.format("only %d items, the last complete scan had %d", items, last), true)
-    else finish(true) end
+local function send()
+    local api, q = A(), scan.q
+    q.lastAt, q.answered, q.emptyAt, q.more, q.results = now(), false, nil, false, 0
+    local ok, err = pcall(own, api.SendBrowseQuery, P.QUERY(q))
+    if not ok then finish(false, "SendBrowseQuery failed: " .. tostring(err)) end
 end
 
--- an answer of the auction house came (first page or more): ask for the next page or end
+-- the next search of the list, or the end
+local function nextSearch()
+    scan.qi = scan.qi + 1
+    local f = scan.queue[scan.qi]
+    if not f then
+        local items = count(scan.seen)
+        local last = store().full
+        if scan.failed > 0 then
+            finish(false, scan.failed .. " categories did not answer", true)
+        elseif last and items < last * P.SHRINK then
+            finish(false, string.format("only %d items, the last complete scan had %d", items, last), true)
+        else finish(true) end
+        return
+    end
+    scan.q = { classID = f.classID, subClassID = f.subClassID, pages = 1, tries = 1 }
+    scan.state = "browsing"
+    if throttleReady() then send() else scan.q.waiting = true end
+end
+
+-- the current search is done: its items go to the scan; a search that stopped at a full page is split
+local function searchDone(capped)
+    local q = scan.q
+    if capped and q.subClassID == nil and P.SUBCLASSES[q.classID] then
+        for _, sub in ipairs(P.SUBCLASSES[q.classID]) do
+            scan.queue[#scan.queue + 1] = { classID = q.classID, subClassID = sub }
+        end
+    else
+        if capped then scan.capped = (scan.capped or 0) + 1 end
+        for id, e in pairs(q.items or {}) do
+            local old = scan.items[id]
+            if old then
+                if e.p < old.p then old.p = e.p end
+                old.q = old.q + e.q
+            else scan.items[id] = { p = e.p, q = e.q }; scan.seen[id] = true end
+        end
+        scan.results = scan.results + (q.results or 0)
+    end
+    scan.pages = scan.pages + (q.pages or 0)
+    nextSearch()
+end
+
+-- an answer of the auction house came (first page or more): ask for the next page or end the search
 local function onAnswer()
-    if not scan or scan.state ~= "browsing" then return end
-    scan.lastAt = now()
-    local n = readList()
-    if n == 0 then return end                              -- an empty first answer: the list comes a moment later (decision 326)
-    scan.answered = true
-    if full() then complete()
-    elseif scan.pages >= P.PAGES then finish(false, "the list did not end after " .. scan.pages .. " pages", true)
-    else scan.more = true; P.Step() end
+    if not scan or scan.state ~= "browsing" or not scan.q or scan.q.waiting then return end
+    local q = scan.q
+    local n, mine = readList()
+    if not mine then return end                            -- the answer to another search
+    q.lastAt = now()
+    if n == 0 then                                         -- empty: maybe the list comes a moment later (decision 326)
+        q.emptyAt = now()
+        if P.EMPTY_WAIT <= 0 and full() then q.items, q.results = {}, 0; searchDone(false) end
+        return
+    end
+    q.answered, q.emptyAt = true, nil
+    if full() then searchDone(n > 0 and n % P.PAGE == 0)
+    elseif q.pages >= P.PAGES then searchDone(true)
+    else q.more = true; P.Step() end
 end
 P._onAnswer = onAnswer
 
@@ -301,32 +372,33 @@ function P.Step()
     if scan.state == "start" then
         if now() - scan.startedAt < P.FIRST_WAIT then return end
         if yielding() or not throttleReady() then return end
-        scan.state, scan.lastAt, scan.pages, scan.tries = "browsing", now(), 1, 1
-        local ok, err = pcall(own, api.SendBrowseQuery, P.QUERY())
-        if not ok then finish(false, "SendBrowseQuery failed: " .. tostring(err)) end
-    elseif scan.state == "browsing" then
-        if not scan.answered and now() - scan.lastAt > P.ANSWER_WAIT then
-            -- no list yet: ask again, a few times (decision 447)
-            if scan.tries >= P.TRIES then
-                -- a list without our answer may be the game window's: its prices are taken, nothing is removed
-                if readList() > 0 then finish(false, "no answer, took the list that was there", true)
-                else finish(false, "the auction house did not answer " .. scan.tries .. " searches") end
-                return
-            end
-            if not throttleReady() then return end
-            scan.tries, scan.lastAt, scan.results = scan.tries + 1, now(), 0
-            local ok, err = pcall(own, api.SendBrowseQuery, P.QUERY())
-            if not ok then finish(false, "SendBrowseQuery failed: " .. tostring(err)) end
-        elseif scan.more then
-            if not throttleReady() then return end
-            scan.more, scan.lastAt, scan.pages = false, now(), scan.pages + 1
-            local ok, err = pcall(own, api.RequestMoreBrowseResults)
-            if not ok then finish(false, "RequestMoreBrowseResults failed: " .. tostring(err), true) end
-        elseif now() - scan.lastAt > P.WAIT then
-            if readList() == 0 then finish(false, "the auction house sent no list")
-            elseif full() then complete()
-            else finish(false, "the auction house stopped answering after " .. scan.results .. " items", true) end
-        end
+        nextSearch()
+        return
+    end
+    local q = scan.q
+    if not q then return end
+    if q.waiting then
+        if not throttleReady() then return end
+        q.waiting = nil
+        send()
+    elseif q.emptyAt and not q.answered then
+        -- an empty answer stays empty: nothing of this category on sale
+        if now() - q.emptyAt >= P.EMPTY_WAIT and full() then q.items, q.results = {}, 0; searchDone(false) end
+    elseif not q.answered and now() - q.lastAt > P.ANSWER_WAIT then
+        -- no list yet: ask again, a few times (decision 447); then the next category
+        if q.tries >= P.TRIES then scan.failed = scan.failed + 1; q.items = nil; searchDone(false); return end
+        if not throttleReady() then return end
+        q.tries = q.tries + 1
+        send()
+    elseif q.more then
+        if not throttleReady() then return end
+        q.more, q.lastAt, q.pages = false, now(), q.pages + 1
+        local ok, err = pcall(own, api.RequestMoreBrowseResults)
+        if not ok then finish(false, "RequestMoreBrowseResults failed: " .. tostring(err), true) end
+    elseif q.answered and now() - q.lastAt > P.WAIT then
+        -- the next page never came: what is there counts, the category is not complete
+        scan.failed = scan.failed + 1
+        searchDone(false)
     end
 end
 
@@ -338,8 +410,10 @@ function P.Start(manual)
     if not (api and api.SendBrowseQuery and api.GetBrowseResults) then
         return false, "this client has no browse list"
     end
-    scan = { state = "start", items = {}, seen = {}, results = 0, pages = 0, startedAt = now() }
-    if manual then OMQ:Print("prices: asking the auction house for its whole list - the game answers in a moment") end
+    local queue = {}
+    for _, c in ipairs(P.CLASSES) do queue[#queue + 1] = { classID = c } end
+    scan = { state = "start", items = {}, seen = {}, results = 0, pages = 0, startedAt = now(), queue = queue, qi = 0, failed = 0 }
+    if manual then OMQ:Print("prices: asking the auction house category by category - this takes a little while") end
     sessionAt = nil
     if H.Refresh then pcall(H.Refresh) end
     P.Step()
@@ -490,7 +564,7 @@ ev:SetScript("OnEvent", function(_, event, a1)
         elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
             if scan then onAnswer() else learnBrowse() end
         elseif event == "AUCTION_HOUSE_BROWSE_FAILURE" then
-            if scan and scan.state == "browsing" and not scan.answered then scan.lastAt = 0 end   -- ask again at once (decision 447)
+            if scan and scan.state == "browsing" and scan.q and not scan.q.answered then scan.q.lastAt = 0 end   -- ask again at once (decision 447)
         elseif event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
             local n = P.LearnVendor()
             if event == "MERCHANT_SHOW" and C_Timer and C_Timer.After then
