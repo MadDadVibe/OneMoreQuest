@@ -98,7 +98,7 @@ function M:Evaluate()
                             else
                                 cur.text, cur.icon, cur.color = a.text, a.icon or cur.icon, a.color or cur.color
                                 cur.cast, cur.unit, cur.go, cur.open, cur.macro = a.cast, a.unit, a.go, a.open, a.macro
-                                cur.useItem, cur.weapon = a.useItem, a.weapon
+                                cur.useItem, cur.weapon, cur.weaponSlots = a.useItem, a.weapon, a.weaponSlots
                                 cur.tipLines, cur.tipLink = a.tipLines, a.tipLink
                                 cur.title, cur.sub, cur.tag = a.title, a.sub, a.tag
                             end
@@ -423,7 +423,11 @@ local function wornWeapon(slot)
     if not tex then return nil end
     if slot == 17 then                                    -- a shield or a held item takes no oil
         local link = GetInventoryItemLink and GetInventoryItemLink("player", slot)
-        local _, _, _, loc = C_Item and C_Item.GetItemInfoInstant and C_Item.GetItemInfoInstant(link or 0)
+        -- not "a and b and f()": that keeps only the first return value, loc was always nil and the
+        -- off hand weapon never got an icon (fix 454)
+        local f = C_Item and C_Item.GetItemInfoInstant
+        if not f or not link then return nil end
+        local _, _, _, loc = f(link)
         if loc ~= "INVTYPE_WEAPON" and loc ~= "INVTYPE_WEAPONOFFHAND" then return nil end
     end
     return tex
@@ -453,7 +457,9 @@ function M.RefreshWeapons(card)
             end)
             card.wb[slot] = b
         end
-        local tex = rawget(card, "weapon") and rawget(card, "wShow") and wornWeapon(slot)
+        -- only the hands that still lack the stone or oil (fix 454: the off hand of a dual wielder too)
+        local want = rawget(card, "wSlots")
+        local tex = rawget(card, "weapon") and rawget(card, "wShow") and (type(want) ~= "table" or want[slot]) and wornWeapon(slot)
         if tex then
             b.icon:SetTexture(tex)
             b:ClearAllPoints(); b:SetPoint("RIGHT", card, "LEFT", -6 - n * (CARD_H - 2), 0)
@@ -613,6 +619,7 @@ function M:Render()
             card.macro = a.macro or false
             card.useItem = (not a.weapon) and a.useItem or false
             card.weapon = a.weapon and a.useItem or false
+            card.wSlots = a.weapon and a.weaponSlots or false
             card.open = a.open or false
             card.tipLines = a.tipLines or false
             card.tipLink = a.tipLink or false

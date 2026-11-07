@@ -78,13 +78,54 @@ local function info(id)
     if GetItemInfo then return GetItemInfo(id) end
 end
 
+-- a weapon in this hand? true, false (empty, a shield or a held item), nil when it cannot be read
+local function weaponIn(slot)
+    local link = GetInventoryItemLink and GetInventoryItemLink("player", slot)
+    if link == nil then return false end
+    if isSecret(link) then return nil end
+    local f = C_Item and C_Item.GetItemInfoInstant
+    if not f then return nil end
+    local _, _, _, _, _, classID = f(link)
+    if isSecret(classID) or classID == nil then return nil end
+    return classID == 2
+end
+-- the hands a stone or an oil still has to go on: { [16] = true, [17] = true } for a weapon without
+-- an enchantment that the item fits (a sharpening stone a blade, a weightstone a blunt weapon), both
+-- hands of a dual wielder (fix 454). nil when it cannot be told. No weapon readable: the main hand as before.
+function C.WeaponNeed(id, kind)
+    if not GetWeaponEnchantInfo then return nil end
+    local hasMain, _, _, _, hasOff = GetWeaponEnchantInfo()
+    if isSecret(hasMain) or isSecret(hasOff) then return nil end
+    local B = OMQ.AuctionBuy
+    local line
+    if kind == "stone" and B and B.StoneLine then
+        for _, key in ipairs({ "stone_sharp", "stone_weight" }) do
+            local l = OMQ.BuyLines and OMQ.BuyLines[key]
+            for _, e in ipairs(l and l[2] or {}) do if e[1] == id then line = key end end
+        end
+    end
+    local need, any = {}, false
+    for _, slot in ipairs({ 16, 17 }) do
+        if weaponIn(slot) then
+            any = true
+            local wl = line and B.StoneLine(slot)
+            local has = (slot == 16 and hasMain) or (slot == 17 and hasOff)
+            if not has and (not wl or wl == line) then need[slot] = true end
+        end
+    end
+    if not any then
+        if hasMain then return {} end
+        return { [16] = true }
+    end
+    return need
+end
+
 -- is the buff of this item on? nil when it cannot be told
 function C.Active(id, kind, auras)
     if kind == "stone" or kind == "oil" then
-        if not GetWeaponEnchantInfo then return nil end
-        local has = GetWeaponEnchantInfo()
-        if isSecret(has) then return nil end
-        return has and true or false
+        local need = C.WeaponNeed(id, kind)
+        if not need then return nil end
+        return next(need) == nil
     end
     if not auras then return nil end
     if kind == "food" then
@@ -177,12 +218,18 @@ function C.Check()
                 if name and fits and (minLevel or 0) <= level and s and not spells[s] and C.Active(id, kind, auras) == false
                     and not (kind == "scroll" and C.BetterBuff(id, auras)) then
                     spells[s] = true
-                    local how = (kind == "stone" or kind == "oil") and "left click, then click your weapon" or "left click uses it"
+                    local wpn = (kind == "stone" or kind == "oil") and C.WeaponNeed(id, kind) or nil
+                    local how = "left click uses it"
+                    if wpn then
+                        how = (wpn[16] and wpn[17] and "left click, then click a weapon")
+                            or (wpn[17] and "left click, then click your off hand weapon")
+                            or "left click, then click your main hand weapon"
+                    end
                     out[#out + 1] = {
                         key = prefix .. id, title = "Use " .. name, text = "Use " .. name, tag = "BUFF",
                         sub = how .. " - right click: never remind",
                         icon = icon or it.iconFileID, color = COLOR, useItem = "item:" .. id,
-                        weapon = (kind == "stone" or kind == "oil") or nil,
+                        weapon = (kind == "stone" or kind == "oil") or nil, weaponSlots = wpn,
                     }
                     if #out >= C.MAX then return out end
                 end
