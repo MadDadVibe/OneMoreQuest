@@ -453,7 +453,9 @@ end
 -- game's window shows an item to buy or to sell, and MANUAL_PAUSE seconds after his last action there.
 -- The calls of this addon go through AH.Own, so only the game's window counts.
 AH.MANUAL_PAUSE, AH.OPEN_GRACE = 30, 1.5
-AH.HOOKED = { "SendSearchQuery", "SendSellSearchQuery", "SendBrowseQuery", "SearchForFavorites", "RequestMoreBrowseResults",
+-- Not RequestMoreBrowseResults (decision 434): the game's list asks for its next page by itself whenever a browse
+-- answer of ours arrives, and that paused every search of the helper; paging never drops a purchase.
+AH.HOOKED = { "SendSearchQuery", "SendSellSearchQuery", "SendBrowseQuery", "SearchForFavorites",
               "RefreshCommoditySearchResults", "RefreshItemSearchResults", "StartCommoditiesPurchase", "ConfirmCommoditiesPurchase",
               "PlaceBid", "PostCommodity", "PostItem" }
 local own, hookedOn = 0, nil

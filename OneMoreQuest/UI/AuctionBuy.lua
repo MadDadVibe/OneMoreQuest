@@ -1436,7 +1436,8 @@ function B.Render(panel, top)
     local SC = OMQ.Score
     local class = SC and SC.MyClass() or select(2, UnitClass("player"))
     local cname = (LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[class]) or class or "?"
-    ui.head:SetText(string.format("For your %s, level %d - you carry |cfff2d27a%s|r", cname, level(), money(GetMoney and GetMoney() or 0)))
+    ui.head:SetText(string.format("For your %s, level %d - you carry |cfff2d27a%s|r", cname, level(), money(GetMoney and GetMoney() or 0))
+        .. (AH().Manual() and "  |cffff9933(paused while you use the game's window)|r" or ""))
     local y = 26
     -- weapons
     local W = B.Weapons()
