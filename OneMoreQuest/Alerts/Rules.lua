@@ -678,111 +678,21 @@ function M.FreeSlots()
     end
     return out
 end
+-- No spell goes on a bar through OMQ any more (decision 452): PickupSpell/PlaceAction called by an addon run the
+-- game's own button updates with the addon's taint; the buttons keep it until a /reload and in a fight their
+-- cooldowns ("SetCooldown ... secret values") and SetShown were blocked. The card names the spell, the player
+-- drags it from the spellbook; the click only says so in the chat (nothing else visible happens).
 function M.PlaceSpells(ids)
-    if InCombatLockdown() then return 0 end
-    local pick = (C_Spell and C_Spell.PickupSpell) or PickupSpell
-    if not (pick and PlaceAction) then
-        OMQ:Print("Could not place the spell: the game offers no way for addons here - drag it from your spellbook")
-        return 0
+    local names = {}
+    for _, id in ipairs(ids or {}) do
+        local n = spellName(id)
+        if n and #names < 3 then names[#names + 1] = n end
     end
-    local free = M.FreeSlots()
-    local placed = 0
-    for _, id in ipairs(ids) do
-        local slot = free[placed + 1]
-        if not slot then
-            OMQ:Print("No free slot on your shown action bars - drag the spell from your spellbook")
-            break
-        end
-        local ok = pcall(pick, id)
-        if ok and GetCursorInfo and GetCursorInfo() then
-            pcall(PlaceAction, slot)
-            placed = placed + 1
-        end
-        if ClearCursor then ClearCursor() end
-    end
-    if placed == 0 and #ids > 0 and #free > 0 then
-        OMQ:Print("Could not place the spell - drag it from your spellbook")
-    end
-    rankDirty = true
-    return placed
+    local what = #names > 0 and table.concat(names, ", ") or "the spell"
+    if #(ids or {}) > #names and #names > 0 then what = what .. " ..." end
+    OMQ:Print("Open your spellbook (P) and drag " .. what .. " onto a bar")
+    return 0
 end
-
--- New spells on the bar by themselves (decision 404): a newly learned spell goes on the first free slot of
--- the bar on screen, a new rank takes the place of the older rank on every button that holds it. Rank 1
--- heals stay where they are (cheap heals on purpose); the new rank then gets a free slot of its own.
--- Out of combat only (caught up after the fight), a second after the learning so the game's own
--- placement comes first; the first run per character only remembers what is known. Option autoBar.
-M.RANK1_HEALS = {
-    [2050] = true, [2054] = true, [2060] = true, [2061] = true, [139] = true, [596] = true,   -- priest
-    [635] = true, [19750] = true,                                                            -- paladin
-    [5185] = true, [8936] = true, [774] = true, [740] = true,                                -- druid
-    [331] = true, [8004] = true, [1064] = true,                                              -- shaman
-}
-local function autoStore()
-    local guid = UnitGUID and UnitGUID("player")
-    if not (guid and OMQDB) then return nil end
-    OMQDB.autoBar = OMQDB.autoBar or {}
-    return OMQDB.autoBar, guid
-end
-local function placeOn(id, slot)
-    local pick = (C_Spell and C_Spell.PickupSpell) or PickupSpell
-    if not (pick and PlaceAction) then return false end
-    local ok = pcall(pick, id)
-    local done = false
-    if ok and GetCursorInfo and GetCursorInfo() then done = pcall(PlaceAction, slot) end
-    if ClearCursor then ClearCursor() end      -- PlaceAction puts the old button on the cursor
-    return done
-end
-function M.AutoBar()
-    if InCombatLockdown() then M.autoBarPending = true; return end
-    M.autoBarPending = false
-    local db, guid = autoStore()
-    if not db then return end
-    local now = highestRanks(true)
-    if not now or not next(now) then return end
-    local known = db[guid]
-    local first = known == nil
-    known = known or {}
-    db[guid] = known
-    local on = not first and OMQ.db.options.autoBar ~= false
-    for name, s in pairs(now) do
-        local was = known[name]
-        if on and (was == nil or s.rank > was) then
-            local covered = false
-            if was ~= nil then
-                -- a new rank: move every button of an older rank up, rank 1 heals stay
-                for slot = 1, 120 do
-                    local kind, id = GetActionInfo(slot)
-                    if kind == "spell" and id and id ~= s.spellID and spellName(id) == name then
-                        if not M.RANK1_HEALS[id] and placeOn(s.spellID, slot) then covered = true end
-                    elseif kind == "spell" and id == s.spellID then
-                        covered = true
-                    end
-                end
-            end
-            if not covered then
-                local names, ids = barSpells()
-                if not (ids[s.spellID] or (was == nil and names[name])) then
-                    local slot = M.FreeSlots()[1]
-                    if slot then placeOn(s.spellID, slot) end
-                end
-            end
-        end
-        if was == nil or s.rank > was then known[name] = s.rank end
-    end
-    rankDirty = true
-end
-local autoFrame = CreateFrame("Frame")
-for _, e in ipairs({ "LEARNED_SPELL_IN_TAB", "SPELLS_CHANGED", "PLAYER_REGEN_ENABLED", "PLAYER_ENTERING_WORLD" }) do
-    pcall(autoFrame.RegisterEvent, autoFrame, e)
-end
-local autoDue = false
-autoFrame:SetScript("OnEvent", function(_, event)
-    if event == "PLAYER_REGEN_ENABLED" and not M.autoBarPending then return end
-    if autoDue then return end
-    autoDue = true
-    C_Timer.After(1, function() autoDue = false; pcall(M.AutoBar) end)
-end)
 
 M:Register({
     id = "rank", name = "Learned spell ranks that are not on an action bar",
@@ -810,7 +720,7 @@ M:Register({
             for _, m in ipairs(missing) do ids[#ids + 1] = m.spellID end
             result[1] = {
                 key = "rank:many", text = #missing .. " spells are not on a bar",
-                title = #missing .. " spells are not on a bar", sub = "Click: put them on your action bars",
+                title = #missing .. " spells are not on a bar", sub = "Drag them from your spellbook (P) onto a bar",
                 icon = "Interface\\Icons\\INV_Misc_Book_11", color = PURPLE,
                 open = function() M.PlaceSpells(ids); return "keep" end,
             }
@@ -820,7 +730,7 @@ M:Register({
                 result[#result + 1] = {
                     key = "rank:" .. s.name .. ":" .. s.rank,
                     text = s.name .. " " .. s.rank .. " is not on a bar",
-                    title = s.name .. " " .. s.rank .. " is not on a bar", sub = "Click: put it on your action bar",
+                    title = s.name .. " " .. s.rank .. " is not on a bar", sub = "Drag it from your spellbook (P) onto a bar",
                     icon = spellIcon(s.spellID), color = PURPLE,
                     open = function() M.PlaceSpells({ id }); return "keep" end,
                 }
