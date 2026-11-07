@@ -1,20 +1,22 @@
--- One More Quest: /omq questarea (read-only probe, decision 440)
--- Finds out what WoW Forever tells an addon about the quest areas it highlights on the map, before the
--- tracker is built on them:
---   - which functions exist (quest places on a map, next waypoint, the map's quest area frame)
+-- One More Quest: /omq questarea (read-only probe, decisions 440 and 449)
+-- Finds out what WoW Forever tells an addon about the quest areas it highlights on the map:
+--   - which functions exist (quest places on a map, next waypoint, the inside test of the minimap)
 --   - the quest places on my current map (C_QuestLog.GetQuestsOnMap)
---   - per quest of my log: on this map?, next waypoint, waypoint text, distance from me in yards
---   - the area test: an own invisible QuestPOIFrame draws the area of one quest and is asked whether my
---     position lies inside (UpdateMouseOverTooltip), plus a coarse grid over the map (how much of it is area)
--- Nothing is changed in the game. Not in combat (the area test makes a frame). The last report is kept in
--- the saved variables (OMQDB.questareaReport).
+--   - per quest of my log: on this map?, next waypoint, waypoint text, inside its area now
+--     (C_Minimap.IsInsideQuestBlob, the test the game's own quest item glow uses)
+--   /omq questarea watch [sec]  writes every PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED of the game into the chat
+--                              ("entered" / "left" with the quest), and every change the inside test shows
+--                              once a second, for a while (default 300 s); /omq questarea stop ends it early
+-- v1.3.45 tried an own invisible QuestPOIFrame (DrawBlob, UpdateMouseOverTooltip): it never answered in the game.
+-- Nothing is changed in the game. The last report is kept in the saved variables (OMQDB.questareaReport, the
+-- watch lines in OMQDB.questareaWatch).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
 local P = {}
 OMQ.QuestAreaProbe = P
 
-P.MAX_QUESTS, P.MAX_MAP, P.GRID = 15, 10, 20
+P.MAX_QUESTS, P.MAX_MAP = 15, 10
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) or false end
 local function show(v)
@@ -52,7 +54,7 @@ P.NAMES = {
     "C_QuestLog.GetQuestsOnMap", "C_QuestLog.GetNextWaypoint", "C_QuestLog.GetNextWaypointForMap",
     "C_QuestLog.GetNextWaypointText", "C_QuestLog.IsOnMap", "C_QuestLog.GetQuestAdditionalHighlights",
     "C_QuestLog.GetMapForQuestPOIs", "C_QuestLog.SetMapForQuestPOIs", "C_SuperTrack.GetSuperTrackedQuestID",
-    "QuestPOIGetIconInfo", "GetQuestPOILeaderBoard", "C_Map.GetWorldPosFromMapPos", "C_Map.GetPlayerMapPosition",
+    "C_Minimap.IsInsideQuestBlob", "C_Map.GetWorldPosFromMapPos", "C_Map.GetPlayerMapPosition",
 }
 
 -- yards between me and a map point (x, y from 0 to 1)
@@ -67,30 +69,6 @@ local function yards(map, x, y)
     if inst and cont and cont ~= inst then return "other continent" end
     return math.floor(math.sqrt((wa - a) ^ 2 + (wb - b) ^ 2) + 0.5)
 end
-
--- the invisible area frame (made once)
-local area
-local function areaFrame(add)
-    if area ~= nil then return area or nil end
-    area = false
-    local ok, f = pcall(CreateFrame, "QuestPOIFrame", nil, UIParent)
-    if not ok or not f then add("area frame: cannot be made (" .. show(f) .. ")"); return nil end
-    if f.SetSize then pcall(f.SetSize, f, 512, 512) end
-    if f.SetPoint then pcall(f.SetPoint, f, "CENTER") end
-    if f.SetAlpha then pcall(f.SetAlpha, f, 0) end
-    if f.EnableMouse then pcall(f.EnableMouse, f, false) end
-    area = f
-    return f
-end
-
--- is the map point inside the drawn area? returns the quest ID the frame names and its tooltip count
-local function hit(f, x, y)
-    local ok, qid, n = pcall(f.UpdateMouseOverTooltip, f, x, y)
-    if not ok then return nil, nil, qid end
-    return qid, n
-end
-
-function P.Reset() area = nil end
 
 function P.Run()
     local out = {}
@@ -171,55 +149,20 @@ function P.Run()
         add(table.concat(parts, " | "))
     end
 
-    add("-- area test (an invisible quest area frame)")
-    if InCombatLockdown and InCombatLockdown() then
-        add("not in combat - run it again after the fight")
-    elseif not map then
-        add("no map")
+    add("-- inside test (C_Minimap.IsInsideQuestBlob)")
+    if not (C_Minimap and C_Minimap.IsInsideQuestBlob) then
+        add("missing")
     else
-        local f = areaFrame(add)
-        if f then
-            local need = { "SetMapID", "DrawNone", "DrawBlob", "UpdateMouseOverTooltip", "GetTooltipIndex" }
-            local lack = {}
-            for _, m in ipairs(need) do if type(f[m]) ~= "function" then lack[#lack + 1] = m end end
-            add(#lack == 0 and "frame has every method" or ("frame lacks: " .. table.concat(lack, ", ")))
-            if #lack == 0 then
-                pcall(f.Show, f)
-                local okm, em = pcall(f.SetMapID, f, map)
-                if not okm then add("SetMapID ERROR " .. show(em)) end
-                for _, q in ipairs(ids) do
-                    pcall(f.DrawNone, f)
-                    local okd, ed = pcall(f.DrawBlob, f, q.id, true)
-                    if not okd then add("quest " .. q.id .. ": DrawBlob ERROR " .. show(ed))
-                    else
-                        local here = "?"
-                        if px then
-                            local qid, n, err = hit(f, px, py)
-                            here = err and ("ERROR " .. show(err)) or (qid and ("inside (quest " .. show(qid) .. ", " .. show(n) .. " tooltips)") or "outside")
-                        end
-                        local cells, minx, maxx, miny, maxy, sx, sy = 0, 1, 0, 1, 0, 0, 0
-                        for gx = 0, P.GRID do
-                            for gy = 0, P.GRID do
-                                local x, y = gx / P.GRID, gy / P.GRID
-                                local qid = hit(f, x, y)
-                                if qid == q.id then
-                                    cells = cells + 1; sx, sy = sx + x, sy + y
-                                    minx, maxx = math.min(minx, x), math.max(maxx, x)
-                                    miny, maxy = math.min(miny, y), math.max(maxy, y)
-                                end
-                            end
-                        end
-                        local grid = cells == 0 and "no grid point inside"
-                            or string.format("%d grid points inside, box %.2f-%.2f / %.2f-%.2f, middle %.2f, %.2f", cells, minx, maxx, miny, maxy, sx / cells, sy / cells)
-                        add("quest " .. q.id .. ": me " .. here .. " | " .. grid)
-                    end
-                end
-                pcall(f.DrawNone, f)
-                pcall(f.Hide, f)
-            end
+        local inside = {}
+        for _, q in ipairs(ids) do
+            local ok, r = pcall(C_Minimap.IsInsideQuestBlob, q.id)
+            if not ok then inside[#inside + 1] = q.id .. " ERROR " .. show(r)
+            elseif r and not isSecret(r) then inside[#inside + 1] = q.id .. " '" .. show(q.title) .. "'"
+            elseif isSecret(r) then inside[#inside + 1] = q.id .. " SECRET" end
         end
+        add(#inside == 0 and "inside no area" or ("inside: " .. table.concat(inside, ", ")))
     end
-    add("(run it where a quest area shows on your map, best standing inside one)")
+    add("(run it standing inside a quest area; /omq questarea watch reports entering and leaving)")
 
     OMQDB = OMQDB or {}
     OMQDB.questareaReport = out
@@ -227,4 +170,74 @@ function P.Run()
     return out
 end
 
-OMQ:RegisterCommand("questarea", function() P.Run() end, "read-only report: what the client tells about the quest areas on the map")
+----------------------------------------------------------------------
+-- Watch: the game's event and the inside test once a second
+----------------------------------------------------------------------
+local frame = CreateFrame("Frame")
+local watchUntil, state, log, ticker = nil, {}, nil, nil
+
+local function title(id)
+    if C_QuestLog and C_QuestLog.GetTitleForQuestID then
+        local ok, t = pcall(C_QuestLog.GetTitleForQuestID, id)
+        if ok and type(t) == "string" and not isSecret(t) then return t end
+    end
+    return "quest " .. tostring(id)
+end
+local function note(text)
+    local line = string.format("%.1f %s", GetTime(), text)
+    if log then log[#log + 1] = line end
+    OMQ:Print("quest area: " .. text)
+end
+function P.IsWatching() return watchUntil ~= nil end
+
+function P.Poll()
+    if not watchUntil then return end
+    if GetTime() >= watchUntil then P.Stop(); return end
+    if not (C_Minimap and C_Minimap.IsInsideQuestBlob and C_QuestLog and C_QuestLog.GetNumQuestLogEntries) then return end
+    for i = 1, C_QuestLog.GetNumQuestLogEntries() do
+        local q = C_QuestLog.GetInfo(i)
+        if q and not q.isHeader and q.questID then
+            local ok, r = pcall(C_Minimap.IsInsideQuestBlob, q.questID)
+            if ok and not isSecret(r) then
+                r = r and true or false
+                if state[q.questID] ~= nil and state[q.questID] ~= r then
+                    note((r and "test says inside " or "test says outside ") .. title(q.questID) .. " (" .. q.questID .. ")")
+                end
+                state[q.questID] = r
+            end
+        end
+    end
+end
+
+frame:SetScript("OnEvent", function(_, event, qid, inside)
+    if event ~= "PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED" or not watchUntil then return end
+    if isSecret(qid) or isSecret(inside) then note("event with secret values"); return end
+    note((inside and "EVENT entered " or "EVENT left ") .. title(qid) .. " (" .. tostring(qid) .. ")")
+end)
+
+function P.Watch(seconds)
+    seconds = math.max(10, math.min(tonumber(seconds) or 300, 1800))
+    watchUntil, state, log = GetTime() + seconds, {}, {}
+    OMQDB = OMQDB or {}
+    OMQDB.questareaWatch = log
+    pcall(frame.RegisterEvent, frame, "PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED")
+    if C_Timer and C_Timer.NewTicker then ticker = C_Timer.NewTicker(1, P.Poll) end
+    P.Poll()
+    OMQ:Print("quest area watch for " .. seconds .. " s: walk into and out of a quest area (/omq questarea stop ends it)")
+end
+
+function P.Stop()
+    if not watchUntil then return end
+    watchUntil = nil
+    pcall(frame.UnregisterEvent, frame, "PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED")
+    if ticker and ticker.Cancel then ticker:Cancel() end
+    ticker = nil
+    OMQ:Print("quest area watch ended, " .. (log and #log or 0) .. " lines kept")
+end
+
+OMQ:RegisterCommand("questarea", function(arg)
+    local cmd, rest = (arg or ""):lower():match("^(%S*)%s*(.-)$")
+    if cmd == "watch" then return P.Watch(rest) end
+    if cmd == "stop" then return P.Stop() end
+    P.Run()
+end, "read-only report: what the client tells about the quest areas on the map; watch [sec] reports entering and leaving")
