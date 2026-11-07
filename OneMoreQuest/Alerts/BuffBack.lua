@@ -203,8 +203,12 @@ for _, e in ipairs({ "UNIT_AURA", "UNIT_SPELLCAST_SENT", "PLAYER_REGEN_ENABLED" 
 
 -- the new aura names its caster unit (when the game tells it)
 function B.FromAura(unit, info)
-    if unit ~= "player" or type(info) ~= "table" or info.isFullUpdate then return end
-    for _, a in ipairs(info.addedAuras or {}) do
+    if unit ~= "player" or type(info) ~= "table" then return end
+    -- in a fight the game hands out the update info as secret values: no test, no loop (fix row 451)
+    local full, added = info.isFullUpdate, info.addedAuras
+    if isSecret(full) or full or isSecret(added) or type(added) ~= "table" then return end
+    for _, a in ipairs(added) do
+        if isSecret(a) or type(a) ~= "table" then return end
         local src = a.sourceUnit
         if plain(src) and type(src) == "string" and plain(a.isHelpful) and a.isHelpful
             and UnitIsPlayer and UnitIsPlayer(src) and not (UnitIsUnit and UnitIsUnit(src, "player")) then
