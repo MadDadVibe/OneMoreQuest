@@ -148,10 +148,14 @@ function P.Session() return sessionAt ~= nil and not scan end
 function P.SessionAt() return sessionAt end
 function P.EndSession() sessionAt = nil end
 function P.Items() return store().items end
-function P.Progress() return scan and { results = scan.results, total = scan.results, state = scan.state, pages = scan.pages } or nil end
+function P.Progress() return scan and { results = scan.results, total = scan.results, state = scan.state, pages = scan.pages, tries = scan.tries } or nil end
 P.last = nil               -- how the last scan ended: { ok, items, secs, results, pages, why, partial }
 P.WAIT = 30                -- seconds to wait for the next answer of the auction house
 P.PAGES = 200              -- at most this many pages of the list, so a scan always ends
+-- decision 447: the game's own window searches when it opens; a search of ours in the same moment can go
+-- unanswered. The scan waits FIRST_WAIT seconds after the start, and asks again (TRIES times) when no list came
+-- within ANSWER_WAIT seconds or the game reports a failed browse.
+P.FIRST_WAIT, P.ANSWER_WAIT, P.TRIES = 2, 5, 3
 
 local function helper() return OMQ.AuctionHelper end
 local function A() return C_AuctionHouse end
@@ -259,6 +263,7 @@ local function onAnswer()
     scan.lastAt = now()
     local n = readList()
     if n == 0 then return end                              -- an empty first answer: the list comes a moment later (decision 326)
+    scan.answered = true
     if full() then finish(true)
     elseif scan.pages >= P.PAGES then finish(false, "the list did not end after " .. scan.pages .. " pages", true)
     else scan.more = true; P.Step() end
@@ -272,12 +277,25 @@ function P.Step()
     local H = helper()
     if not (api and H and H.open) then finish(false, "the window closed"); return end
     if scan.state == "start" then
+        if now() - scan.startedAt < P.FIRST_WAIT then return end
         if yielding() or not throttleReady() then return end
-        scan.state, scan.lastAt, scan.pages = "browsing", now(), 1
+        scan.state, scan.lastAt, scan.pages, scan.tries = "browsing", now(), 1, 1
         local ok, err = pcall(own, api.SendBrowseQuery, P.QUERY())
         if not ok then finish(false, "SendBrowseQuery failed: " .. tostring(err)) end
     elseif scan.state == "browsing" then
-        if scan.more then
+        if not scan.answered and now() - scan.lastAt > P.ANSWER_WAIT then
+            -- no list yet: ask again, a few times (decision 447)
+            if scan.tries >= P.TRIES then
+                -- a list without our answer may be the game window's: its prices are taken, nothing is removed
+                if readList() > 0 then finish(false, "no answer, took the list that was there", true)
+                else finish(false, "the auction house did not answer " .. scan.tries .. " searches") end
+                return
+            end
+            if not throttleReady() then return end
+            scan.tries, scan.lastAt, scan.results = scan.tries + 1, now(), 0
+            local ok, err = pcall(own, api.SendBrowseQuery, P.QUERY())
+            if not ok then finish(false, "SendBrowseQuery failed: " .. tostring(err)) end
+        elseif scan.more then
             if not throttleReady() then return end
             scan.more, scan.lastAt, scan.pages = false, now(), scan.pages + 1
             local ok, err = pcall(own, api.RequestMoreBrowseResults)
@@ -313,7 +331,8 @@ function P.Cancel() if scan then finish(false, "stopped") end end
 ----------------------------------------------------------------------
 local ev = CreateFrame("Frame")
 for _, e in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "MERCHANT_SHOW", "MERCHANT_UPDATE",
-                     "COMMODITY_SEARCH_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" }) do
+                     "COMMODITY_SEARCH_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED",
+                     "AUCTION_HOUSE_BROWSE_FAILURE" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 
@@ -448,6 +467,8 @@ ev:SetScript("OnEvent", function(_, event, a1)
         if event == "COMMODITY_SEARCH_RESULTS_UPDATED" then learnCommodity(a1)
         elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
             if scan then onAnswer() else learnBrowse() end
+        elseif event == "AUCTION_HOUSE_BROWSE_FAILURE" then
+            if scan and scan.state == "browsing" and not scan.answered then scan.lastAt = 0 end   -- ask again at once (decision 447)
         elseif event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
             local n = P.LearnVendor()
             if event == "MERCHANT_SHOW" and C_Timer and C_Timer.After then

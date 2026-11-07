@@ -395,6 +395,7 @@ function AH.VeilText()
     local pr = OMQ.Prices and OMQ.Prices.Progress and OMQ.Prices.Progress()
     if not pr then return "" end
     if (pr.results or 0) > 0 then return string.format("%d items read, page %d...", pr.results, pr.pages or 1) end
+    if (pr.tries or 1) > 1 then return string.format("waiting for the auction house (asked %d times)...", pr.tries) end
     return "waiting for the auction house..."
 end
 local function cancelButton(parent)
