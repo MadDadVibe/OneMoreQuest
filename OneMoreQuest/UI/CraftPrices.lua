@@ -289,14 +289,51 @@ local function money(c)
     if C and C.Money then return C.Money(c) end
     return c .. "c"
 end
-function P.TooltipLines(id)
+-- how many pieces the hovered item is (decision 430): the item GUID of the tooltip data, else the bag slot of the
+-- tooltip's owner. Anything unreadable or secret counts as one piece.
+local function stackCount(tt, data)
+    local n
+    local C = C_Item
+    if data and data.guid and not isSecret(data.guid) and C and C.GetItemLocation and C.GetStackCount then
+        local ok, loc = pcall(C.GetItemLocation, data.guid)
+        if ok and loc then
+            local ok2, c = pcall(C.GetStackCount, loc)
+            if ok2 then n = c end
+        end
+    end
+    if n == nil and tt and tt.GetOwner and C_Container and C_Container.GetContainerItemInfo then
+        local ok, owner = pcall(tt.GetOwner, tt)
+        if ok and type(owner) == "table" and owner.GetID then
+            local bag
+            if owner.GetBagID then bag = owner:GetBagID()
+            elseif owner.GetName and tostring(owner:GetName() or ""):match("^ContainerFrame%d+Item%d+$")
+                and owner.GetParent and owner:GetParent() and owner:GetParent().GetID then
+                bag = owner:GetParent():GetID()                -- older bag buttons: the bag frame holds the bag id
+            end
+            local slot = owner:GetID()
+            if type(bag) == "number" and type(slot) == "number" and not isSecret(bag) and not isSecret(slot) then
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bag, slot)
+                if ok2 and type(info) == "table" then n = info.stackCount end
+            end
+        end
+    end
+    if type(n) ~= "number" or isSecret(n) or n < 1 then return 1 end
+    return math.floor(n)
+end
+P._stackCount = stackCount
+-- the price of the whole stack like the game's own vendor line, one piece behind it (decision 430)
+function P.TooltipLines(id, count)
     local a, q, at = P.Auction(id)
     local v = P.Vendor(id)
     if not a and not v then return nil end
+    count = math.max(1, math.floor(tonumber(count) or 1))
     local best, src = P.Cost(id)
-    local lines = { { "Price: " .. money(best) .. (src == "vendor" and "  (vendor)" or "  (auction house)"), 0.85, 0.75, 0.4 } }
+    local tag = src == "vendor" and "  (vendor)" or "  (auction house)"
+    local first = count > 1 and ("Price: " .. money(best * count) .. "  (" .. money(best) .. " each)" .. tag)
+        or ("Price: " .. money(best) .. tag)
+    local lines = { { first, 0.85, 0.75, 0.4 } }
     if a and v then
-        lines[#lines + 1] = { string.format("Auction house %s - vendor %s", money(a), money(v)), 0.6, 0.6, 0.6 }
+        lines[#lines + 1] = { string.format("Auction house %s - vendor %s%s", money(a), money(v), count > 1 and " each" or ""), 0.6, 0.6, 0.6 }
     end
     if a then
         local live = store().items[id] and store().items[id].t
@@ -312,7 +349,7 @@ local function onTip(tt, data)
         id = link and tonumber(tostring(link):match("item:(%d+)"))
     end
     if not id or isSecret(id) then return end
-    local lines = P.TooltipLines(id)
+    local lines = P.TooltipLines(id, stackCount(tt, data))
     if not lines then return end
     for _, l in ipairs(lines) do tt:AddLine(l[1], l[2], l[3], l[4]) end
     if tt.Show then tt:Show() end
