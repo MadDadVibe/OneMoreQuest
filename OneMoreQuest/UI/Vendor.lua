@@ -110,6 +110,29 @@ function V.BestFood()
     return best
 end
 
+-- healing and mana potions (decision 442): the need level of a potion of these lines, and the best I carry and can use
+V.POTION_LINES = { "heal", "mana" }
+function V.PotionLine(id)
+    for _, line in ipairs(V.POTION_LINES) do
+        local L = OMQ.BuyLines and OMQ.BuyLines[line]
+        for _, it in ipairs(L and L[2] or {}) do if it[1] == id then return line, it[2] end end
+    end
+end
+function V.BestPotions()
+    local best = {}
+    local C = C_Container
+    if not (C and C.GetContainerNumSlots) then return best end
+    local lvl = level()
+    for bag = 0, OMQ.LastBag() do
+        for slot = 1, C.GetContainerNumSlots(bag) or 0 do
+            local it = C.GetContainerItemInfo(bag, slot)
+            local line, need = V.PotionLine(it and it.itemID)
+            if line and need <= lvl and need > (best[line] or 0) then best[line] = need end
+        end
+    end
+    return best
+end
+
 -- profession tools (decision 299): kept while I have one of their professions, else sold.
 -- Thieves' Tools belong to rogues, not to a profession: never sold.
 V.TOOL_PROFS = { [6219] = { "Engineering" }, [10498] = { "Engineering" }, [9149] = { "Alchemy" } }
@@ -160,6 +183,13 @@ function V.Reason(it, extra, ctx)
         if #profs == 0 or not ctx.profs then return nil end
         for _, p in ipairs(profs) do if ctx.profs[p] then return nil end end
         return "tool", "tool of a profession you do not have (" .. table.concat(profs, ", ") .. ")"
+    end
+    -- a healing or mana potion when I carry a stronger one I can use (decision 442)
+    local pline, pneed = V.PotionLine(id)
+    if pline then
+        local best = ctx.potions and ctx.potions[pline]
+        if best and pneed < best then return "old", "old " .. (pline == "heal" and "healing" or "mana") .. " potion - you carry better" end
+        return nil
     end
     -- food and drink: only old ones, never because of the auction house (decision 299)
     local kind = V.FoodKind(id)
@@ -224,7 +254,7 @@ function V.Scan()
     for i = #list, 1, -1 do list[i] = nil end
     local C = C_Container
     if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return list end
-    local ctx = { sets = setItems(), food = V.BestFood(), profs = V.MyProfs() }
+    local ctx = { sets = setItems(), food = V.BestFood(), profs = V.MyProfs(), potions = V.BestPotions() }
     for bag = 0, OMQ.LastBag() do
         for slot = 1, C.GetContainerNumSlots(bag) or 0 do
             local it = C.GetContainerItemInfo(bag, slot)

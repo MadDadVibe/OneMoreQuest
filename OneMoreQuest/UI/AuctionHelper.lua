@@ -122,9 +122,15 @@ local function needed(itemID)
     return ok and r and r.order and #r.order > 0 or false
 end
 -- a piece of gear that would be an upgrade for me
+-- only gear I can put on now counts (decision 442): mail for a warrior below level 40 is no upgrade, however good
 local function upgradeForMe(link, equipLoc)
     local LP = OMQ.LootPreview
     if not (LP and LP.Gain and equipLoc and equipLoc ~= "") then return false end
+    local SC = OMQ.Score
+    if SC and SC.CanUse and SC.MyClass then
+        local ok, can = pcall(SC.CanUse, link, SC.MyClass(), UnitLevel and UnitLevel("player") or 1)
+        if ok and can == false then return false end
+    end
     local ok, g = pcall(LP.Gain, link, equipLoc)
     return ok and g and g > 0 or false
 end
