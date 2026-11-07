@@ -8,6 +8,13 @@
 --   QG|proto|guid|questID            the quest left my log (turned in or abandoned)
 -- counts = "n/m" per objective, separated by ",", "+" at the end when the objective is finished.
 -- Own progress is always sent, whatever the option or the master switch says (decision 156).
+-- Progress of another dad opens a card here only when I have that quest too (decision 453).
+-- Nearby quests (decision 453): a quest of my log with open objectives gets its card while I stand in its
+-- quest area on the map (C_Minimap.IsInsideQuestBlob, PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED), however far
+-- from its middle, or while I am within NEAR_YD of its point on the map (C_QuestLog.GetQuestsOnMap; it goes
+-- beyond FAR_YD). After leaving, the card stays GRACE seconds. The quest entered last comes to the front.
+-- Finished quests and quests without objectives are left out. A right click closes the nearby cards until
+-- I have left them.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -22,7 +29,9 @@ local READ_DELAY = 0.2           -- the quest log settles after the event
 local MAX_OBJ = 8
 local MAX_COLS = 5
 local FLASH_SECONDS = 1.3
+local NEAR_YD, FAR_YD, GRACE, NEAR_CHECK, PREP_YD = 200, 220, 10, 1, 400
 T.HIDE_AFTER, T.STAMP_SECONDS = HIDE_AFTER, STAMP_SECONDS
+T.NEAR_YD, T.FAR_YD, T.GRACE, T.PREP_YD = NEAR_YD, FAR_YD, GRACE, PREP_YD
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) or false end
 local function now() return GetTime() end
@@ -46,6 +55,10 @@ local sendAt = {}            -- questID -> time to send QP
 local answered = {}          -- questID -> true: we sent our QR for the open card
 local hovering = false
 local readAt = nil
+local near = {}              -- questID -> { on, area, lastAt }: nearby now (on) or within the grace after leaving
+local dist = {}              -- questID -> yards to its point on my map, from the last check
+local dismissed = {}         -- questID -> true: closed by a right click while nearby, until I left it
+local nearAt = 0             -- time of the next nearby check
 
 ----------------------------------------------------------------------
 -- Counts
@@ -296,6 +309,7 @@ end
 OMQ:RegisterMessage("QP", function(f)
     local guid, qid = sender(f)
     if not guid or not store(qid, guid, f[3]) then return end
+    if not mine[qid] then return end                     -- not my quest: no card here (decision 453)
     progress(qid, guid)
 end)
 
@@ -316,11 +330,118 @@ OMQ:RegisterMessage("QG", function(f)
 end)
 
 ----------------------------------------------------------------------
+-- Nearby quests (decision 453)
+----------------------------------------------------------------------
+local function xyOf(v)
+    if type(v) ~= "table" then return nil end
+    if v.GetXY then local ok, x, y = pcall(v.GetXY, v); if ok then return x, y end end
+    return v.x, v.y
+end
+local function number(v) return type(v) == "number" and not isSecret(v) end
+
+-- a quest that the nearness can show: in my log with open objectives
+function T.Trackable(qid)
+    local m = mine[qid]
+    if not (m and #m.counts > 0) or T.Complete(m.counts) then return false end
+    local CQ = C_QuestLog
+    if CQ and CQ.IsComplete then
+        local ok, v = pcall(CQ.IsComplete, qid)
+        if ok and v == true and not isSecret(v) then return false end
+    end
+    return true
+end
+
+local function inside(qid)
+    if not (C_Minimap and C_Minimap.IsInsideQuestBlob) then return false end
+    local ok, v = pcall(C_Minimap.IsInsideQuestBlob, qid)
+    return ok and v == true and not isSecret(v)
+end
+
+-- yards from me to the point of every quest on my current map
+local function distances()
+    local out = {}
+    if not (UnitPosition and C_Map and C_Map.GetBestMapForUnit and C_Map.GetWorldPosFromMapPos and CreateVector2D
+            and C_QuestLog and C_QuestLog.GetQuestsOnMap) then return out end
+    local a, b, _, inst = UnitPosition("player")
+    if not (number(a) and number(b)) then return out end
+    local okM, map = pcall(C_Map.GetBestMapForUnit, "player")
+    if not okM or not number(map) then return out end
+    local ok, list = pcall(C_QuestLog.GetQuestsOnMap, map)
+    if not ok or type(list) ~= "table" then return out end
+    for _, q in ipairs(list) do
+        local qid = type(q) == "table" and q.questID
+        if number(qid) and number(q.x) and number(q.y) then
+            local okW, cont, vec = pcall(C_Map.GetWorldPosFromMapPos, map, CreateVector2D(q.x, q.y))
+            local wa, wb
+            if okW then wa, wb = xyOf(vec) end
+            if number(wa) and number(wb) and not (inst and cont and cont ~= inst) then
+                local d = math.sqrt((wa - a) ^ 2 + (wb - b) ^ 2)
+                if not out[qid] or d < out[qid] then out[qid] = d end
+            end
+        end
+    end
+    return out
+end
+
+-- held by the nearness: nearby now or within the grace, and not closed by hand
+local function held(qid, t)
+    local n = near[qid]
+    return n ~= nil and not dismissed[qid] and (n.on or (t or now()) < n.lastAt + GRACE)
+end
+T.Held = held
+
+function T:CheckNear()
+    local t = now()
+    nearAt = t + NEAR_CHECK
+    dist = distances()
+    local entered = {}
+    for qid in pairs(mine) do
+        if T.Trackable(qid) then
+            local n, d = near[qid], dist[qid]
+            local area = inside(qid)
+            local on = area or (d ~= nil and (d <= NEAR_YD or (n ~= nil and n.on and d <= FAR_YD)))
+            if on then
+                if not (n and n.on) and not dismissed[qid] then entered[#entered + 1] = qid end
+                near[qid] = { on = true, area = area, lastAt = t }
+            elseif n then
+                if n.on then n.on, n.lastAt = false, t end
+                if t >= n.lastAt + GRACE then near[qid], dismissed[qid] = nil, nil end
+            end
+        else
+            near[qid], dismissed[qid] = nil, nil
+        end
+    end
+    for qid in pairs(near) do if not mine[qid] then near[qid], dismissed[qid] = nil, nil end end
+    table.sort(entered, function(a, b) return (dist[a] or 1e9) > (dist[b] or 1e9) end)   -- the nearest ends in front
+    for _, qid in ipairs(entered) do toFront(qid) end
+    local added = #entered
+    for qid in pairs(near) do                            -- a held card that went another way comes back
+        if held(qid, t) and not cardIndex(qid) then cards[#cards + 1] = qid; added = added + 1 end
+    end
+    if added > 0 then
+        visible = true
+        fire()
+    end
+end
+
+-- quests whose items are made ready at the start of a fight: nearby, held or within PREP_YD
+function T:Around()
+    local out, t = {}, now()
+    for qid in pairs(mine) do
+        if T.Trackable(qid) and (held(qid, t) or (dist[qid] and dist[qid] <= PREP_YD)) then out[qid] = true end
+    end
+    return out
+end
+function T:Near() return near end
+function T:Distance(qid) return dist[qid] end
+
+----------------------------------------------------------------------
 -- Clock
 ----------------------------------------------------------------------
 function T:Update()
     local t = now()
     if readAt and t >= readAt then readAt = nil; self:Read() end
+    if t >= nearAt then self:CheckNear() end
     for qid, at in pairs(sendAt) do
         if t >= at then sendAt[qid] = nil; sendCounts("QP", qid) end
     end
@@ -355,7 +476,7 @@ function T:Update()
         local removed = false
         for i = #cards, 1, -1 do
             local qid = cards[i]
-            if t >= (cardAt[qid] or lastProgress) + HIDE_AFTER then
+            if t >= (cardAt[qid] or lastProgress) + HIDE_AFTER and not held(qid, t) then
                 table.remove(cards, i)
                 cardAt[qid], judgeAt[qid], answered[qid] = nil, nil, nil
                 if i < idx then idx = idx - 1 end
@@ -411,7 +532,10 @@ function T:Index() return idx end
 function T:Stamp() return stamp end
 function T:SetHover(on) hovering = on and true or false end
 function T:HideAt() return lastProgress + HIDE_AFTER end          -- the last card goes then
-function T:CardHideAt(qid) return cardAt[qid] and (cardAt[qid] + HIDE_AFTER) or nil end
+function T:CardHideAt(qid)
+    if held(qid) then return nil end
+    return cardAt[qid] and (cardAt[qid] + HIDE_AFTER) or nil
+end
 
 function T:Next(step)
     if stamp or #cards < 2 then return end
@@ -419,8 +543,10 @@ function T:Next(step)
     fire()
 end
 
--- right click: closed on this client until the next progress of any dad (decision 157)
+-- right click: closed on this client until the next progress of any dad (decision 157); nearby quests stay
+-- away until I have left them (decision 453)
 function T:Close()
+    for qid, n in pairs(near) do if n then dismissed[qid] = true end end
     self:Hide()
 end
 
@@ -466,7 +592,9 @@ local frame = CreateFrame("Frame")
 for _, e in ipairs({ "QUEST_LOG_UPDATE", "UNIT_QUEST_LOG_CHANGED", "QUEST_WATCH_UPDATE", "QUEST_REMOVED", "QUEST_TURNED_IN" }) do
     pcall(frame.RegisterEvent, frame, e)
 end
+pcall(frame.RegisterEvent, frame, "PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED")
 frame:SetScript("OnEvent", function(_, event, unit)
+    if event == "PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED" then nearAt = 0; return end   -- check at the next tick
     if event == "UNIT_QUEST_LOG_CHANGED" and unit ~= "player" then return end
     readAt = readAt or (now() + READ_DELAY)
 end)
