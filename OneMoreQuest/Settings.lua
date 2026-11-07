@@ -29,6 +29,7 @@ local LABEL = {
     talent = "Unspent talent points",
     ammo = "Ammo below 200",
     upgrade = "Upgrade in your bags: put it on",
+    buffback = "Buff back a player who buffed you",
 }
 
 local function alertItems()

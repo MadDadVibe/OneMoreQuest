@@ -90,10 +90,9 @@ end
 -- What to cast on a group member. A rank cannot be cast on a target more than 10 levels
 -- below the level the rank was learned at; the action bar then picks a lower rank, a plain
 -- name does not. So for a low level target we name the highest rank that still works.
-local function castFor(castId, unit)
+local function castForLevel(castId, lvl)
     local name = spellName(castId)
-    if not name or unit == "player" then return name end
-    local lvl = UnitLevel and UnitLevel(unit)
+    if not name then return name end
     if type(lvl) ~= "number" or isSecret(lvl) or lvl <= 0 then return name end
     local ranks = learnedRanks(name)
     if not ranks or #ranks < 2 then return name end
@@ -105,6 +104,13 @@ local function castFor(castId, unit)
     pick = pick or ranks[1]
     if pick == ranks[#ranks] then return name end
     return name .. "(" .. pick.sub .. ")"
+end
+-- the same for a player outside the group whose level is known (the buff back card, decision 435)
+M.CastForLevel = castForLevel
+
+local function castFor(castId, unit)
+    if unit == "player" then return spellName(castId) end
+    return castForLevel(castId, UnitLevel and UnitLevel(unit))
 end
 
 -- Names of the helpful auras on a unit, or nil when they cannot be read.

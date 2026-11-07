@@ -97,7 +97,7 @@ function M:Evaluate()
                                 active[a.key] = a
                             else
                                 cur.text, cur.icon, cur.color = a.text, a.icon or cur.icon, a.color or cur.color
-                                cur.cast, cur.unit, cur.go, cur.open = a.cast, a.unit, a.go, a.open
+                                cur.cast, cur.unit, cur.go, cur.open, cur.macro = a.cast, a.unit, a.go, a.open, a.macro
                                 cur.useItem, cur.weapon = a.useItem, a.weapon
                                 cur.tipLines, cur.tipLink = a.tipLines, a.tipLink
                                 cur.title, cur.sub, cur.tag = a.title, a.sub, a.tag
@@ -520,6 +520,8 @@ local function makeCard(i)
         end
         -- a drink card is not dismissed either: it vanishes while drinking (decision 219)
         if rawget(self, "useItem") and button ~= "RightButton" then return end
+        -- a macro card (buff back, decision 435) is not dismissed either: it vanishes once the cast went out
+        if rawget(self, "macro") and button ~= "RightButton" then return end
         -- a buff card is not dismissed by the cast: it vanishes once the buff is on
         if self.cast and button ~= "RightButton" then
             -- diagnostics: the secure cast needs these attributes
@@ -608,13 +610,18 @@ function M:Render()
             card.key = a.key
             card.go = a.go or false
             card.cast = a.cast or false
+            card.macro = a.macro or false
             card.useItem = (not a.weapon) and a.useItem or false
             card.weapon = a.weapon and a.useItem or false
             card.open = a.open or false
             card.tipLines = a.tipLines or false
             card.tipLink = a.tipLink or false
             if card.SetAttribute and not (InCombatLockdown and InCombatLockdown()) then
-                if a.cast and not moveMode then
+                if a.macro and not moveMode then
+                    -- a player outside the group: the click targets him by name and casts (decision 435)
+                    card:SetAttribute("type1", "macro")
+                    card:SetAttribute("macrotext1", a.macro)
+                elseif a.cast and not moveMode then
                     card:SetAttribute("type1", "spell")
                     card:SetAttribute("spell1", a.cast)
                     card:SetAttribute("unit1", a.unit or "player")
@@ -644,6 +651,7 @@ function M:Render()
             card.key = nil
             card.go = false
             card.cast = false
+            card.macro = false
             card.open = false
             card.weapon, card.wShow = false, false
             M.RefreshWeapons(card)

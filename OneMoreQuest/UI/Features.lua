@@ -42,6 +42,7 @@ FE.SECTIONS = {
         "Spells not on an action bar, placed with one click",
         "Dungeon quests you could still take, when you leave a town, a city or a flight master",
         "Missing buffs, auras, shields, armors, imbues and poisons, cast with one click",
+        "A player outside the group buffed you: one click gives your class's buff back (Fortitude, Arcane Intellect, Mark of the Wild, a Blessing)",
         "Repair, also before you leave a city or take a flight",
         "Buy drinks, and a reminder to drink when your mana is low; mages conjure water with one click instead",
         "Profession training and the tool a profession needs",
