@@ -366,15 +366,9 @@ function AH.Scanning()
     local B = OMQ.AuctionBuy
     return (AH.view == "buy" and B and B.Pending and B.Pending()) and true or false
 end
--- a click that does nothing because a scan runs says so in the chat (decision 289)
-local lastNote = 0
-function AH.WaitNote()
-    if not AH.Scanning() then return end
-    local t = now()
-    if t - lastNote < 2 then return end
-    lastNote = t
-    OMQ:Print("auction helper: still scanning the auction house - please wait a moment")
-end
+-- a click that does nothing because a scan runs: no chat line any more (decision 441; was decision 289), the
+-- panel shows the scan and the buttons flash when the next click is taken
+function AH.WaitNote() end
 local function paintScan()
     if panel and panel.scan then panel.scan:SetShown(AH.Scanning()) end
     -- while the whole house is read the panel and the game's window are covered (decisions 343, 431)

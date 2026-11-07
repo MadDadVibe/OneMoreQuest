@@ -672,15 +672,16 @@ end
 -- what I wear in the four bag slots: { normal = smallest slots (0 = an empty slot), kinds = { [classID.."/"..sub] = slots } }
 function B.WornBags()
     local C = C_Container
-    local smallest, kinds = nil, {}
+    local smallest, kinds, sizes = nil, {}, {}
     for bag = 1, (NUM_BAG_SLOTS or 4) do
         local inv = C and C.ContainerIDToInventoryID and C.ContainerIDToInventoryID(bag)
         local id = inv and GetInventoryItemID and GetInventoryItemID("player", inv)
         local n = C and C.GetContainerNumSlots and C.GetContainerNumSlots(bag) or 0
-        if not id or n == 0 then smallest = 0
+        if not id or n == 0 then smallest = 0; sizes[#sizes + 1] = 0
         else
             local _, _, _, _, _, classID, sub = instant(id)
             if classID == 1 and (sub or 0) == 0 then
+                sizes[#sizes + 1] = n
                 if not smallest or n < smallest then smallest = n end
             else
                 local k = (classID or 0) .. "/" .. (sub or 0)
@@ -694,7 +695,15 @@ function B.WornBags()
         local n = C and C.GetContainerNumSlots and C.GetContainerNumSlots(R) or 0
         kinds[rk] = math.max(kinds[rk] or 0, n)
     end
-    return { normal = smallest, kinds = kinds }
+    return { normal = smallest, kinds = kinds, sizes = sizes }
+end
+-- how many of my bag slots a bag of this kind and size would make bigger (decision 441): a normal bag every
+-- smaller normal bag or empty slot, a special bag one
+function B.Upgrades(worn, kind, slots)
+    if kind ~= "1/0" then return 1 end
+    local n = 0
+    for _, s in ipairs(worn.sizes or {}) do if s < slots then n = n + 1 end end
+    return math.max(1, n)
 end
 
 -- which special bags I could use: "1/2" herbs, "1/3" enchanting, "1/4" engineering, "1/1" soul, "11/2" quiver, "11/3" ammo pouch
@@ -769,6 +778,7 @@ local function judgeBags()
         c.key, c.state, c.anyKey = "g" .. t, "price", true
         c.onResult = function(x) x.offers = readOffers(x); x.checkedAt = now(); x.state = #x.offers > 0 and "ok" or "none" end
         c.replaces = (k == "1/0") and worn.normal or (worn.kinds[k] or 0)
+        c.upgrades, c.boughtN = B.Upgrades(worn, k, c.slots), 0
         bagCands[#bagCands + 1] = c
     end
     -- normal bags first, then the reagent bags, then the other special kinds; within a kind the biggest first
@@ -872,7 +882,9 @@ function B.Bags()
     local out = {}
     local never = (db()).never
     for _, c in ipairs(bagCands) do
-        if c.state == "ok" and not never[c.itemID] and not c.bought then out[#out + 1] = c end
+        -- a bag of which one was just bought stays in view while its next offer is searched (decision 441)
+        local again = c.state == "price" and (c.boughtN or 0) > 0
+        if (c.state == "ok" or again) and not never[c.itemID] and not c.bought then out[#out + 1] = c end
     end
     B.bagsMore = math.max(0, #out - B.BAG_ROWS)
     -- every bag type gets its first (biggest) row before one type fills them all: the reagent bag is always shown
@@ -1190,7 +1202,15 @@ function done(ok, why)
     end
     if b and b.row then
         if ok and not b.row.bagKind then B.Bought(b.row.itemID, b.qty, b.base); B.Consume(b.row, b.qty) end
-        if b.row.bagKind then b.row.bought = ok or nil
+        if b.row.bagKind then
+            -- a bag stays while more of my slots would get bigger (decision 441): 3 bags of 6 slots, one 8 bought,
+            -- the row stays for the other two; the next offer is searched again
+            local g = b.row
+            if ok then
+                g.boughtN = (g.boughtN or 0) + 1
+                if g.boughtN >= (g.upgrades or 1) then g.bought = true
+                else g.fresh, g.state = nil, "price" end
+            end
         elseif not ok then b.row.state, b.row.live, b.row.estimate = "price", true, nil end    -- failed: a real search of the offers, no estimate (decision 402)
     end
     if not ok and why then OMQ:Print("auction helper: " .. why) end
@@ -1511,9 +1531,10 @@ function B.Render(panel, top)
             r.icon:SetTexture(icon or select(5, instant(g.itemID)))
             r.name:SetText(name or ("item " .. g.itemID)); r.name:SetTextColor(qColor(quality))
             local what = B.KindLabel(g.bagKind) or "bag"
-            r.sub:SetText(g.replaces == 0 and (what .. " - an empty bag slot") or string.format("%s - instead of %d slots", what, g.replaces))
+            r.sub:SetText((g.replaces == 0 and (what .. " - an empty bag slot") or string.format("%s - instead of %d slots", what, g.replaces))
+                .. (((g.boughtN or 0) > 0) and string.format(" (%d of %d bought)", g.boughtN, g.upgrades or 1) or ""))
             r.top:SetText("|cff40e060" .. g.slots .. " slots|r")
-            r.bottom:SetText((buying and buying.row == g) and "Buying..." or (g.bought and "Bought") or (g.checking and "Checking...")
+            r.bottom:SetText((buying and buying.row == g) and "Buying..." or (g.bought and "Bought") or ((g.checking or g.state == "price") and "Checking...")
                 or (B.Fresh(g) and ("|cff40e060Click: buy|r " .. money0(B.Cost(g, 1)))) or money0(B.Cost(g, 1)))
             y = y + 40
         end
