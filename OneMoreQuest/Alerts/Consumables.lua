@@ -102,6 +102,50 @@ function C.Active(id, kind, auras)
     return auras[s] and true or false
 end
 
+-- a scroll does not stack with the class buff of the same stat (Arcane Intellect, Power Word:
+-- Fortitude, Divine Spirit): no reminder while such a buff is on that is as strong or stronger,
+-- whoever cast it. Spell ID = the stat it gives; scrolls by their place in the buy line (weakest first).
+C.CLASS_BUFF = {
+    s_int = { [1459] = 2, [1460] = 7, [1461] = 15, [10156] = 22, [10157] = 31, [23028] = 31 },    -- Arcane Intellect, Brilliance
+    s_sta = { [1243] = 3, [1244] = 8, [1245] = 20, [2791] = 32, [10937] = 43, [10938] = 54,         -- Power Word: Fortitude
+              [21562] = 43, [21564] = 54 },                                                        -- Prayer of Fortitude
+    s_spi = { [14752] = 17, [14818] = 23, [14819] = 33, [27841] = 40, [27681] = 40 },              -- Divine Spirit, Prayer of Spirit
+}
+C.SCROLL_STAT = { s_int = { 4, 8, 12, 16 }, s_sta = { 4, 8, 12, 16 }, s_spi = { 3, 7, 11, 15 } }
+local scrollOf
+local function scrollLine(id)
+    if not scrollOf then
+        scrollOf = {}
+        for key in pairs(C.SCROLL_STAT) do
+            local L = OMQ.BuyLines and OMQ.BuyLines[key]
+            for i, it in ipairs(L and L[2] or {}) do scrollOf[it[1]] = { key, i } end
+        end
+    end
+    local s = scrollOf[id]
+    if s then return s[1], s[2] end
+end
+-- the name of the class buff that makes this scroll useless, or nil
+function C.BetterBuff(id, auras)
+    local key, tier = scrollLine(id)
+    if not key or not auras then return nil end
+    local need = C.SCROLL_STAT[key][tier] or 0
+    local ids = auras.__ids or {}
+    local found = false
+    for sid, amount in pairs(C.CLASS_BUFF[key]) do
+        if ids[sid] then
+            found = true
+            if amount >= need then return spellName(sid) or "a class buff" end
+        end
+    end
+    if found then return nil end                     -- only a weaker rank is on: the scroll still helps
+    -- by name, when the buff's spell ID cannot be read: the rank is unknown, it counts as strong enough
+    for sid in pairs(C.CLASS_BUFF[key]) do
+        local n = spellName(sid)
+        if type(n) == "string" and not isSecret(n) and auras[n] then return n end
+    end
+    return nil
+end
+
 function C.Check()
     local mode = C.Mode()
     if mode == "never" or not OMQ.BuyKnown then return nil end
@@ -130,7 +174,8 @@ function C.Check()
                 local s = (kind == "stone" or kind == "oil") and "weapon" or (kind == "food" and "food") or spellOf(id)
                 local fits = kind ~= "stone" or not OMQ.AuctionBuy or not OMQ.AuctionBuy.StoneFits
                     or OMQ.AuctionBuy.StoneFits(id) ~= false                      -- weightstone not on a blade (decision 426)
-                if name and fits and (minLevel or 0) <= level and s and not spells[s] and C.Active(id, kind, auras) == false then
+                if name and fits and (minLevel or 0) <= level and s and not spells[s] and C.Active(id, kind, auras) == false
+                    and not (kind == "scroll" and C.BetterBuff(id, auras)) then
                     spells[s] = true
                     local how = (kind == "stone" or kind == "oil") and "left click, then click your weapon" or "left click uses it"
                     out[#out + 1] = {
@@ -179,6 +224,8 @@ function C.Explain()
                 elseif kind == "stone" and OMQ.AuctionBuy and OMQ.AuctionBuy.StoneFits
                     and OMQ.AuctionBuy.StoneFits(id) == false then why = "does not fit your weapon (blade: sharpening stone, blunt: weightstone)"
                 elseif not s then why = "its buff spell is not known yet"
+                elseif kind == "scroll" and C.BetterBuff(id, auras) then
+                    why = "not needed: " .. C.BetterBuff(id, auras) .. " is on (as strong or stronger, does not stack)"
                 else
                     local a = C.Active(id, kind, auras)
                     why = (a == true and "buff is on") or (a == false and "buff missing -> reminder") or "buff cannot be read"
