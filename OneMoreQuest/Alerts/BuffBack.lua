@@ -181,13 +181,11 @@ function B.Check()
                 tipLines = { "Buff back " .. who, (p.spell and (who .. " gave you " .. p.spell) or (who .. " buffed you")) .. ".",
                              "Left click: " .. buff .. " on " .. who .. ".", "Right click: away." },
             }
-            if u and u ~= "target" and u ~= "focus" then
-                -- he has a unit of his own (raid, name plate): cast on it, the target stays
-                a.cast, a.unit = cast, u
-            elseif u == "target" then
+            if u == "target" then
                 a.cast, a.unit = cast, "target"
             else
-                -- only his name: target him, cast, back to the old target
+                -- target him by his full name, cast, back to the old target; a cast on his name plate unit
+                -- did nothing on WoW Forever (fix row 439)
                 a.macro = "/target " .. p.name .. "\n/cast [@target,help,nodead] " .. cast .. "\n/targetlasttarget"
             end
             out[#out + 1] = a
@@ -210,7 +208,10 @@ function B.FromAura(unit, info)
         local src = a.sourceUnit
         if plain(src) and type(src) == "string" and plain(a.isHelpful) and a.isHelpful
             and UnitIsPlayer and UnitIsPlayer(src) and not (UnitIsUnit and UnitIsUnit(src, "player")) then
-            local g, n = UnitGUID(src), UnitName(src)
+            local g = UnitGUID(src)
+            local n, n2 = UnitName(src)
+            -- Forever names have two parts ("Vorname Nachname"): /target needs both (fix row 439)
+            if plain(n) and plain(n2) and type(n2) == "string" and n2 ~= "" then n = n .. " " .. n2 end
             if plain(g) and plain(n) then B.Note(g, n, plain(a.name) and a.name or nil) end
         end
     end
