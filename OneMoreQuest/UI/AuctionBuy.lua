@@ -1026,19 +1026,24 @@ local function dumpList(classes)
 end
 function B.UseDump()
     local P = OMQ.Prices
-    if not (P and P.Session and P.Session()) then return end
+    if not P then return end
     local changed = false
     for _, list in ipairs({ rows, foods, alts }) do
         for _, r in ipairs(list) do
             if r.state == "price" and not r.live then
                 local stack = select(8, info(r.itemID))
-                if (stack or 1) > 1 then
-                    local p, q = P.Auction(r.itemID)
-                    B.FromBatch(r, p and { minPrice = p, totalQuantity = q } or nil)
+                -- only a live price of the last minutes, the dump can be far off (decision 427): else it is searched
+                local p, q = P.Live and P.Live(r.itemID, AH().PRICE_TTL)
+                if (stack or 1) > 1 and p then
+                    B.FromBatch(r, { minPrice = p, totalQuantity = q })
                     changed = true
                 end
             end
         end
+    end
+    if not (P.Session and P.Session()) then
+        if changed then B.Build() end
+        return
     end
     if browse.state == "idle" then
         B.want.weapons = true
@@ -1149,13 +1154,13 @@ function B.Buy(r, n)
         n = math.min(n, got)
         if n < 1 or not afford(cost) then return false end
         buying = { row = r, qty = n, base = B.Have(r.itemID), at = now(), expect = cost }
-        A.StartCommoditiesPurchase(r.itemID, n)
+        AH().Own(A.StartCommoditiesPurchase, r.itemID, n)
     else
         local o = r.offers[1]
         if not afford(o.buyout) then return false end
         buying = { row = r, qty = o.qty, auctionID = o.auctionID, base = B.Have(r.itemID), at = now() }
         table.remove(r.offers, 1)
-        A.PlaceBid(o.auctionID, o.buyout)
+        AH().Own(A.PlaceBid, o.auctionID, o.buyout)
     end
     watch()
     AH().Refresh()
@@ -1169,7 +1174,7 @@ function B.BuyWeapon(w)
     if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then AH().WaitNote(); return false end
     if not afford(w.offer.buyout) then return false end
     buying = { weapon = w, auctionID = w.offer.auctionID, at = now() }
-    A.PlaceBid(w.offer.auctionID, w.offer.buyout)
+    AH().Own(A.PlaceBid, w.offer.auctionID, w.offer.buyout)
     watch()
     AH().Refresh()
     return true
@@ -1294,7 +1299,7 @@ ev:SetScript("OnEvent", function(_, event, a1, a2)
         if event == "COMMODITY_PRICE_UPDATED" then
             if buying and buying.row then
                 if B.PriceOk(buying.expect, a2) then
-                    A.ConfirmCommoditiesPurchase(buying.row.itemID, buying.qty)
+                    AH().Own(A.ConfirmCommoditiesPurchase, buying.row.itemID, buying.qty)
                 else
                     if A.CancelCommoditiesPurchase then A.CancelCommoditiesPurchase() end
                     buying.row.estimate = nil

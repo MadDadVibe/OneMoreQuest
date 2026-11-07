@@ -35,10 +35,64 @@ end
 function P.AutoOn() return not (OMQ.db and OMQ.db.options and OMQ.db.options.priceScan == false) end
 
 -- the lowest auction price of one piece (copper), its quantity on offer, and the time of the scan
+-- (or of the live search that corrected it, decision 427)
 function P.Auction(itemID)
     local e = store().items[itemID]
-    if e then return e.p, e.q, store().at end
+    if e then return e.p, e.q, e.t or store().at end
 end
+-- a price that a live search saw (the helper's own or one in the game's window) at most maxAge seconds ago:
+-- the dump can be far off (decision 427), so selling and buying go by this
+function P.Live(itemID, maxAge)
+    local e = store().items[itemID]
+    if e and e.t and stamp() - e.t <= (maxAge or P.MAX_AGE) then return e.p, e.q, e.t end
+end
+-- every live answer of the auction house corrects the stored price of a commodity (decision 427)
+function P.Learn(itemID, unit, qty)
+    if not itemID or isSecret(itemID) or isSecret(unit) or type(unit) ~= "number" or unit <= 0 then return end
+    local items = store().items
+    local old = items[itemID]
+    if not old then store().n = (store().n or 0) + 1 end
+    items[itemID] = { p = math.floor(unit), q = tonumber(qty) or (old and old.q) or 0, t = stamp() }
+end
+local function learnCommodity(itemID)
+    local api = C_AuctionHouse
+    if not (api and api.GetNumCommoditySearchResults and api.GetCommoditySearchResultInfo) or isSecret(itemID) then return end
+    local n = tonumber(api.GetNumCommoditySearchResults(itemID)) or 0
+    local best, qty = nil, 0
+    for i = 1, math.min(n, 50) do
+        local r = api.GetCommoditySearchResultInfo(itemID, i)
+        local u = r and r.unitPrice
+        if u and not isSecret(u) and u > 0 then
+            if not best or u < best then best = u end
+            qty = qty + (tonumber(r.quantity) or 0)
+        end
+    end
+    if api.GetCommoditySearchResultsQuantity then
+        local ok, t = pcall(api.GetCommoditySearchResultsQuantity, itemID)
+        if ok and type(t) == "number" and not isSecret(t) and t > qty then qty = t end
+    end
+    if best then P.Learn(itemID, best, qty) end
+end
+local function isCommodityKey(k)
+    local api = C_AuctionHouse
+    if api and api.GetItemKeyInfo then
+        local ok, ki = pcall(api.GetItemKeyInfo, k)
+        if ok and type(ki) == "table" and ki.isCommodity ~= nil then return ki.isCommodity and true or false end
+    end
+    local G = C_Item and C_Item.GetItemInfo or GetItemInfo
+    local stack = G and select(8, G(k.itemID))
+    return (tonumber(stack) or 1) > 1
+end
+local function learnBrowse()
+    local api = C_AuctionHouse
+    for _, res in ipairs(api and api.GetBrowseResults and api.GetBrowseResults() or {}) do
+        local k = res.itemKey
+        if k and k.itemID and type(res.minPrice) == "number" and not isSecret(res.minPrice) and res.minPrice > 0 and isCommodityKey(k) then
+            P.Learn(k.itemID, res.minPrice, res.totalQuantity)
+        end
+    end
+end
+P._learnCommodity, P._learnBrowse = learnCommodity, learnBrowse
 function P.Vendor(itemID) return vendorStore()[itemID] end
 -- what the item costs me to get: the cheaper of the auction house and a vendor; nil = unknown
 function P.Cost(itemID)
@@ -76,7 +130,14 @@ local function finish(ok, why)
     local n = 0
     for _ in pairs(scan.seen) do n = n + 1 end
     if ok then
-        st.items = scan.items                 -- the dump replaces the list: what was sold is gone
+        -- the dump replaces the list: what was sold is gone; a live price of the last minutes stays (decision 427)
+        for id, e in pairs(st.items) do
+            if e.t and stamp() - e.t <= P.MAX_AGE then
+                if not scan.items[id] then n = n + 1 end
+                scan.items[id] = e
+            end
+        end
+        st.items = scan.items
         st.at, st.n = stamp(), n
         sessionAt = now()
     end
@@ -119,6 +180,7 @@ local function yielding()
     if not H then return false end
     if H.Busy and H.Busy() then return true end
     if H.quietUntil and now() < H.quietUntil then return true end
+    if H.Manual and H.Manual() then return true end     -- the dad uses the game's window (decision 427)
     return false
 end
 
@@ -175,7 +237,8 @@ function P.Cancel() if scan then finish(false, "stopped") end end
 -- Events and commands
 ----------------------------------------------------------------------
 local ev = CreateFrame("Frame")
-for _, e in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "REPLICATE_ITEM_LIST_UPDATE", "MERCHANT_SHOW", "MERCHANT_UPDATE" }) do
+for _, e in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "REPLICATE_ITEM_LIST_UPDATE", "MERCHANT_SHOW", "MERCHANT_UPDATE",
+                     "COMMODITY_SEARCH_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 
@@ -235,7 +298,8 @@ function P.TooltipLines(id)
         lines[#lines + 1] = { string.format("Auction house %s - vendor %s", money(a), money(v)), 0.6, 0.6, 0.6 }
     end
     if a then
-        lines[#lines + 1] = { string.format("scanned %s%s", agoText(at), q and (", " .. q .. " on offer") or ""), 0.5, 0.5, 0.5 }
+        local live = store().items[id] and store().items[id].t
+        lines[#lines + 1] = { string.format("%s %s%s", live and "seen" or "scanned", agoText(at), q and (", " .. q .. " on offer") or ""), 0.5, 0.5, 0.5 }
     end
     return lines
 end
@@ -267,9 +331,11 @@ OMQ:On("READY", function()
     end
 end)
 
-ev:SetScript("OnEvent", function(_, event)
+ev:SetScript("OnEvent", function(_, event, a1)
     local ok, err = pcall(function()
-        if event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
+        if event == "COMMODITY_SEARCH_RESULTS_UPDATED" then learnCommodity(a1)
+        elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then learnBrowse()
+        elseif event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
             local n = P.LearnVendor()
             if event == "MERCHANT_SHOW" and C_Timer and C_Timer.After then
                 C_Timer.After(1, function()                      -- the list may be filled a moment later

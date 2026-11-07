@@ -214,12 +214,16 @@ function AH.Evaluate()
     local skip = db().skip
     for _, e in ipairs(entries) do
         local p = prices[e.key]
-        -- the dump of the whole house prices a commodity at once (decision 343)
+        -- a live price of a commodity that the game's window or a batch saw counts at once; the dump of the whole
+        -- house does not price what I sell any more, it can be far off (decisions 343, 427)
         local D = OMQ.Prices
-        if e.commodity and not e.posted and D and D.Session and D.Session() and (not p or p.at < (D.SessionAt() or 0)) then
-            local dp = D.Auction(e.itemID)
-            p = { price = dp or false, at = now() }
-            prices[e.key] = p
+        if e.commodity and not e.posted and D and D.Live then
+            local lp, _, lt = D.Live(e.itemID, AH.PRICE_TTL)
+            local liveAt = lp and (now() - math.max(0, (time and time() or 0) - lt))
+            if lp and (not p or p.at < liveAt - 0.5) then
+                p = { price = lp, at = liveAt }
+                prices[e.key] = p
+            end
         end
         e.skipped = skip[e.itemID] and true or false
         if e.out then e.state = e.out
@@ -339,6 +343,7 @@ end
 -- is a scan running? my own prices are on their way, or the buy mode's searches (decision 286)
 function AH.Scanning()
     if not AH.open then return false end
+    if AH.Manual() then return false end                            -- paused, nothing on its way (decision 427)
     if asking then return true end
     if OMQ.Prices and OMQ.Prices.Busy() then return true end      -- the whole-house price scan (decision 341)
     local A = CA()
@@ -369,6 +374,7 @@ AH.PaintScan = paintScan
 -- scan everything again (decision 290)
 function AH.ScanAll()
     if not AH.open then return end
+    AH.manualAt = nil                                  -- the dad asks the helper again (decision 427)
     if OMQ.Prices and OMQ.Prices.EndSession then OMQ.Prices.EndSession() end     -- live searches this time (decision 343)
     AH.Scan()
     if OMQ.AuctionBuy and OMQ.AuctionBuy.ScanAll then OMQ.AuctionBuy.ScanAll() end
@@ -379,6 +385,50 @@ end
 function AH.Pump()
     AH._pump()
     paintScan()
+end
+
+-- the dad uses the game's own auction house window (decision 427): a search, a purchase or a sale of his own
+-- pauses every search of the helper, the buy mode and the whole-house scan, because a search of ours in between
+-- replaces his result list and makes the game drop a purchase he has just started. The pause lasts while the
+-- game's window shows an item to buy or to sell, and MANUAL_PAUSE seconds after his last action there.
+-- The calls of this addon go through AH.Own, so only the game's window counts.
+AH.MANUAL_PAUSE, AH.OPEN_GRACE = 30, 1.5
+AH.HOOKED = { "SendSearchQuery", "SendSellSearchQuery", "SendBrowseQuery", "SearchForFavorites", "RequestMoreBrowseResults",
+              "RefreshCommoditySearchResults", "RefreshItemSearchResults", "StartCommoditiesPurchase", "ConfirmCommoditiesPurchase",
+              "PlaceBid", "PostCommodity", "PostItem" }
+local own, hookedOn = 0, nil
+function AH.Own(fn, ...)
+    own = own + 1
+    local ok, a, b = pcall(fn, ...)
+    own = own - 1
+    if not ok then error(a, 0) end
+    return a, b
+end
+local function gameCall()
+    if own > 0 or not AH.open then return end
+    if now() - (AH.openedAt or 0) < AH.OPEN_GRACE then return end   -- the window's own search when it opens
+    AH.manualAt = now()
+    paintScan()
+end
+function AH.HookGame()
+    local A = CA()
+    if not (A and hooksecurefunc) or hookedOn == A then return end
+    hookedOn = A
+    for _, name in ipairs(AH.HOOKED) do
+        if type(A[name]) == "function" then pcall(hooksecurefunc, A, name, gameCall) end
+    end
+end
+local function gameShows()
+    local f, M = _G.AuctionHouseFrame, _G.AuctionHouseFrameDisplayMode
+    if not (f and M and type(f.GetDisplayMode) == "function") then return false end
+    local ok, m = pcall(f.GetDisplayMode, f)
+    if not ok or m == nil then return false end
+    return m == M.CommoditiesBuy or m == M.ItemBuy or m == M.CommoditiesSell or m == M.ItemSell
+end
+function AH.Manual()
+    if not AH.open then return false end
+    if AH.manualAt and now() - AH.manualAt < AH.MANUAL_PAUSE then return true end
+    return gameShows()
 end
 function AH.Quiet() AH.quietUntil = now() + AH.QUIET end
 -- the next click is taken again: the buttons flash shortly (decision 293)
@@ -469,6 +519,21 @@ end
 function AH._pump()
     local A = CA()
     if not (A and A.SendSearchQuery) or not AH.open then return end
+    if AH.Manual() then                                -- the dad's own window goes first (decision 427)
+        if asking then asking.resend, askedAt = true, now() end   -- his answers are not ours: asked again afterwards
+        return
+    end
+    if asking and asking.resend then
+        if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
+        local q = asking
+        q.resend, q.answered, q.lastN, askedAt = nil, nil, nil, now()
+        AH.Own(function()
+            if q.batch then A.SearchForItemKeys(q.keys, sorts())
+            elseif q.browse then if A.SendBrowseQuery then A.SendBrowseQuery(q.query) end
+            else A.SendSearchQuery(q.itemKey, sorts(), true) end
+        end)
+        return
+    end
     if asking then
         if now() - askedAt < AH.QUERY_TIMEOUT then return end
         local q = asking
@@ -481,11 +546,13 @@ function AH._pump()
         if retry then
             if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
             q.timeouts, askedAt = (q.timeouts or 0) + 1, now()
-            if q.browse then
-                if A.SendBrowseQuery then A.SendBrowseQuery(q.query) end
-            else
-                A.SendSearchQuery(q.itemKey, sorts(), true)
-            end
+            AH.Own(function()
+                if q.browse then
+                    if A.SendBrowseQuery then A.SendBrowseQuery(q.query) end
+                else
+                    A.SendSearchQuery(q.itemKey, sorts(), true)
+                end
+            end)
             return
         end
         gotPrice(q)                                    -- no answer: read what is there
@@ -499,13 +566,13 @@ function AH._pump()
     local bq = batchQuery()
     if bq then
         asking, askedAt = bq, now()
-        A.SearchForItemKeys(bq.keys, sorts())
+        AH.Own(A.SearchForItemKeys, bq.keys, sorts())
         return
     end
     for _, e in ipairs(entries) do
         if e.state == "price" then
             asking, askedAt = e, now()
-            A.SendSearchQuery(e.itemKey, sorts(), true)
+            AH.Own(A.SendSearchQuery, e.itemKey, sorts(), true)
             return
         end
     end
@@ -514,9 +581,9 @@ function AH._pump()
     if q then
         asking, askedAt = q, now()
         if q.browse then
-            if A.SendBrowseQuery then A.SendBrowseQuery(q.query) else gotPrice(q) end
+            if A.SendBrowseQuery then AH.Own(A.SendBrowseQuery, q.query) else gotPrice(q) end
         else
-            A.SendSearchQuery(q.itemKey, sorts(), true)
+            AH.Own(A.SendSearchQuery, q.itemKey, sorts(), true)
         end
     end
 end
@@ -607,7 +674,7 @@ function AH.Post(e, fromSelect)
     if pendingConfirm then                                     -- the second click confirms
         local c = pendingConfirm
         pendingConfirm = nil
-        if c.entry.commodity then A.ConfirmPostCommodity(unpack(c.args)) else A.ConfirmPostItem(unpack(c.args)) end
+        if c.entry.commodity then AH.Own(A.ConfirmPostCommodity, unpack(c.args)) else AH.Own(A.ConfirmPostItem, unpack(c.args)) end
         startPosting(c.entry)
         AH.Refresh()
         return true
@@ -618,10 +685,10 @@ function AH.Post(e, fromSelect)
     local args, needs
     if e.commodity then
         args = { e.loc, AH.DURATION, e.qty, price }
-        needs = A.PostCommodity(unpack(args))
+        needs = AH.Own(A.PostCommodity, unpack(args))
     else
         args = { e.loc, AH.DURATION, 1, nil, price }
-        needs = A.PostItem(e.loc, AH.DURATION, 1, nil, price)
+        needs = AH.Own(A.PostItem, e.loc, AH.DURATION, 1, nil, price)
     end
     if fromSelect then db().skip[e.itemID] = nil; db().fails[e.itemID] = nil end   -- posted in the select mode: a fresh start
     if e.name then db().names[e.name] = e.itemID end
@@ -1097,6 +1164,8 @@ function AH.Open()
     if not AH.Enabled() then return end
     if not panel then build() end
     AH.open = true
+    AH.openedAt, AH.manualAt = now(), nil
+    AH.HookGame()
     pendingConfirm, asking, posting = nil, nil, nil
     for k in pairs(tried) do tried[k] = nil end
     AH.quietUntil, AH.readyAt = nil, nil
@@ -1144,6 +1213,10 @@ ev:SetScript("OnEvent", function(_, event, a1)
         if event == "AUCTION_HOUSE_SHOW" then AH.Open()
         elseif event == "AUCTION_HOUSE_CLOSED" then AH.Close()
         elseif not AH.open then return
+        elseif (event == "COMMODITY_SEARCH_RESULTS_UPDATED" or event == "ITEM_SEARCH_RESULTS_UPDATED"
+                or event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED")
+               and (AH.Manual() or (asking and asking.resend)) then
+            return                                     -- the answer to the dad's own search (decision 427)
         elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
             if asking and not asking.browse and asking.commodity ~= false and asking.itemID == a1 then
                 asking.commodity = true; gotPrice(asking)
