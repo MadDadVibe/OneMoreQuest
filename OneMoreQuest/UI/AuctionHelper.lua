@@ -5,7 +5,7 @@
 --     posts the next item, a right click skips it. A skipped item stays out of the fast mode until it
 --     is posted in the select mode.
 --   Select mode: one row per item with picture, prices and gain; left click posts, right click skips.
---   Unsold twice in a row (the game's mails tell): off the fast list like a skip (decision 261).
+--   Unsold once (the game's mails tell): off the fast list like a skip (decisions 261, 431).
 -- What counts: every item from white up that can be sold on the auction house (not bound) - potions,
 -- food, trade goods, recipes, gear (decision 260); the worth rule filters the rest. Left out: quest
 -- items, ammo, profession tools (decision 277), the drinks and class supplies of the Group Check and a gear upgrade for me,
@@ -27,6 +27,12 @@ local AH = {}
 OMQ.AuctionHelper = AH
 
 AH.CUT, AH.MARGIN, AH.DURATION = 0.05, 1.05, 2          -- duration index 2 = 24 hours
+AH.MARGIN_HIGH = 1.30      -- green items and trade goods: at least 30% over the vendor price (decision 431)
+-- the worth rule of one item: +30% for green items of any kind and for trade goods of any quality, else +5%
+function AH.MarginFor(e)
+    if e and (e.quality == 2 or e.classID == 7) then return AH.MARGIN_HIGH end
+    return AH.MARGIN
+end
 AH.PRICE_TTL, AH.QUERY_TIMEOUT, AH.LOW_DAYS = 300, 4, 3
 AH.RETRIES = 2              -- a search without an answer is sent again this often (decision 402)
 AH.ROWS = 12
@@ -36,6 +42,7 @@ AH.QUIET, AH.BATCH, AH.READY_FLASH = 3, 40, 0.6
 AH.HEAD = 108           -- the tabs and the box with the mode switch on top (decisions 264 and 267)
 
 local GOLD = { 0.89, 0.71, 0.29 }
+local fs                   -- the font string helper (defined with the panel)
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
 local function now() return GetTime() end
 local CA = function() return C_AuctionHouse end
@@ -242,8 +249,10 @@ function AH.Evaluate()
             e.gain = math.floor(net - vend)
             e.income = math.floor(gross * (1 - AH.CUT))
             e.value = math.floor(gross)                         -- the listing value (decision 268)
-            if not e.keep then db().worth[e.itemID] = (net >= vend * AH.MARGIN and net > vend) end   -- kept until the next scan (decision 292)
-            if net >= vend * AH.MARGIN and net > vend then
+            local margin = AH.MarginFor(e)
+            e.margin = margin
+            if not e.keep then db().worth[e.itemID] = (net >= vend * margin and net > vend) end   -- kept until the next scan (decision 292)
+            if net >= vend * margin and net > vend then
                 e.state = "ok"
                 if not e.keep then db().low[e.itemID] = nil; db().lowDay[e.itemID] = nil end
             else
@@ -348,9 +357,9 @@ end
 -- is a scan running? my own prices are on their way, or the buy mode's searches (decision 286)
 function AH.Scanning()
     if not AH.open then return false end
+    if OMQ.Prices and OMQ.Prices.Busy() then return true end      -- the whole-house price scan (decision 341), never paused (decision 431)
     if AH.Manual() then return false end                            -- paused, nothing on its way (decision 427)
     if asking then return true end
-    if OMQ.Prices and OMQ.Prices.Busy() then return true end      -- the whole-house price scan (decision 341)
     local A = CA()
     if A and A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return true end
     for _, e in ipairs(entries) do if e.state == "price" then return true end end
@@ -368,19 +377,66 @@ function AH.WaitNote()
 end
 local function paintScan()
     if panel and panel.scan then panel.scan:SetShown(AH.Scanning()) end
-    -- while the whole house is read the panel is covered (decision 343)
+    -- while the whole house is read the panel and the game's window are covered (decisions 343, 431)
     if panel and panel.veil then
         local busy = AH.open and OMQ.Prices and OMQ.Prices.Busy() or false
         if busy then panel.veil:Show() else panel.veil:Hide() end
+        local gv = AH.GameVeil(busy)
+        if gv then if busy then gv:Show() else gv:Hide() end end
     end
 end
 AH.PaintScan = paintScan
+
+-- the text of a cover: how far the scan is
+function AH.VeilText()
+    local pr = OMQ.Prices and OMQ.Prices.Progress and OMQ.Prices.Progress()
+    if not pr then return "" end
+    if pr.state == "loading" then return string.format("loading %d items the game did not know yet...", pr.later or 0) end
+    if (pr.total or 0) > 0 and pr.state == "reading" then return string.format("%d of %d auctions", pr.results or 0, pr.total) end
+    return "waiting for the auction house..."
+end
+local function cancelButton(parent)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(110, 24)
+    b.bg = b:CreateTexture(nil, "BACKGROUND"); b.bg:SetAllPoints(); b.bg:SetColorTexture(0.2, 0.21, 0.25, 1)
+    b.hl = b:CreateTexture(nil, "HIGHLIGHT"); b.hl:SetAllPoints(); b.hl:SetColorTexture(1, 1, 1, 0.08)
+    b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormal"); b.text:SetPoint("CENTER"); b.text:SetText("Cancel scan")
+    b:SetScript("OnClick", function() AH.CancelScan() end)
+    return b
+end
+AH._cancelButton = cancelButton
+function AH.CancelScan()
+    if OMQ.Prices and OMQ.Prices.Cancel then OMQ.Prices.Cancel() end
+    paintScan()
+end
+-- the cover over the game's own auction house window (decision 431): no clicks there while the scan reads the house
+local gameVeil
+function AH.GameVeil(make)
+    if gameVeil or not make then return gameVeil end
+    local ahf = _G.AuctionHouseFrame
+    if not ahf then return nil end
+    gameVeil = CreateFrame("Frame", "OneMoreQuestAuctionScanCover", ahf)
+    gameVeil:SetAllPoints(ahf)
+    gameVeil:SetFrameStrata("DIALOG")
+    gameVeil:EnableMouse(true)
+    if gameVeil.EnableMouseWheel then gameVeil:EnableMouseWheel(true) end
+    local bg = gameVeil:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(); bg:SetColorTexture(0.03, 0.035, 0.05, 0.85)
+    gameVeil.big = fs(gameVeil, "GameFontNormalHuge", GOLD[1], GOLD[2], GOLD[3])
+    gameVeil.big:SetPoint("CENTER", 0, 20); gameVeil.big:SetText("One More Quest reads the auction house")
+    gameVeil.sub = fs(gameVeil, "GameFontHighlight", 0.8, 0.8, 0.85)
+    gameVeil.sub:SetPoint("TOP", gameVeil.big, "BOTTOM", 0, -10)
+    gameVeil.cancel = cancelButton(gameVeil)
+    gameVeil.cancel:SetPoint("TOP", gameVeil.sub, "BOTTOM", 0, -14)
+    gameVeil:SetScript("OnUpdate", function(self) self.sub:SetText(AH.VeilText()) end)
+    gameVeil:Hide()
+    return gameVeil
+end
 
 -- scan everything again (decision 290)
 function AH.ScanAll()
     if not AH.open then return end
     AH.manualAt = nil                                  -- the dad asks the helper again (decision 427)
-    if OMQ.Prices and OMQ.Prices.EndSession then OMQ.Prices.EndSession() end     -- live searches this time (decision 343)
     AH.Scan()
     if OMQ.AuctionBuy and OMQ.AuctionBuy.ScanAll then OMQ.AuctionBuy.ScanAll() end
     AH.Refresh()
@@ -402,7 +458,15 @@ AH.HOOKED = { "SendSearchQuery", "SendSellSearchQuery", "SendBrowseQuery", "Sear
               "RefreshCommoditySearchResults", "RefreshItemSearchResults", "StartCommoditiesPurchase", "ConfirmCommoditiesPurchase",
               "PlaceBid", "PostCommodity", "PostItem" }
 local own, hookedOn = 0, nil
+-- every search counts (decision 431): a fresh offer of the buy mode is only good while no other search came after it
+AH.searchSeq = 0
+local function isSearch(fn)
+    local A = CA()
+    return A and (fn == A.SendSearchQuery or fn == A.SearchForItemKeys or fn == A.SendBrowseQuery) or false
+end
+function AH.CountSearch() AH.searchSeq = (AH.searchSeq or 0) + 1 end
 function AH.Own(fn, ...)
+    if isSearch(fn) then AH.CountSearch() end
     own = own + 1
     local ok, a, b = pcall(fn, ...)
     own = own - 1
@@ -412,15 +476,26 @@ end
 local function gameCall()
     if own > 0 or not AH.open then return end
     if now() - (AH.openedAt or 0) < AH.OPEN_GRACE then return end   -- the window's own search when it opens
+    AH.CountSearch()
     AH.manualAt = now()
     paintScan()
 end
+-- a post in the game's own window: the item starts fresh (decision 431)
+local function gamePost(loc)
+    if own > 0 or not AH.open then return end
+    local id = loc and C_Item and C_Item.GetItemID and select(2, pcall(C_Item.GetItemID, loc))
+    if type(id) == "number" and not isSecret(id) then AH.PostedByHand(id) end
+end
+AH._gamePost = gamePost
 function AH.HookGame()
     local A = CA()
     if not (A and hooksecurefunc) or hookedOn == A then return end
     hookedOn = A
     for _, name in ipairs(AH.HOOKED) do
         if type(A[name]) == "function" then pcall(hooksecurefunc, A, name, gameCall) end
+    end
+    for _, name in ipairs({ "PostItem", "PostCommodity" }) do
+        if type(A[name]) == "function" then pcall(hooksecurefunc, A, name, gamePost) end
     end
 end
 local function gameShows()
@@ -532,6 +607,7 @@ function AH._pump()
         if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
         local q = asking
         q.resend, q.answered, q.lastN, askedAt = nil, nil, nil, now()
+        AH.CountSearch()
         AH.Own(function()
             if q.batch then A.SearchForItemKeys(q.keys, sorts())
             elseif q.browse then if A.SendBrowseQuery then A.SendBrowseQuery(q.query) end
@@ -551,6 +627,7 @@ function AH._pump()
         if retry then
             if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
             q.timeouts, askedAt = (q.timeouts or 0) + 1, now()
+            AH.CountSearch()
             AH.Own(function()
                 if q.browse then
                     if A.SendBrowseQuery then A.SendBrowseQuery(q.query) end
@@ -566,8 +643,15 @@ function AH._pump()
     if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
     if AH.Busy() then return end                       -- a post or a purchase goes first (decision 281)
     if OMQ.Prices and OMQ.Prices.Busy() then return end   -- the price scan of the whole house owns the result list (decision 341)
+    -- a weapon or bag the dad wants to buy is searched again first, also while he clicks (decision 431)
+    local cq = OMQ.AuctionBuy and OMQ.AuctionBuy.CheckQuery and OMQ.AuctionBuy.CheckQuery()
+    if cq then
+        asking, askedAt = cq, now()
+        AH.Own(A.SendSearchQuery, cq.itemKey, sorts(), true)
+        return
+    end
     if now() < (AH.quietUntil or 0) then return end   -- the dad is clicking: no new search (decision 293)
-    if OMQ.AuctionBuy and OMQ.AuctionBuy.UseDump then OMQ.AuctionBuy.UseDump() end   -- the dump answers what it can (decision 343)
+    -- the dump of the whole house answers nothing here any more: every row is searched live (decision 431)
     local bq = batchQuery()
     if bq then
         asking, askedAt = bq, now()
@@ -695,7 +779,7 @@ function AH.Post(e, fromSelect)
         args = { e.loc, AH.DURATION, 1, nil, price }
         needs = AH.Own(A.PostItem, e.loc, AH.DURATION, 1, nil, price)
     end
-    if fromSelect then db().skip[e.itemID] = nil; db().fails[e.itemID] = nil end   -- posted in the select mode: a fresh start
+    if fromSelect then db().skip[e.itemID] = nil; AH.PostedByHand(e.itemID) end   -- posted in the select mode: a fresh start
     if e.name then db().names[e.name] = e.itemID end
     if needs then
         pendingConfirm = { entry = e, args = args }            -- the game warns about the price: click again
@@ -731,7 +815,7 @@ local function qColor(q)
     return 1, 1, 1
 end
 
-local function fs(parent, font, r, g, b)
+function fs(parent, font, r, g, b)
     local t = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlight")
     t:SetJustifyH("LEFT")
     if r then t:SetTextColor(r, g, b) end
@@ -771,11 +855,9 @@ local function build()
     veil.big:SetPoint("CENTER", 0, 10); veil.big:SetText("Scan running...")
     veil.sub = fs(veil, "GameFontNormalSmall", 0.75, 0.75, 0.8)
     veil.sub:SetPoint("TOP", veil.big, "BOTTOM", 0, -10); veil.sub:SetText("reading the whole auction house")
-    veil:SetScript("OnUpdate", function(self)
-        local pr = OMQ.Prices and OMQ.Prices.Progress and OMQ.Prices.Progress()
-        if pr and (pr.total or 0) > 0 then self.sub:SetText(string.format("%d of %d auctions", pr.results or 0, pr.total))
-        else self.sub:SetText("waiting for the auction house...") end
-    end)
+    veil.cancel = cancelButton(veil)
+    veil.cancel:SetPoint("TOP", veil.sub, "BOTTOM", 0, -14)
+    veil:SetScript("OnUpdate", function(self) self.sub:SetText(AH.VeilText()) end)
     veil:Hide()
     panel.veil = veil
     -- the small "Scan all" button and the header, which closes the helper on a right click (decision 290)
@@ -942,7 +1024,8 @@ local function outText(L)
     local names = {}
     for i = 1, math.min(3, #L.out) do
         local e = L.out[i]
-        local why = ({ low = "under +5%", noprice = "no price yet", upgrade = "upgrade for you", needed = "a dad needs it" })[e.state] or e.state
+        local low = string.format("under +%d%%", math.floor(((e.margin or AH.MARGIN) - 1) * 100 + 0.5))
+        local why = ({ low = low, noprice = "no price yet", upgrade = "upgrade for you", needed = "a dad needs it" })[e.state] or e.state
         names[#names + 1] = e.name .. " (" .. why .. ")"
     end
     local more = #L.out > 3 and (" and " .. (#L.out - 3) .. " more") or ""
@@ -975,12 +1058,7 @@ function AH.Refresh()
     if not panel or not panel:IsShown() then return end
     paintScan()
     local L = AH.Lists()
-    -- nothing (more) to sell: on to buying, unless the dad chose the view himself (decision 264)
-    if AH.view == "sell" and not AH.manualView and L.pending == 0 and #L.fast == 0 and not pendingConfirm
-        and (AH.Mode() == "fast" or #L.select == 0) then
-        AH.view = "buy"
-        AH.Pump()                                   -- the buy tab is looked at now: its prices are asked
-    end
+    -- the helper stays on Sell until the dad opens Buy himself (decision 431; before: on to buying when nothing was left)
     local buy = AH.view == "buy"
     paintTab(panel.sellBtn, not buy); paintTab(panel.buyBtn, buy)
     for _, b in ipairs({ panel.fastBtn, panel.selBtn }) do b:SetShown(not buy) end
@@ -1032,7 +1110,7 @@ function AH.Refresh()
             local text
             if L.pending > 0 then text = string.format("Checking prices... %d of %d", L.count - L.pending, L.count)
             elseif (f.posted or 0) > 0 then text = "All posted!|n|cffe5e3dc" .. f.posted .. " auctions for 24 hours.|r"
-            else text = "Nothing to post today|n|cffc9ccd5Nothing in your bags brings at least 5% more here than at the vendor.|r" end
+            else text = "Nothing to post today|n|cffc9ccd5Nothing in your bags brings enough more here than at the vendor.|r" end
             local skipped = 0
             for _, e in ipairs(L.select) do if e.skipped then skipped = skipped + 1 end end
             if skipped > 0 and L.pending == 0 then text = text .. "|n|cff9aa0aa" .. skipped .. " skipped - in the select mode.|r" end
@@ -1072,7 +1150,7 @@ function AH.Refresh()
                 elseif e.useful then each = "|cff7fc8ffyour consumable|r - |cffff9a6asell all|r" .. (each ~= "" and (" - " .. each) or "") end
                 r.prices:SetText(each)
                 if pendingConfirm and pendingConfirm.entry == e then r.right:SetText("Click: confirm"); r.right:SetTextColor(0.95, 0.82, 0.48)
-                elseif e.skipped then r.right:SetText(db().skip[e.itemID] == "unsold" and "Unsold twice" or "Skipped"); r.right:SetTextColor(0.54, 0.56, 0.61)
+                elseif e.skipped then r.right:SetText(db().skip[e.itemID] == "unsold" and "Unsold" or "Skipped"); r.right:SetTextColor(0.54, 0.56, 0.61)
                 else r.right:SetText(money((e.price or 0) * (e.commodity and (e.qty or 1) or 1))); r.right:SetTextColor(0.95, 0.82, 0.48) end
             end
         end
@@ -1091,12 +1169,13 @@ function AH.Refresh()
 end
 
 ----------------------------------------------------------------------
--- Unsold twice in a row: off the fast list (decision 261)
+-- Unsold: off the fast list (decision 261; since decision 431 already after the first unsold auction)
 -- The game mails every result: "Auction expired: <item>" (it comes back) or "Auction successful:
 -- <item>". Each mail counts once; a sale starts the count again. At 2 the item is skipped like a
--- right click ("Unsold twice" in the select mode), until it is posted there again.
+-- right click ("Unsold" in the select mode), until it is posted there again - in the select mode or in the
+-- game's own window (decision 431).
 ----------------------------------------------------------------------
-AH.UNSOLD_LIMIT = 2
+AH.UNSOLD_LIMIT = 1        -- once unsold is enough (decision 431; was 2, decision 261)
 local function subjectPattern(fmt)
     if type(fmt) ~= "string" or fmt == "" then return nil end
     local p = fmt:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
@@ -1116,6 +1195,20 @@ function AH.EarnedText()
     return string.format("Total won so far: |cfff2d27a%s|r from %d sale%s", money(e.copper), e.sales, e.sales == 1 and "" or "s")
 end
 
+-- an item posted by hand (the select mode or the game's own window) starts fresh (decision 431)
+function AH.PostedByHand(itemID)
+    if not itemID then return end
+    local d = db()
+    d.fails[itemID] = nil
+    if d.skip[itemID] == "unsold" then d.skip[itemID] = nil end
+end
+-- counters of the old rule (2 in a row): an item that came back once is "unsold" now (decision 431)
+function AH.MigrateUnsold()
+    local d = db()
+    for id, n in pairs(d.fails) do
+        if n >= AH.UNSOLD_LIMIT and not d.skip[id] then d.skip[id] = "unsold" end
+    end
+end
 function AH.Result(itemID, sold)
     if not itemID then return end
     local d = db()
@@ -1171,6 +1264,7 @@ function AH.Open()
     AH.open = true
     AH.openedAt, AH.manualAt = now(), nil
     AH.HookGame()
+    AH.MigrateUnsold()
     pendingConfirm, asking, posting = nil, nil, nil
     for k in pairs(tried) do tried[k] = nil end
     AH.quietUntil, AH.readyAt = nil, nil

@@ -2,7 +2,8 @@
 -- Opens next to the vendor window: the items in my bags I should sell there.
 --   Grey items (junk).
 --   Gear that is not bound (any quality): my last auction house scan found it not worth posting.
---   Anything not bound that came back unsold twice in a row (gear, trade goods, ... - decision 300).
+--   Anything not bound that came back unsold (gear, trade goods, ... - decision 300; once is enough, decision 431).
+--   Trade goods and green items my last auction house look found not worth +30% (decision 431).
 --   White items: my last auction house scan found them not worth more than the vendor price.
 --   White gear (not bound, no upgrade for me): always, it never goes to the auction house (decision 428).
 --   Bound gear: worse than what I wear by the item score, or gear my class cannot use at all.
@@ -180,14 +181,16 @@ function V.Reason(it, extra, ctx)
         if gear and AH and AH.UpgradeForMe and AH.UpgradeForMe(link, equipLoc) then return nil end
         local worth = ah.worth and ah.worth[id]
         local fails = ah.fails and ah.fails[id] or 0
-        -- unsold twice in a row: gear and everything else, e.g. trade goods in the reagent bag (decision 300)
-        if fails >= ((AH and AH.UNSOLD_LIMIT) or 2) then return "unsold", "came back unsold twice" end
+        -- unsold: gear and everything else, e.g. trade goods in the reagent bag (decisions 300, 431)
+        if fails >= ((AH and AH.UNSOLD_LIMIT) or 1) then return "unsold", "came back unsold" end
         if gear and q == 1 then return "white", "white gear - always sold here" end       -- decision 428
         if gear then
             if worth == false then return "low", "not worth the auction house" end
             return nil
         end
         if q == 1 and worth == false then return "low", "no more at the auction house than here" end
+        -- trade goods and green items under +30% at the auction house (decision 431)
+        if worth == false and (classID == 7 or q == 2) then return "low", "not worth the auction house" end
         return nil
     end
     -- bound recipes of a profession I do not have (decision 310); unknown professions: kept

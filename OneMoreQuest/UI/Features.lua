@@ -68,9 +68,9 @@ FE.SECTIONS = {
     } },
     { "Comfort", {
         "Quests at the NPC: accepted (not the grey ones), finished ones handed in, the best reward marked by item score",
-        { "Auction helper: everything worth more on the auction house, posted with one click each - fast or select mode; it starts with a scan of the whole auction house", unlock = "auction" },
-        { "Auction helper, buy mode: weapon upgrades, potions, elixirs, stones, oils, scrolls, buff food and armor kits, bags, reagent bags and quivers for your class - stock up or buy single pieces", unlock = "auction" },
-        "Vendor helper: what to sell at the vendor - grey items, gear not worth the auction house or unsold twice, old food and drink, recipes of professions you do not have",
+        { "Auction helper: everything worth more on the auction house (green items and materials at least 30% more), posted with one click each - fast or select mode; it starts with a scan of the whole auction house every 4 hours", unlock = "auction" },
+        { "Auction helper, buy mode: weapon upgrades you can wear right now, cheap potions, elixirs, stones, oils, scrolls, buff food and armor kits under a price limit, bags, reagent bags and quivers for your class - stock up or buy single pieces", unlock = "auction" },
+        "Vendor helper: what to sell at the vendor - grey items, gear not worth the auction house or unsold, old food and drink, recipes of professions you do not have",
         "Automatic repair, selling of grey items, water and ammo at vendors",
         "Dad UI: the shared interface of the dads with one click, per character; your old UI can be restored",
         "Chat filter, with a window for the hidden messages",

@@ -1,17 +1,19 @@
 -- One More Quest: Auction Helper, buy mode (decision 264)
 -- The switch on top of the auction helper turns it from selling to buying. It suggests only what fits
 -- the class, the role and the level, each with what I carry and what it suggests:
---   weapon upgrades (item score against what I wield, usable up to 2 levels above mine, at most half
---   my gold), healing and mana potions (5 each), elixirs (10), weapon stones for blades or blunt
---   weapons (10), weapon oil (2, it has 5 charges), scrolls (5), buff food (10), armor kits for chest,
+--   weapon upgrades (item score against what I wield, only what I can put on right now - level, weapon skill
+--   and class from the game's tooltip, decision 431 - at most half my gold), and the stock rows of
+--   UI/BuyRules.lua: small, cheap buffs under a price limit per use (decision 431), armor kits for chest,
 --   legs, hands and feet without an enchantment, a shield spike for a shield without one.
--- A buff item found in the bags joins the list: the dad got it himself, so he wants it again.
+-- Every row is searched live once the Buy tab is open; the dump of the whole house is not used here (decision 431).
 -- Bags too (decision 265): a bigger bag, profession bags, soul bags, quivers and ammo pouches.
 -- Two ways to buy: "Fill up" (a click buys what is missing; one button fills everything, one click per
--- item) and "Single" (a click buys one piece). Right click: never suggest it again. No price brake.
+-- item) and "Single" (a click buys one piece). Right click: never suggest it again. A purchase never goes over
+-- the price limit of its row (decision 431).
 -- A purchase counts at once, even while it waits in the mailbox (decision 271).
 -- Buying a commodity: StartCommoditiesPurchase (needs the click), then the price quote comes back and
--- ConfirmCommoditiesPurchase completes it. Single auctions (weapons): PlaceBid with the buyout.
+-- ConfirmCommoditiesPurchase completes it. Single auctions (weapons, bags): a fresh search on the first click,
+-- PlaceBid with the buyout on the second (decision 431).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -22,7 +24,8 @@ B.TARGET = { potion = 5, scroll = 5, elixir = 10, stone = 10, oil = 2, food = 10
 B.KIND_LABEL = { potion = "potion", scroll = "scroll", elixir = "elixir", stone = "weapon stone", oil = "weapon oil",
                  food = "buff food", flask = "flask", juju = "juju", kit = "armor kit", spike = "shield spike" }
 B.KIND_ORDER = { potion = 1, elixir = 2, flask = 3, food = 4, scroll = 5, stone = 6, oil = 7, kit = 8, spike = 9, juju = 10 }
-B.WEAPON_LEVELS, B.WEAPON_GOLD_SHARE, B.WEAPON_ROWS, B.WEAPON_CHECK = 2, 0.5, 3, 5
+-- weapons only that I can wield right now: no level above mine (decision 431; was 2, decision 402)
+B.WEAPON_LEVELS, B.WEAPON_GOLD_SHARE, B.WEAPON_ROWS, B.WEAPON_CHECK = 0, 0.5, 3, 5
 B.ROWS = 10
 
 local GOLD = { 0.89, 0.71, 0.29 }
@@ -112,32 +115,11 @@ local function level() return UnitLevel and tonumber((UnitLevel("player"))) or 1
 ----------------------------------------------------------------------
 -- What fits my class and role
 ----------------------------------------------------------------------
--- the lines of Data/BuyList.lua a class and role use
+-- the lines of Data/BuyList.lua a class and role use (decision 431: the groups of UI/BuyRules.lua)
 function B.Lines(class, role)
-    local L = { "heal" }
-    local mana = class ~= "WARRIOR" and class ~= "ROGUE"
-    if mana then L[#L + 1] = "mana" end
-    local caster = class == "MAGE" or class == "WARLOCK" or class == "PRIEST" or role == "caster" or role == "heal"
-    local tank = role == "tank"
-    local function add(...) for _, k in ipairs({ ... }) do L[#L + 1] = k end end
-    if caster then
-        add("e_int")
-        if role ~= "heal" then add("e_spell") end
-        add("s_int", "s_spi", "s_sta")
-        add(role == "heal" and "oil_mana" or "oil_wiz")
-        add("f_mp5")
-    elseif tank then
-        add("e_def", "e_fort", "s_sta", "s_prot")
-        if class == "DRUID" then add("e_agi", "s_agi", "f_agi") else add("s_str", "f_str", "stone") end
-    elseif class == "ROGUE" or class == "HUNTER" or class == "DRUID" then
-        add("e_agi", "s_agi", "s_sta", "s_prot", "f_agi")
-        if class == "ROGUE" then add("stone") end
-    else                                                   -- warrior, paladin, shaman with weapons
-        add("e_str", "s_str", "s_sta", "s_prot", "f_str", "stone")
-        if class == "WARRIOR" then add("e_agi") end
-    end
-    add("kit", "spike")
-    return L
+    local out = {}
+    for _, g in ipairs((OMQ.BuyRules.Groups(class, role, { stones = { "stone" }, kitSlots = 1, spike = true }))) do out[#out + 1] = g.line end
+    return out
 end
 
 -- blade or blunt: which stone the main hand weapon takes
@@ -236,27 +218,7 @@ function B.Excluded(class, lines)
     return out
 end
 
-local function best(line, lvl)
-    local L = OMQ.BuyLines and OMQ.BuyLines[line]
-    if not L then return nil end
-    local pick, prev
-    for _, it in ipairs(L[2]) do
-        local need = it[2]
-        if L[1] == "spike" then need = math.max(it[2], it[3] - 5) end     -- spikes: by item level
-        if need <= lvl then prev, pick = pick, it end
-    end
-    return pick and pick[1], L[1], prev and prev[1]
-end
-
--- the weaker one of a line next to the best (decision 269): when filling up with the best costs more
--- than PRICEY of my gold and the weaker one costs at most CHEAPER of its price per piece
-B.PRICEY, B.CHEAPER = 0.1, 1 / 3
-function B.ShowCheaper(bestRow, alt)
-    local b, a = bestRow.offers and bestRow.offers[1], alt.offers and alt.offers[1]
-    if not (b and a and bestRow.state == "ok" and alt.state == "ok") then return false end
-    local gold = GetMoney and GetMoney() or 0
-    return b.unit * bestRow.target > gold * B.PRICEY and a.unit <= b.unit * B.CHEAPER
-end
+-- (the best item of a line for my level is chosen by UI/BuyRules.lua since decision 431)
 
 -- what kind of buff item this is: from the buy list, or a buff food the list does not know (decision 278).
 -- A food (class 0, subclass 5) whose tooltip promises "Well Fed" counts as buff food - WoW Forever has
@@ -343,151 +305,96 @@ function B.TargetFor(id)
     for _, r in ipairs(rows) do
         if r.itemID == id then return r.target end
     end
+    for _, r in ipairs(alts) do                      -- every item of my groups, also the one not shown (decision 431)
+        if r.itemID == id then return r.target end
+    end
     return nil
 end
 
--- buff foods in the bags or bought and on the way (decision 287): with one of them, no other buff food is offered
-function B.HeldFoods()
-    local held = {}
-    local C = C_Container
-    if C and C.GetContainerNumSlots then
-        for bag = 0, OMQ.LastBag() do
-            for slot = 1, C.GetContainerNumSlots(bag) or 0 do
-                local it = C.GetContainerItemInfo(bag, slot)
-                if it and it.itemID and OMQ.BuyKind(it.itemID) == "food" then held[it.itemID] = true end
-            end
-        end
-    end
-    for id in pairs(mailbox()) do
-        if OMQ.BuyKind(id) == "food" and B.Have(id) > 0 then held[id] = true end
-    end
-    return held
+-- the price of one piece as the live search saw it: a number, false (nobody sells it) or nil (not asked yet)
+local function priceOf(id)
+    local r = byId[id]
+    if not r or r.state == "price" then return nil end
+    if r.state ~= "ok" then return false end
+    local o = r.offers and r.offers[1]
+    return o and o.unit or false
 end
+B.PriceOf = priceOf
 
--- the health potions from the best for my level down to the weakest (decision 288)
-function B.HealChain(lvl)
-    local L = OMQ.BuyLines and OMQ.BuyLines.heal
+-- the stones my weapons take: the main hand's kind, and the off hand's when it is another kind (decision 431)
+function B.MyStones()
+    local main, off = B.StoneLine(16), B.StoneLine(17)
     local out = {}
-    for _, it in ipairs(L and L[2] or {}) do
-        if it[2] <= lvl then table.insert(out, 1, it[1]) end
-    end
+    if main then out[#out + 1] = main end
+    if off and off ~= main then out[#out + 1] = off end
     return out
 end
--- a potion is too dear when filling up with it costs more than PRICEY of my gold
-function B.TooDear(r)
-    local o = r.offers and r.offers[1]
-    if not o then return true end
-    return o.unit * r.target > (GetMoney and GetMoney() or 0) * B.PRICEY
-end
 
--- an item found in the bags (B.LearnBags) comes back as a row only when it fits me (decision 402): an item of a
--- buy line only when the line is mine (no mana potions for a warrior, no intellect scroll for a rogue) and it is
--- not weaker than the best of its line for my level; buff food and items of no line as before
-function B.UsedFits(id, kind, ln, myLines, lvl)
-    if kind == "food" or not ln then return true end
-    if not myLines[ln] then return false end
-    local bestId = best(ln, lvl)
-    if not bestId or bestId == id then return true end
-    local L = OMQ.BuyLines[ln][2]
-    local iBest, iMe
-    for i, it in ipairs(L) do
-        if it[1] == bestId then iBest = i end
-        if it[1] == id then iMe = i end
-    end
-    return not (iBest and iMe and iMe < iBest)
-end
-
+-- the stock rows (decision 431): one per group of UI/BuyRules.lua, the strongest item under the limit; every item
+-- that could be the one is priced live first (cands), a group waits while a stronger item is not priced yet
 function B.Build()
     for i = #rows, 1, -1 do rows[i] = nil end
     for i = #alts, 1, -1 do alts[i] = nil end
-    local A = CA()
+    local R = OMQ.BuyRules
     local SC = OMQ.Score
     local class = SC and SC.MyClass() or select(2, UnitClass("player"))
     local role = SC and SC.MyRole() or "damage"
     local lvl = level()
-    local never = (db())
-    never = never.never
+    local never = (db()).never
     local seen = {}
-    local heldFood = B.HeldFoods()
-    local anyFood = next(heldFood) ~= nil
     local function add(r)
-        if r.kind == "food" and anyFood and not heldFood[r.itemID] then return end      -- one buff food is enough
         if not seen[r.itemID] and not never[r.itemID] then seen[r.itemID] = true; rows[#rows + 1] = r; r.order = #rows end
     end
-    local lines = B.Lines(class, role)
-    local excluded = B.Excluded(class, lines)
-    local myLines = {}
-    for _, l in ipairs(lines) do
-        if l == "stone" then l = B.StoneLine() end
-        if l then myLines[l] = true end
-    end
-    for _, line in ipairs(lines) do
-        if line == "stone" then line = B.StoneLine() end
-        if line == "heal" and not excluded[line] then
-            -- always a health potion: the best one, or the next weaker one while it is too dear (decision 288)
-            local target = B.TARGET.potion or 5
-            local chain = B.HealChain(lvl)
-            local shown, last, waiting
-            for i, id in ipairs(chain) do
-                local r = rowFor(id, "potion", "heal", target, false)
-                if i > 1 then r.cheaper = true end
-                alts[#alts + 1] = r
-                if r.state == "ok" then
-                    last = r
-                    if not B.TooDear(r) then shown = r; break end
-                elseif r.state ~= "none" then waiting = r; break end     -- not priced yet: ask it first
-            end
-            if not shown then
-                shown = last or waiting or byId[chain[1] or 0]
-            end
-            if shown then add(shown) end
-        elseif line and not excluded[line] then
-            local id, kind, prevId = best(line, lvl)
-            if id then
-                local target = B.TARGET[kind] or 5
-                if kind == "kit" then target = B.KitSlots() end
-                if kind == "spike" then target = B.ShieldWithoutSpike() and 1 or 0 end
-                if target > 0 then
-                    local r = rowFor(id, kind, line, target, false)
-                    add(r)
-                    if prevId then
-                        local alt = rowFor(prevId, kind, line, target, false)
-                        alt.cheaper = true
-                        alts[#alts + 1] = alt
-                        if B.ShowCheaper(r, alt) then add(alt) end
-                    end
-                end
+    local all = {}
+    for _, g in ipairs((R.Groups(class, role, {}))) do all[#all + 1] = g.line end
+    local excluded = B.Excluded(class, all)
+    local groups, prof = R.Groups(class, role, { stones = B.MyStones(), kitSlots = B.KitSlots(),
+        spike = B.ShieldWithoutSpike(), excluded = excluded })
+    B.pending = 0
+    for _, g in ipairs(groups) do
+        local ids = {}
+        for _, id in ipairs(R.Candidates(g, lvl)) do
+            if not never[id] then
+                ids[#ids + 1] = id
+                local c = rowFor(id, g.kind, g.line, g.target, false)
+                c.cap = g.cap
+                alts[#alts + 1] = c
             end
         end
+        local id, waiting = R.Pick(ids, g.cap, priceOf)
+        if id then add(byId[id]) elseif waiting then B.pending = B.pending + 1 end
     end
-    -- the cheapest buff food on sale: on WoW Forever every one gives +5% XP from kills (decision 268)
+    -- buff food (decision 431): the cheapest food with Well Fed, and the class food under the limit;
+    -- the class food alone when it costs at most 50% more
     for _, f in ipairs(foods) do f.xp = nil end
     local xp = B.CheapestFood(lvl)
-    if xp then
-        local r = rowFor(xp.itemID, "food", "xp", B.TARGET.food or 10, false)
-        r.xp = true
-        add(r)
-    end
-    -- what the dad bought himself before
-    local _, used = db()
-    for id, kind in pairs(used) do
-        local minLevel = select(5, info(id))
-        local ln = B.LineOf(id)
-        if not seen[id] and (not minLevel or minLevel <= lvl) and kind ~= "kit" and kind ~= "spike"
-            and ln ~= "heal" and not (ln and excluded[ln]) and B.UsedFits(id, kind, ln, myLines, lvl) then      -- health potions: see the chain above (decision 288)
-            add(rowFor(id, kind, nil, B.TARGET[kind] or 5, true))
+    local fg = { line = R.FoodLine(prof), kind = "food", cap = R.CAP.food }
+    local fids = {}
+    for _, id in ipairs(R.Candidates(fg, lvl)) do
+        if not never[id] then
+            fids[#fids + 1] = id
+            local c = rowFor(id, "food", fg.line, B.TARGET.food or 10, false)
+            c.cap = fg.cap
+            alts[#alts + 1] = c
         end
     end
+    local classFood, waiting = R.Pick(fids, fg.cap, priceOf)
+    if waiting then B.pending = B.pending + 1 end
+    local xpId, cId = R.Foods(xp and xp.itemID, xp and priceOf(xp.itemID), classFood, classFood and priceOf(classFood))
+    if xpId then
+        local r = rowFor(xpId, "food", "xp", B.TARGET.food or 10, false)
+        r.xp, r.cap = true, nil
+        add(r)
+    end
+    if cId then add(byId[cId]) end
     for _, r in ipairs(rows) do
         r.have = B.Have(r.itemID)
         r.need = math.max(0, r.target - r.have)
-        if A and A.MakeItemKey and not r.itemKey then r.itemKey = A.MakeItemKey(r.itemID) end
         r.itemKey = r.itemKey or { itemID = r.itemID }
     end
     table.sort(rows, function(a, b)
         local ka, kb = B.KIND_ORDER[a.kind] or 99, B.KIND_ORDER[b.kind] or 99
         if ka ~= kb then return ka < kb end
-        if a.mine ~= b.mine then return not a.mine end
         return (a.order or 0) < (b.order or 0)
     end)
     return rows
@@ -526,11 +433,12 @@ local function onStock(r)
     B.Build()                                   -- the cheapest food may have changed (decision 268)
 end
 
--- what n pieces cost, and how many are there
+-- what n pieces cost, and how many are there; a row with a price limit counts only the offers under it (decision 431)
 function B.Cost(r, n)
     local total, got = 0, 0
     for _, o in ipairs(r.offers or {}) do
         if got >= n then break end
+        if r.cap and o.unit and o.unit > r.cap then break end
         local take = r.commodity and math.min(o.qty, n - got) or o.qty
         total = total + (r.commodity and o.unit * take or o.buyout)
         got = got + take
@@ -584,7 +492,7 @@ local function onBrowse(dump)
         local _, _, _, equipLoc, _, classID = instant(id or 0)
         local minLevel = select(5, info(id or 0))
         if id and classID == 2 and (res.minPrice or 0) <= budget() and (not minLevel or minLevel <= lvl + B.WEAPON_LEVELS)
-            and (not SC or SC.CanUse("item:" .. id, class, lvl + B.WEAPON_LEVELS)) then
+            and (not SC or SC.CanUse("item:" .. id, class, lvl)) then
             local g = gainOf("item:" .. id, equipLoc) or 0
             local k = AH()._KeyString(res.itemKey)
             if not seen[k] then
@@ -609,7 +517,7 @@ local function onBrowse(dump)
             local bestO, bestG
             for _, o in ipairs(readOffers(x)) do
                 local need = select(5, info(o.link or 0))
-                if o.link and o.buyout <= budget() and not (need and need > level() + B.WEAPON_LEVELS) then
+                if o.link and o.buyout <= budget() and not (need and need > level() + B.WEAPON_LEVELS) and B.CanEquipNow(o.link) ~= false then
                     local g = gainOf(o.link, x.equipLoc)
                     if g and g > 0 and (not bestG or g > bestG or (g == bestG and o.buyout < bestO.buyout)) then bestO, bestG = o, g end
                 end
@@ -630,6 +538,30 @@ local function needLevel(link)
     return need
 end
 B.NeedLevel = needLevel
+-- can I put it on right now (decision 431)? The game's tooltip writes in red what stops me: the level, the weapon
+-- skill I have not learned, the class. true, false, or nil while the game has not loaded the item.
+-- No tooltip data on this client: the level and the class decide.
+local function red(c)
+    if type(c) ~= "table" then return false end
+    local r, g, b = c.r, c.g, c.b
+    if type(r) ~= "number" or isSecret(r) or isSecret(g) or isSecret(b) then return false end
+    return r > 0.9 and (g or 1) < 0.3 and (b or 1) < 0.3
+end
+function B.CanEquipNow(link)
+    if not link then return nil end
+    local need = needLevel(link)
+    if need and need > level() then return false end
+    local SC = OMQ.Score
+    if SC and SC.CanUse and not SC.CanUse(link, SC.MyClass(), level()) then return false end
+    local T = C_TooltipInfo
+    if not (T and T.GetHyperlink) then return need ~= nil or nil end
+    local ok, data = pcall(T.GetHyperlink, link)
+    if not ok or type(data) ~= "table" or type(data.lines) ~= "table" or #data.lines == 0 then return nil end
+    for _, l in ipairs(data.lines) do
+        if red(l.leftColor) or red(l.rightColor) then return false end
+    end
+    return true
+end
 function B.Weapons()
     for i = #weapons, 1, -1 do weapons[i] = nil end
     local never = (db()).never
@@ -637,7 +569,8 @@ function B.Weapons()
     for _, c in ipairs(candidates) do
         -- only what I can wield within WEAPON_LEVELS: an offer whose level is not known yet waits (decision 402)
         local need = c.offer and needLevel(c.offer.link)
-        if c.offer and c.gain and need and need <= maxLevel and not never[c.itemID] and not c.bought then weapons[#weapons + 1] = c end
+        if c.offer and c.gain and need and need <= maxLevel and B.CanEquipNow(c.offer.link) == true
+            and not never[c.itemID] and not c.bought then weapons[#weapons + 1] = c end
     end
     table.sort(weapons, function(a, b) return a.gain > b.gain end)
     for i = #weapons, B.WEAPON_ROWS + 1, -1 do weapons[i] = nil end
@@ -1011,54 +944,7 @@ function B.ScanAll()
     B.Build()
 end
 
--- the dump of the whole house answers what it can (decision 343): the stock prices of stackable items, and the
--- weapons and bags, which are judged at once; only the offers of the few candidates are searched later
-local function dumpList(classes)
-    local P, out = OMQ.Prices, {}
-    local make = C_AuctionHouse and C_AuctionHouse.MakeItemKey
-    for id, e in pairs(P.Items()) do
-        local classID = select(6, instant(id))
-        if classes[classID] then
-            out[#out + 1] = { itemKey = make and make(id) or { itemID = id, itemLevel = 0, itemSuffix = 0 }, minPrice = e.p, totalQuantity = e.q }
-        end
-    end
-    return out
-end
-function B.UseDump()
-    local P = OMQ.Prices
-    if not P then return end
-    local changed = false
-    for _, list in ipairs({ rows, foods, alts }) do
-        for _, r in ipairs(list) do
-            if r.state == "price" and not r.live then
-                local stack = select(8, info(r.itemID))
-                -- only a live price of the last minutes, the dump can be far off (decision 427): else it is searched
-                local p, q = P.Live and P.Live(r.itemID, AH().PRICE_TTL)
-                if (stack or 1) > 1 and p then
-                    B.FromBatch(r, { minPrice = p, totalQuantity = q })
-                    changed = true
-                end
-            end
-        end
-    end
-    if not (P.Session and P.Session()) then
-        if changed then B.Build() end
-        return
-    end
-    if browse.state == "idle" then
-        B.want.weapons = true
-        browse.results, browse.state = nil, "done"
-        local ok, err = pcall(onBrowse, dumpList({ [2] = true }))
-        if not ok then OMQ:Error("auction buy dump", err) end
-    end
-    if bagBrowse.state == "idle" then
-        B.want.bags = true
-        bagBrowse.results, bagBrowse.tries, bagBrowse.answered = dumpList({ [1] = true, [11] = true }), 0, 0
-        bagBrowse.log = { "from the dump of the whole house" }
-        B.JudgeBags()
-    end
-    if changed then B.Build() end
-end
+-- (the dump of the whole house no longer feeds the weapons, bags and stock rows: decision 431)
 
 -- the next search the auction helper's queue should send (after its own price checks)
 function B.NextQuery()
@@ -1153,7 +1039,7 @@ function B.Buy(r, n)
         local cost, got = B.Cost(r, n)
         n = math.min(n, got)
         if n < 1 or not afford(cost) then return false end
-        buying = { row = r, qty = n, base = B.Have(r.itemID), at = now(), expect = cost }
+        buying = { row = r, qty = n, base = B.Have(r.itemID), at = now(), expect = cost, limit = r.cap and r.cap * n }
         AH().Own(A.StartCommoditiesPurchase, r.itemID, n)
     else
         local o = r.offers[1]
@@ -1167,9 +1053,81 @@ function B.Buy(r, n)
     return true
 end
 
+-- Single auctions (weapons, bags) are bought from a fresh search (decision 431): the first click searches exactly
+-- this item again, the queue then holds still for FRESH seconds, and the second click buys the auction the game
+-- has just shown. A purchase from an old search failed, because the game no longer knew the auction.
+B.FRESH = 10
+B.check = nil              -- { row, kind = "weapon" | "bag", sent }
+function B.Fresh(x)
+    local f = x and x.fresh
+    local H = AH()
+    return f and now() - f.at < B.FRESH and f.seq == (H.searchSeq or 0) or false
+end
+local function bestWeaponOffer(x, offers)
+    local bestO, bestG
+    for _, o in ipairs(offers) do
+        local need = select(5, info(o.link or 0))
+        if o.link and o.buyout <= budget() and not (need and need > level() + B.WEAPON_LEVELS) and B.CanEquipNow(o.link) ~= false then
+            local g = gainOf(o.link, x.equipLoc)
+            if g and g > 0 and (not bestG or g > bestG or (g == bestG and o.buyout < bestO.buyout)) then bestO, bestG = o, g end
+        end
+    end
+    return bestO, bestG
+end
+B._bestWeaponOffer = bestWeaponOffer
+local function onCheck(q)
+    local c = B.check
+    B.check = nil
+    if not c then return end
+    local x = c.row
+    x.checking = nil
+    x.itemKey = q.itemKey or x.itemKey
+    local offers = readOffers(q)
+    if c.kind == "weapon" then
+        x.offer, x.gain = bestWeaponOffer(x, offers)
+        if not x.offer then x.state = "done"; OMQ:Print("auction helper: that weapon is gone") end
+    else
+        x.offers = offers
+        x.state = #offers > 0 and "ok" or "none"
+        if #offers == 0 then OMQ:Print("auction helper: that bag is gone") end
+    end
+    local H = AH()
+    x.fresh = (c.kind == "weapon" and x.offer or (c.kind ~= "weapon" and #offers > 0)) and { at = now(), seq = H.searchSeq or 0 } or nil
+    if x.fresh then
+        H.quietUntil = now() + B.FRESH                       -- no other search: the auction stays the game's latest
+        if C_Timer and C_Timer.After then C_Timer.After(B.FRESH + 0.1, function() H.Refresh() end) end
+    end
+end
+-- the check search for the queue: it goes before everything else
+function B.CheckQuery()
+    local c = B.check
+    if not c or c.sent then return nil end
+    c.sent = true
+    local x = c.row
+    local A = CA()
+    return { key = "check" .. tostring(x.itemID), itemID = x.itemID, itemKey = x.itemKey or (A and A.MakeItemKey and A.MakeItemKey(x.itemID)) or { itemID = x.itemID },
+             anyKey = true, commodity = false, onResult = onCheck }
+end
+function B.StartCheck(x, kind)
+    if not x or B.check then return false end
+    x.checking, x.fresh = true, nil
+    B.check = { row = x, kind = kind }
+    AH().Refresh(); AH().Pump()
+    return true
+end
+
+function B.BuyBag(g)
+    if not g or B.Busy() or not AH().open then return false end
+    if not B.Fresh(g) then return B.StartCheck(g, "bag") end
+    g.fresh = nil
+    return B.Buy(g, 1)
+end
+
 function B.BuyWeapon(w)
     local A = CA()
     if not (A and w and w.offer) or B.Busy() or not AH().open then return false end
+    if not B.Fresh(w) then return B.StartCheck(w, "weapon") end
+    w.fresh = nil
     AH().Quiet()
     if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then AH().WaitNote(); return false end
     if not afford(w.offer.buyout) then return false end
@@ -1287,8 +1245,9 @@ end
 -- the game's price for a purchase may be above an estimate: then no purchase, the offers are looked at
 -- closely and the next click buys at the real price (decision 293)
 B.PRICE_SLACK = 1.2
-function B.PriceOk(expect, total)
+function B.PriceOk(expect, total, limit)
     if not (expect and total) then return true end
+    if limit and total > limit then return false end           -- never over the price limit of the row (decision 431)
     return total <= expect * B.PRICE_SLACK + 100
 end
 ev:SetScript("OnEvent", function(_, event, a1, a2)
@@ -1298,7 +1257,7 @@ ev:SetScript("OnEvent", function(_, event, a1, a2)
         local A = CA()
         if event == "COMMODITY_PRICE_UPDATED" then
             if buying and buying.row then
-                if B.PriceOk(buying.expect, a2) then
+                if B.PriceOk(buying.expect, a2, buying.limit) then
                     AH().Own(A.ConfirmCommoditiesPurchase, buying.row.itemID, buying.qty)
                 else
                     if A.CancelCommoditiesPurchase then A.CancelCommoditiesPurchase() end
@@ -1317,8 +1276,8 @@ ev:SetScript("OnEvent", function(_, event, a1, a2)
 end)
 
 function B.Open()
-    buying, late = nil, nil
-    B.want.weapons, B.want.bags = false, false
+    buying, late, B.check = nil, nil, nil
+    B.want.weapons, B.want.bags = true, true          -- searched by themselves once the Buy tab is open (decision 431)
     browse.state = "idle"
     resetBags()
     for i = #candidates, 1, -1 do candidates[i] = nil end
@@ -1454,7 +1413,7 @@ local function build(panel)
         local r = makeRow(ui, 38)
         r:SetScript("OnClick", function(self, button)
             if not self.g then return end
-            if button == "RightButton" then B.Never(self.g.itemID) else B.Buy(self.g, 1) end
+            if button == "RightButton" then B.Never(self.g.itemID) else B.BuyBag(self.g) end
         end)
         r:SetScript("OnEnter", function(self)
             if GameTooltip and self.g then GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink("item:" .. self.g.itemID); GameTooltip:Show() end
@@ -1501,7 +1460,8 @@ function B.Render(panel, top)
             r.name:SetText(name or ("item " .. w.itemID)); r.name:SetTextColor(qColor(quality))
             r.sub:SetText((sub or "") .. (minLevel and (" - level " .. minLevel) or ""))
             r.top:SetText("|cff40e060+" .. w.gain .. " score|r")
-            r.bottom:SetText(w.bought and "Bought" or money(w.offer.buyout))
+            r.bottom:SetText(w.bought and "Bought" or (w.checking and "Checking...")
+                or (B.Fresh(w) and ("|cff40e060Click: buy|r " .. money(w.offer.buyout))) or money(w.offer.buyout))
             y = y + 44
         end
     end
@@ -1549,7 +1509,8 @@ function B.Render(panel, top)
             local what = B.KindLabel(g.bagKind) or "bag"
             r.sub:SetText(g.replaces == 0 and (what .. " - an empty bag slot") or string.format("%s - instead of %d slots", what, g.replaces))
             r.top:SetText("|cff40e060" .. g.slots .. " slots|r")
-            r.bottom:SetText((buying and buying.row == g) and "Buying..." or (g.bought and "Bought") or money0(B.Cost(g, 1)))
+            r.bottom:SetText((buying and buying.row == g) and "Buying..." or (g.bought and "Bought") or (g.checking and "Checking...")
+                or (B.Fresh(g) and ("|cff40e060Click: buy|r " .. money0(B.Cost(g, 1)))) or money0(B.Cost(g, 1)))
             y = y + 40
         end
     end
