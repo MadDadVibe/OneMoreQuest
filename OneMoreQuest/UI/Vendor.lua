@@ -91,6 +91,13 @@ function V.FoodKind(id)
     if sname == spellName(V.DRINK_SPELL) then return "drink" end
     return nil
 end
+-- the level tier of plain food and drink: the highest vendor tier I can eat (decision 443)
+V.FOOD_TIERS = { 1, 5, 15, 25, 35, 45, 55 }
+function V.FoodTier(lvl)
+    local t = 1
+    for _, x in ipairs(V.FOOD_TIERS) do if x <= lvl then t = x end end
+    return t
+end
 -- the best level of each kind in my bags that I can use now
 function V.BestFood()
     local best = {}
@@ -197,6 +204,9 @@ function V.Reason(it, extra, ctx)
         local best = ctx.food and ctx.food[kind]
         local need = select(5, info(link or id)) or 1
         if best and need < best then return "old", "old " .. kind .. " - you carry better" end
+        -- plain food and drink for a lower level (decision 443): below the level tier of the vendors' food
+        -- (1, 5, 15, 25, 35, 45, 55) that I can eat now; buff food never comes here
+        if need < V.FoodTier(level()) then return "old", kind .. " for a lower level" end
         return nil
     end
     if OMQ.Ready and OMQ.Ready.KEEP and OMQ.Ready.KEEP[id] then return nil end
