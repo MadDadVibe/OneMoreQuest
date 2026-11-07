@@ -123,11 +123,15 @@ local function onProgress()
     if IsQuestCompletable and IsQuestCompletable() then CompleteQuest() end
 end
 
--- the best reward: { index, gain } by score, else by vendor price
+-- the best reward: { index, gain } by score, else by vendor price; gear my class cannot wear or wield
+-- (armour type, weapon type, mail and plate from level 40) is never the upgrade (decision 429)
 local hint
 function QA.BestReward(n, getLink)
     getLink = getLink or function(i) return GetQuestItemLink and GetQuestItemLink("choice", i) end
     local LP = OMQ.LootPreview
+    local S = OMQ.Score
+    local class = S and S.MyClass and S.MyClass()
+    local level = (UnitLevel and UnitLevel("player")) or 1
     local bestI, bestG, bestP, bestPI
     for i = 1, n do
         local link = getLink(i)
@@ -135,7 +139,12 @@ function QA.BestReward(n, getLink)
             local equipLoc
             if C_Item and C_Item.GetItemInfoInstant then equipLoc = select(4, C_Item.GetItemInfoInstant(link)) end
             local g
-            if LP and LP.Gain and equipLoc and equipLoc ~= "" then
+            local usable = true
+            if S and S.CanUse and class then
+                local ok, can = pcall(S.CanUse, link, class, level)
+                usable = not ok or can ~= false
+            end
+            if usable and LP and LP.Gain and equipLoc and equipLoc ~= "" then
                 local ok, v = pcall(LP.Gain, link, equipLoc)
                 g = ok and v or nil
             end
