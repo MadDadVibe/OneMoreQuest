@@ -4,6 +4,7 @@
 --   Gear that is not bound (any quality): my last auction house scan found it not worth posting.
 --   Anything not bound that came back unsold twice in a row (gear, trade goods, ... - decision 300).
 --   White items: my last auction house scan found them not worth more than the vendor price.
+--   White gear (not bound, no upgrade for me): always, it never goes to the auction house (decision 428).
 --   Bound gear: worse than what I wear by the item score, or gear my class cannot use at all.
 --   Old food and drink: a lower level than the best plain food / water I carry (decision 299).
 --   Profession tools of a profession I do not have (decision 299).
@@ -67,6 +68,7 @@ local function isGear(equipLoc)
     local S = OMQ.Compare and OMQ.Compare.SLOTS
     return S and S[equipLoc] and true or false
 end
+V.IsGear = isGear
 
 -- food and drink (decision 299): plain food and water (not buff food) of a lower level than the best of
 -- the same kind I carry and can use are old. The kind comes from the item's spell, compared with the
@@ -180,6 +182,7 @@ function V.Reason(it, extra, ctx)
         local fails = ah.fails and ah.fails[id] or 0
         -- unsold twice in a row: gear and everything else, e.g. trade goods in the reagent bag (decision 300)
         if fails >= ((AH and AH.UNSOLD_LIMIT) or 2) then return "unsold", "came back unsold twice" end
+        if gear and q == 1 then return "white", "white gear - always sold here" end       -- decision 428
         if gear then
             if worth == false then return "low", "not worth the auction house" end
             return nil

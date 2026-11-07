@@ -8,7 +8,8 @@
 --   Unsold twice in a row (the game's mails tell): off the fast list like a skip (decision 261).
 -- What counts: every item from white up that can be sold on the auction house (not bound) - potions,
 -- food, trade goods, recipes, gear (decision 260); the worth rule filters the rest. Left out: quest
--- items, ammo, profession tools (decision 277), the drinks and class supplies of the Group Check and a gear upgrade for me.
+-- items, ammo, profession tools (decision 277), the drinks and class supplies of the Group Check and a gear upgrade for me,
+-- and white gear: it always goes to the vendor (decision 428).
 -- A material that a dad needs for a recipe (Needs.lua) is sold like anything else since decision 301.
 -- Price: the current lowest price, not undercut. No price on the auction house: stays in the bag.
 -- Worth it: price x quantity - 5% cut is at least 5% above the vendor price. The deposit does not count:
@@ -158,7 +159,11 @@ function AH.Scan()
                 -- every white or better item (decision 260); not quest items, ammo, drinks and class supplies
                 local keep = OMQ.Ready and OMQ.Ready.KEEP and OMQ.Ready.KEEP[it.itemID]
                 local valid = A.IsSellItemValid and A.IsSellItemValid(loc, false)
-                if classID ~= 12 and classID ~= 6 and not keep and not AH.IsTool(it.itemID) and valid ~= false then
+                -- white gear always goes to the vendor (decision 428)
+                local V = OMQ.Vendor
+                local whiteGear = it.quality == 1 and (V and V.IsGear and V.IsGear(equipLoc)
+                                  or (not (V and V.IsGear) and (classID == 2 or classID == 4) and equipLoc and equipLoc ~= ""))
+                if classID ~= 12 and classID ~= 6 and not keep and not whiteGear and not AH.IsTool(it.itemID) and valid ~= false then
                     local link = it.hyperlink
                     local name, _, quality, _, _, _, _, _, _, _, vendor = info(link or it.itemID)
                     local comm = isCommodity(loc)
@@ -1182,7 +1187,7 @@ function AH.Open()
         else
             local at = PR.ScannedAt()
             local age = at and ((time and time() or 0) - at)
-            if age and age <= PR.MAX_AGE then
+            if age and age <= (PR.AUTO_AGE or PR.MAX_AGE) then
                 -- the last scan is still fresh: no new one
             else
                 PR.Start(false)

@@ -2,7 +2,7 @@
 -- The whole auction house is read once with C_AuctionHouse.ReplicateItems (a dump of all auctions, decision 342), and the
 -- lowest price of every item is kept in the saved variables (per realm) until the next scan replaces it.
 -- The crafting profit (UI/CraftProfit.lua) reads these prices. The scan starts by itself when the auction
--- house opens and the last one is older than an hour (option), or with
+-- house opens and the last one is older than 4 hours (option, decision 428), or with
 -- /omq prices scan. It gives way to the auction helper: it never starts while the helper asks for something,
 -- and it waits while a post or a purchase is going on.
 -- Vendor prices are learned too: every merchant window written down what an item costs there, so reagents
@@ -13,7 +13,8 @@ OMQ = _G.OneMoreQuest
 local P = {}
 OMQ.Prices = P
 
-P.MAX_AGE = 900             -- an automatic scan only when the last one is older: the server lets a dump be asked for about every 15 minutes (decision 343)
+P.MAX_AGE = 900             -- a live price stays this long, also through the next dump (decision 427)
+P.AUTO_AGE = 4 * 3600       -- an automatic scan only when the last one is older than 4 hours (decision 428; was 15 minutes, decision 343)
 P.START_DELAY = 0.2         -- seconds after the window opens before the scan starts (decision 343)
 
 local function now() return GetTime() end
@@ -347,7 +348,7 @@ ev:SetScript("OnEvent", function(_, event, a1)
                 C_Timer.After(P.START_DELAY, function()
                     local at = P.ScannedAt()
                     if scan then return end
-                    if not at or stamp() - at > P.MAX_AGE then P.Start(false)
+                    if not at or stamp() - at > P.AUTO_AGE then P.Start(false)
                     else                                      -- fresh: the dump of a moment ago serves this window
                         sessionAt = now()
                         local H = helper()
