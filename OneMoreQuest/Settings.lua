@@ -199,7 +199,7 @@ local function allSections()
                   if OMQ.ThreatMeter then OMQ.ThreatMeter.Refresh() end
               end },
             { type = "check", label = "Follow group members on flights",
-              tip = "If a member flies somewhere, your flight master picks the same destination.",
+              tip = "If a member flies somewhere, your flight master picks the same destination. Hold Shift when you talk to the flight master to not follow this time.",
               get = qolGet("flight"), set = qolSet("flight") },
             -- decision 203: the role for the item score, as spec icons
             { type = "choice", label = "Preferred Role", names = true,

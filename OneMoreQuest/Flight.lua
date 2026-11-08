@@ -140,12 +140,38 @@ local function follow()
     end
 end
 
+-- decision 456: holding Shift while talking to the flight master (or while picking its
+-- "fly" gossip option) skips the follow-flight; the pending follow is dropped
+local SKIP_SECONDS = 15
+local skipUntil = 0
+local function shiftDown() return IsShiftKeyDown and IsShiftKeyDown() and true or false end
+local function skip()
+    local p = F:Pending()
+    pending = nil
+    skipUntil = 0
+    OMQ:Fire("FLIGHT_PENDING")
+    if OMQ.Alerts then OMQ.Alerts:Evaluate() end
+    if p then OMQ:Print("flight: Shift held, you do not follow " .. p.who) end
+end
+F._skip = skip
+
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("TAXIMAP_OPENED")
-frame:SetScript("OnEvent", function()
+frame:RegisterEvent("TAXIMAP_CLOSED")
+frame:RegisterEvent("GOSSIP_SHOW")
+frame:SetScript("OnEvent", function(_, event)
+    if event == "TAXIMAP_CLOSED" then skipUntil = 0 return end
     if not enabled() or not F:Pending() then return end
+    if event == "GOSSIP_SHOW" then
+        if shiftDown() then skipUntil = GetTime() + SKIP_SECONDS end
+        return
+    end
+    if shiftDown() or GetTime() < skipUntil then skip() return end
     -- give the taxi window a moment to fill its node list
-    local function run() local ok, err = pcall(follow); if not ok then OMQ:Error("flight", err) end end
+    local function run()
+        if shiftDown() then skip() return end
+        local ok, err = pcall(follow); if not ok then OMQ:Error("flight", err) end
+    end
     if C_Timer and C_Timer.After then C_Timer.After(0.3, run) else run() end
 end)
 
