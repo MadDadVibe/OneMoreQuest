@@ -443,6 +443,7 @@ function UI:RenderBar()
         arrowTex:SetVertexColor(GREEN[1], GREEN[2], GREEN[3])
     elseif t.distance then
         st.dist = string.format("%d yd - %s", math.floor(t.distance + 0.5), t.what)
+        if t.flight then st.dist = string.format("%d yd - fly from %s - %s", math.floor(t.distance + 0.5), t.flight, t.what) end
         arrowDist:SetText(st.dist)
         wantHeading = t.heading
         arrowTex:SetVertexColor(1, 0.82, 0.25)

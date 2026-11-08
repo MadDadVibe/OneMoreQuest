@@ -10,7 +10,8 @@
 --   only in a group. Only places on my continent; another zone costs ZONE_PENALTY yards.
 --   Plan: start with the cheapest quest, then always add the quest that makes the way the least longer (the
 --   giver before the objectives), then improve the order (reversing parts, moving single stops) while it gets
---   shorter. Straight lines: the planner knows no mountains, rivers or flight paths. Only the way counts.
+--   shorter. Distances are the ways over the land of Path.lua (469: around mountains, lakes and cliffs, flights
+--   I know), straight lines only where the walking network has no data. Only the way counts.
 --   While the run goes, the rest of the stops is sorted again from where I stand whenever a stop is done.
 -- In a group only quests every dad with the addon has (or every one of them can take) are used. The dad who
 -- starts plans the route and sends it to the others; the others report when they picked up a quest or fulfilled
@@ -56,6 +57,12 @@ end
 function R.Dist(p, q)
     if not (p and q) then return 0 end
     if p.inst ~= q.inst then return R.FAR end
+    -- the way over the land when the walking network knows it (469), else straight + zone penalty
+    local path = OMQ.Path
+    if path and path.Enabled() then
+        local c = path.Cost(p, q)
+        if c then return c end
+    end
     local d = math.sqrt((p.a - q.a) ^ 2 + (p.b - q.b) ^ 2)
     if p.map and q.map and p.map ~= q.map then d = d + R.ZONE_PENALTY end
     return d
@@ -956,8 +963,16 @@ function R:Target()
     local view = { qid = s.qid, kind = s.kind, place = s.place, title = R.Title(s.qid) }
     local near = s.kind ~= "o"
     if pos and pos.inst == s.place.inst then
-        view.distance = math.sqrt((s.place.a - pos.a) ^ 2 + (s.place.b - pos.b) ^ 2)
-        if OMQ.Arrow then view.heading = OMQ.Arrow.Heading(s.place.a - pos.a, s.place.b - pos.b) end
+        view.straight = math.sqrt((s.place.a - pos.a) ^ 2 + (s.place.b - pos.b) ^ 2)
+        view.distance = view.straight
+        local ha, hb = s.place.a, s.place.b
+        -- the way over the land (469): the arrow heads for the next point of the way, the yards are the way's
+        local way = OMQ.Path and OMQ.Path.Enabled() and OMQ.Path.Way(pos, s.place)
+        if way and way.via then
+            view.distance, view.via, view.flight = way.cost, true, way.flight
+            ha, hb = way.a, way.b
+        end
+        if OMQ.Arrow then view.heading = OMQ.Arrow.Heading(ha - pos.a, hb - pos.b) end
     end
     local inside = false
     if s.kind == "o" and C_Minimap and C_Minimap.IsInsideQuestBlob then
@@ -965,7 +980,7 @@ function R:Target()
         inside = ok and v == true and not isSecret(v)
     end
     local radius = near and R.PICK_RADIUS or R.OBJ_RADIUS
-    view.there = inside or (view.distance ~= nil and view.distance <= radius)
+    view.there = inside or (view.straight ~= nil and view.straight <= radius)
     if s.kind == "p" then
         view.what = "pick up the quest"
         local q = run.quests[s.qid]
