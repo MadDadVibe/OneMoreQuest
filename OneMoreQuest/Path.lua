@@ -9,7 +9,9 @@
 -- (seconds x SPEED), so a planner that adds yards keeps working.
 --   P.Cost(p, q)  the cost of the way, nil when the network cannot tell (no data, other continent)
 --   P.Way(p, q)   the way for an arrow (Quest Run's small arrow, the main arrow of Guide.lua): { cost, straight, a, b (the point to head for now), via, flight }
--- /omq path [on|off|diag|probe|log]
+-- Fine steering (decision 472): near me the arrow's heading is checked on the 8-yard raster of Data/PathRaster.lua
+-- and steered around walls, cliffs and water the coarse network does not see.
+-- /omq path [on|off|fine on|fine off|diag|probe|log]
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -392,7 +394,7 @@ function P.SearchTo(q, bound)
 end
 
 local wayCache = {}
-function P.Way(p, q)
+local function coarseWay(p, q)
     if not (P.Enabled() and p and q and num(p.a) and num(q.a)) or p.inst ~= q.inst then return nil end
     local s = straight(p.a, p.b, q.a, q.b)
     local plain = { cost = s, straight = s, a = q.a, b = q.b, via = false }
@@ -452,9 +454,216 @@ function P.Way(p, q)
     way.a, way.b = xy(pick or first)
     return way
 end
-function P._ResetWay() wayCache = {} end
+----------------------------------------------------------------------
+-- Fine steering on the 8-yard raster (decision 472)
+----------------------------------------------------------------------
+-- Data/PathRaster.lua holds the walkable ground in cells of 8.33 yards: per cell which of its 8 neighbours it walks
+-- to. The point an arrow heads for (the next point of the way, or the target) is checked in the raster: when the
+-- line to it crosses a wall, a cliff or a lake, a small search finds the way around in the cells near me and the
+-- arrow heads for the farthest cell of that way I can walk to straight. Only the first floor of a cell is known, so
+-- where my cell has more floors (a bridge, a house, a cave, a city under the ground) the arrow stays as it was.
+local CELL = TILE / 64
+P.CELL = CELL
+P.LOOK = 250                    -- yards ahead the fine way is searched
+P.FINE_NODES = 4000             -- cells a fine search looks at at most
+P.FINE_MARGIN = 24              -- cells around me and the point the search may use
+P.FINE_GOAL = 3                 -- cells from a point that is not walkable ground that count as there
+P.FINE_KEEP = 16                -- unpacked tiles kept
+P.FINE_MOVE, P.FINE_AGE = 5, 2  -- the fine way is found again after these yards moved or seconds
+P.SWIM = 1.5                    -- a swum cell costs this much more
+P.FINE_SLACK_YD = 15            -- a way round this little longer (x SLACK) is not steered
+local DR = { -1, 1, 0, 0, -1, -1, 1, 1 }    -- N, S, W, E, NW, NE, SW, SE
+local DC = { 0, 0, -1, 1, -1, 1, -1, 1 }
+local BIT = { 1, 2, 4, 8, 16, 32, 64, 128 }
+local DIR = {}                              -- (dr + 1) * 3 + dc + 2 -> direction
+for d = 1, 8 do DIR[(DR[d] + 1) * 3 + DC[d] + 2] = d end
+local SQ2 = math.sqrt(2)
+local SWUM, FLOORS = 256, 512
+local B64 = {}
+do
+    local abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    for i = 1, 64 do B64[abc:byte(i)] = i - 1 end
+end
+local function walks(v, d) return math.floor(v / BIT[d]) % 2 == 1 end
+local function rc(a, b) return math.floor((ORIGIN - a) / CELL), math.floor((ORIGIN - b) / CELL) end
+local function center(r, c) return ORIGIN - (r + 0.5) * CELL, ORIGIN - (c + 0.5) * CELL end
+P.RC, P.Center = rc, center
+
+local rasterTiles, rasterOrder = {}, {}
+local function unpackTile(str)
+    local t, n = {}, 0
+    for k = 1, #str - 2, 3 do
+        local x, y, z = str:byte(k, k + 2)
+        local v = B64[x] * 64 + B64[y]
+        for _ = 0, B64[z] do n = n + 1; t[n] = v end
+    end
+    return t
+end
+-- the 4096 cells of a tile (rows from the north), nil without data
+function P.RasterTile(inst, key)
+    local id = inst * 16384 + key
+    local t = rasterTiles[id]
+    if t ~= nil then return t or nil end
+    local r = OMQ.PathRaster and OMQ.PathRaster[inst]
+    local str = r and r[key]
+    t = str and unpackTile(str) or false
+    rasterTiles[id] = t
+    rasterOrder[#rasterOrder + 1] = id
+    if #rasterOrder > P.FINE_KEEP then rasterTiles[table.remove(rasterOrder, 1)] = nil end
+    return t or nil
+end
+-- a cell's value: its walk bits, + 256 swum, + 512 more floors; 0 for no walkable ground or no data
+function P.CellAt(inst, r, c)
+    local t = P.RasterTile(inst, math.floor(r / 64) * 128 + math.floor(c / 64))
+    return t and t[(r % 64) * 64 + c % 64 + 1] or 0
+end
+local cellAt = P.CellAt
+
+-- can I walk straight from cell (r0, c0) to cell (r1, c1)? (the cells of the line, step by step)
+function P.Sight(inst, r0, c0, r1, c1)
+    local dx, dy = math.abs(c1 - c0), math.abs(r1 - r0)
+    local sc, sr = c1 > c0 and 1 or -1, r1 > r0 and 1 or -1
+    local err = dx - dy
+    local r, c = r0, c0
+    local v = cellAt(inst, r, c)
+    while r ~= r1 or c ~= c1 do
+        local e2, mr, mc = 2 * err, 0, 0
+        if e2 > -dy then err = err - dy; mc = sc end
+        if e2 < dx then err = err + dx; mr = sr end
+        if not walks(v, DIR[(mr + 1) * 3 + mc + 2]) then return false end
+        r, c = r + mr, c + mc
+        v = cellAt(inst, r, c)
+    end
+    return true
+end
+
+-- the cheapest walk from cell (r0, c0) to (r1, c1) in a box around both (A*, bounded): the cells { {r, c}, ... }
+-- from me on, its yards, and whether it reached the point (else it ends at the cell closest to it)
+function P.FineSearch(inst, r0, c0, r1, c1)
+    local m = P.FINE_MARGIN
+    local rmin, rmax = math.min(r0, r1) - m, math.max(r0, r1) + m
+    local cmin, cmax = math.min(c0, c1) - m, math.max(c0, c1) + m
+    local W = cmax - cmin + 1
+    local open = cellAt(inst, r1, c1) ~= 0
+    local function h(r, c)
+        local a, b = math.abs(r - r1), math.abs(c - c1)
+        if a > b then return a + (SQ2 - 1) * b end
+        return b + (SQ2 - 1) * a
+    end
+    local s = (r0 - rmin) * W + (c0 - cmin)
+    local g, prev, done = { [s] = 0 }, {}, {}
+    local heap = {}
+    push(heap, h(r0, c0), s)
+    local count, found, closest, closestH = 0, nil, s, h(r0, c0)
+    while heap[1] and count < P.FINE_NODES do
+        local i = pop(heap)[2]
+        if not done[i] then
+            done[i] = true
+            count = count + 1
+            local r, c = rmin + math.floor(i / W), cmin + i % W
+            local hi = h(r, c)
+            if hi < closestH then closest, closestH = i, hi end
+            if (r == r1 and c == c1) or (not open and math.max(math.abs(r - r1), math.abs(c - c1)) <= P.FINE_GOAL) then
+                found = i
+                break
+            end
+            local v, gi = cellAt(inst, r, c), g[i]
+            for d = 1, 8 do
+                if walks(v, d) then
+                    local nr, nc = r + DR[d], c + DC[d]
+                    if nr >= rmin and nr <= rmax and nc >= cmin and nc <= cmax then
+                        local j = (nr - rmin) * W + (nc - cmin)
+                        if not done[j] then
+                            local step = d > 4 and SQ2 or 1
+                            if cellAt(inst, nr, nc) % FLOORS >= SWUM then step = step * P.SWIM end
+                            local ng = gi + step
+                            if g[j] == nil or ng < g[j] then
+                                g[j], prev[j] = ng, i
+                                push(heap, ng + h(nr, nc), j)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    P.stats.fine = (P.stats.fine or 0) + 1
+    P.stats.fineCells = count
+    local last = found or closest
+    if last == s then return nil end
+    local back, i = {}, last
+    while i do
+        back[#back + 1] = { rmin + math.floor(i / W), cmin + i % W }
+        i = prev[i]
+    end
+    local path = {}
+    for k = #back, 1, -1 do path[#path + 1] = back[k] end
+    return path, g[last] * CELL, found ~= nil
+end
+
+-- the point to head for from (pa, pb) toward (ha, hb): { a, b, clear (the line is walkable), yards, reached }, nil
+-- when the raster cannot tell
+function P.Fine(inst, pa, pb, ha, hb)
+    if not (OMQ.PathRaster and OMQ.PathRaster[inst]) then return nil end
+    local d = straight(pa, pb, ha, hb)
+    local ta, tb = ha, hb
+    if d > P.LOOK then
+        local f = P.LOOK / d
+        ta, tb = pa + (ha - pa) * f, pb + (hb - pb) * f
+    end
+    local r0, c0 = rc(pa, pb)
+    local r1, c1 = rc(ta, tb)
+    local v0 = cellAt(inst, r0, c0)
+    if v0 == 0 or v0 >= FLOORS then return nil end
+    if (r0 == r1 and c0 == c1) or P.Sight(inst, r0, c0, r1, c1) then return { a = ha, b = hb, clear = true } end
+    local path, yards, reached = P.FineSearch(inst, r0, c0, r1, c1)
+    if not path then return nil end
+    -- a tree, a rock, a fence: a way round that is hardly longer is walked by eye, the arrow stays
+    if reached and yards <= straight(pa, pb, ta, tb) * P.SLACK + P.FINE_SLACK_YD then return { a = ha, b = hb, clear = true } end
+    -- the farthest cell of the way I walk to straight
+    local pick = path[2] or path[1]
+    for k = 3, #path do
+        if not P.Sight(inst, r0, c0, path[k][1], path[k][2]) then break end
+        pick = path[k]
+    end
+    local a, b = center(pick[1], pick[2])
+    return { a = a, b = b, clear = false, yards = yards, reached = reached and d <= P.LOOK }
+end
+
+-- the arrow's heading of a way, steered on the raster; found again after FINE_MOVE yards or FINE_AGE seconds
+local fineCache = {}
+local function steer(p, w)
+    local ha, hb = w.a, w.b
+    local t = GetTime and GetTime() or 0
+    local c = nil
+    for _, x in ipairs(fineCache) do
+        if x.inst == p.inst and math.abs(x.ha - ha) < 5 and math.abs(x.hb - hb) < 5 then c = x; break end
+    end
+    if not c or t - c.t > P.FINE_AGE or t < c.t or straight(c.pa, c.pb, p.a, p.b) > P.FINE_MOVE then
+        local ok, f = pcall(P.Fine, p.inst, p.a, p.b, ha, hb)
+        if not c then
+            c = { inst = p.inst, ha = ha, hb = hb }
+            table.insert(fineCache, 1, c)
+            fineCache[P.WAY_KEEP + 1] = nil
+        end
+        c.pa, c.pb, c.t, c.f = p.a, p.b, t, ok and f or false
+    end
+    local f = c.f
+    if not f or f.clear then return w end
+    if not w.via and f.reached then w.cost = math.max(w.cost, f.yards) end
+    w.a, w.b, w.via, w.fine = f.a, f.b, true, true
+    return w
+end
+
+function P.Way(p, q)
+    local w = coarseWay(p, q)
+    if w and OMQ.PathRaster and not (OMQDB and OMQDB.pathFineOff) then steer(p, w) end
+    return w
+end
+function P._ResetWay() wayCache, fineCache = {}, {} end
 function P._Reset()
-    graphs, taxiCache, wayCache = {}, {}, {}
+    graphs, taxiCache, wayCache, fineCache = {}, {}, {}, {}
+    rasterTiles, rasterOrder = {}, {}
     for k in pairs(memo) do memo[k] = nil end
     P.taxiVersion = P.taxiVersion + 1
 end
@@ -471,6 +680,10 @@ function P.Diag()
     if not pos then out[#out + 1] = "position: none"; return out end
     local g = P.Graph(pos.inst)
     out[#out + 1] = string.format("position: %.0f, %.0f, continent %s", pos.a, pos.b, tostring(pos.inst))
+    local v = OMQ.PathRaster and OMQ.PathRaster[pos.inst] and P.CellAt(pos.inst, P.RC(pos.a, pos.b))
+    out[#out + 1] = "fine steering: " .. ((OMQDB and OMQDB.pathFineOff) and "off" or not v and "no raster here"
+        or v == 0 and "my cell is not walkable ground in the raster" or v >= 512 and "my cell has more floors - not steered here"
+        or string.format("on (my cell walks %d ways%s)", (function() local n = 0; for d = 0, 7 do if math.floor(v / 2 ^ d) % 2 == 1 then n = n + 1 end end; return n end)(), v % 512 >= 256 and ", swum" or ""))
     if not g then out[#out + 1] = "no walking network for this continent"; return out end
     local near = P.Near(g, pos.a, pos.b)
     out[#out + 1] = string.format("network: %d anchors, %d near me (nearest %s yd)", g.n, #near,
@@ -489,7 +702,7 @@ function P.Diag()
                 w.flight and (", fly from " .. w.flight) or "")
         end
     end
-    out[#out + 1] = "searches so far: " .. P.stats.searches
+    out[#out + 1] = "searches so far: " .. P.stats.searches .. ", fine searches: " .. (P.stats.fine or 0)
     if OMQ.PathLog and OMQ.PathLog.Summary then out[#out + 1] = OMQ.PathLog:Summary() end
     return out
 end
@@ -531,6 +744,10 @@ OMQ:RegisterCommand("path", function(arg)
         if OMQDB then OMQDB.pathOff = nil end
         P._ResetWay()
         OMQ:Print("ways over the land: on")
+    elseif arg == "fine off" or arg == "fine on" then
+        if OMQDB then OMQDB.pathFineOff = arg == "fine off" or nil end
+        P._ResetWay()
+        OMQ:Print("fine steering near you: " .. (arg == "fine off" and "off" or "on"))
     elseif arg == "probe" then
         show(P.Probe())
     elseif arg == "log" then
@@ -538,4 +755,4 @@ OMQ:RegisterCommand("path", function(arg)
     else
         show(P.Diag())
     end
-end, "ways over the land: /omq path [on|off|probe|log]")
+end, "ways over the land: /omq path [on|off|fine on|fine off|probe|log]")
