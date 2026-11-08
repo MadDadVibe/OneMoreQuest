@@ -622,12 +622,13 @@ function R.OpenQuestLog(qid, idx)
         if pcall(QuestLog_OpenToQuest, idx) then return true end
     end
     if QuestLogFrame and ShowUIPanel then
-        pcall(ShowUIPanel, QuestLogFrame)
-        if QuestLog_SetSelection and idx then pcall(QuestLog_SetSelection, idx) end
-        if QuestLog_Update then pcall(QuestLog_Update) end
-        return true
+        if pcall(ShowUIPanel, QuestLogFrame) then
+            if QuestLog_SetSelection and idx then pcall(QuestLog_SetSelection, idx) end
+            if QuestLog_Update then pcall(QuestLog_Update) end
+            return true
+        end
     end
-    if ToggleQuestLog then pcall(ToggleQuestLog); return true end
+    if ToggleQuestLog then return (pcall(ToggleQuestLog)) end
     return false
 end
 
@@ -635,9 +636,12 @@ end
 function R:QuestClick(q)
     local qid, idx = myLogId(q)
     if qid then
-        if frame then frame:Hide() end
-        R.OpenQuestLog(qid, idx)
-        return "log"
+        if R.OpenQuestLog(qid, idx) then
+            if frame then frame:Hide() end
+            return "log"
+        end
+        OMQ:Print("The quest log could not be opened")
+        return "none"
     end
     local st = R.QuestStart(q)
     if st and st.kind == "inside" then
@@ -655,7 +659,10 @@ function R:QuestClick(q)
         OMQ:Print((st.giver or "The quest giver") .. " is on another continent (" .. zoneName(st.map) .. ")")
         return "continent"
     end
-    OMQ.Guide:StartAt(st.giver ~= "" and st.giver or (q.name or "Quest giver"), w[1], w[2], w[3])   -- only for me
+    if not OMQ.Guide:StartAt(st.giver ~= "" and st.giver or (q.name or "Quest giver"), w[1], w[2], w[3]) then
+        OMQ:Print("Guidance is disabled")
+        return "none"
+    end
     if frame then frame:Hide() end                       -- the journal can open before the Group Check
     if st.chain then OMQ:Print(string.format("%s starts with \"%s\" - arrow to %s", q.name or "The quest", st.rootName, st.giver)) end
     return "arrow"

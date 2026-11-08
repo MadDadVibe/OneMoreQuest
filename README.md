@@ -27,6 +27,7 @@ The journal shows your character's completed, in-log, level and prerequisite sta
 while open and uses the existing faction filter. “Known prerequisites met” describes only the
 included chain; it does not guarantee that the server offers a quest. Uncovered chains and missing
 client progress APIs show **Unknown**. No character progress is stored or shared by the journal.
+If guidance is disabled or the client cannot open its quest log, the journal stays open and explains why.
 
 The idea comes from [Forever Guide's dungeon quest feature](https://www.curseforge.com/wow/addons/forever-guide).
 This is an independent sample: its small dataset comes from GPL-3.0 QuestieDB Forever, with exact

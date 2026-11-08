@@ -249,11 +249,12 @@ end
 -- tag: "meet" | "pin" | "corpse"; src: guid of the player it came from.
 -- opts (decision 295): { name = shown under the label, radius = arrival in yards }
 function G:StartAt(label, a, b, inst, tag, src, opts)
-    if not OMQ:Master("guidance") then return end
+    if not OMQ:Master("guidance") then return false end
     opts = opts or {}
     dest = { kind = "point", tag = tag, src = src, label = label, radius = opts.radius,
              cands = { { name = opts.name or label, a = a, b = b, inst = inst } }, idx = 1 }
     OMQ:Fire("GUIDE_CHANGED", "point")
+    return true
 end
 
 -- The group arrow (decision 419): points at the nearest group member with the addon,
