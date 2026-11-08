@@ -14,29 +14,55 @@ A World of Warcraft addon for **WoW Forever**, made for a small group of friends
 
 Works with English and German clients.
 
-## Dungeon prerequisite journal — sample proposal
+## Dungeon quest journal — proposal
 
-This branch adds an optional **Quest journal (sample)** button to the existing dungeon Group Check
-(`/omq ready dm`, for example). `/omq journal dm` opens it directly; the arrow buttons browse all
-listed dungeons. Click a dungeon quest to expand its chain, then click an individual step to open
-your quest log or point the existing guidance arrow at that step's giver.
+Open **Quest journal (sample)** from a dungeon Group Check (`/omq ready wc`), or use
+`/omq journal wc`. The arrow buttons browse all listed dungeons. Choose **Horde**, **Alliance**
+or **Both factions** to inspect their quests. Progress and eligibility hints always refer to your
+own character, including when you inspect another faction or class.
 
-Three complete chains are included: **The Defias Brotherhood** (Deadmines, quest 166),
-**Smart Drinks** (Wailing Caverns, 1491), and **Hidden Enemies** (Ragefire Chasm, 5728).
-The journal shows your character's completed, in-log, level and prerequisite states. It refreshes
-while open and uses the existing faction filter. “Known prerequisites met” describes only the
-included chain; it does not guarantee that the server offers a quest. Uncovered chains and missing
-client progress APIs show **Unknown**. No character progress is stored or shared by the journal.
-If guidance is disabled or the client cannot open its quest log, the journal stays open and explains why.
+Quests are grouped by pickup region and sorted by quest level within each region. Click a quest
+to expand its prerequisites, then select a step for its directions. The **Pick up**, **Objectives**
+and **Turn in** tabs explain who to visit and where to go, with region names and coordinates.
+Each expanded prerequisite chain retains its dependency order; alternative prerequisites are not
+treated as if every alternative were mandatory. Missing source data remains explicitly unknown.
 
-The idea comes from [Forever Guide's dungeon quest feature](https://www.curseforge.com/wow/addons/forever-guide).
-This is an independent sample: its small dataset comes from GPL-3.0 QuestieDB Forever, with exact
-source links in `Data/DungeonQuestChains.lua`. Full dungeon coverage, rewards and map pins are
-outside this proposal. No release version is changed.
+Choose a location in the details, then use **Map: region targets** for known target markers in that
+region, **My arrow** for local guidance, or **Tell group** for an explicit party-chat announcement.
+Opening the journal, selecting a quest or viewing its map never sends a destination automatically.
+Native player waypoints are left intact. **Open quest log** opens an accepted quest in the game's
+quest log. Failed client actions and disabled guidance leave the journal open with an explanation.
 
-Run the regression check from the repository root with `lua5.1 tests/dungeon_quest_journal.lua`.
-In-game validation still required: test each faction, expand a chain, accept/turn in a step, check
-that the next step updates and routes to its own giver, then switch dungeons and close with Escape.
+The data covers every existing dungeon quest plus additional source-linked dungeon and class
+quests, with full prerequisite graphs from the merged QuestieDB Forever database. Quests whose
+source identifies only a dungeon complex are labelled as having an unverified wing. A quest with
+missing source prerequisites is listed with an incomplete chain. Markers are representative known
+database locations, not live creature tracking or an exhaustive list of spawns. Dungeon-interior
+positions without verified coordinates are not invented. “Known prerequisites met” does not
+guarantee that the server offers the quest; other game conditions can apply.
+
+Current source coverage: **35 dungeon entries, 377 quest IDs and 642 distinct quest steps** with
+6,557 named location points. All 203 IDs in the existing catalog have complete prerequisite data.
+The additional Gnomeregan quest 4604 references missing alternative 2955 and stays marked incomplete.
+For Krol'dok, Alcaz Prison, Blackmaw and Shaper's Terrace, the source supplies no additional verified
+quests; empty views state that data is missing. The expanded catalog is scoped to the journal, so
+the existing Group Check and its party-message format retain their original quest list.
+
+The feature idea comes from [Forever Guide](https://www.curseforge.com/wow/addons/forever-guide).
+The implementation and data import are independent and use GPL-3.0 QuestieDB Forever, pinned to
+the revision documented in `Data/DungeonQuestChains.lua`. No Forever Guide code/database is
+embedded. This remains a separate draft proposal with no release version change.
+
+To regenerate the data, check out the documented QuestieDB revision and run
+`python tools/generate_dungeon_quests.py PATH_TO_QUESTIEDB`; use `--check` to verify reproducibility
+or `--lua PATH_TO_LUA51` to choose the interpreter. This is an offline development tool, not an
+addon runtime dependency.
+
+Run `lua5.1 tests/dungeon_quest_journal.lua`, `lua5.1 tests/dungeon_quest_locations.lua` and
+`lua5.1 tests/quest_locations.lua` from the repository root. Actual world-map rendering, party
+message delivery and live quest-state changes still require a manual WoW: Forever test.
+The generator's pure regression checks run with
+`python -B -m unittest discover -s tests -p test_generate_dungeon_quests.py`.
 
 ## Install
 

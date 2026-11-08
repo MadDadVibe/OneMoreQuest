@@ -9,10 +9,17 @@ local OMQ = { RegisterCommand = function() end }
 _G.OneMoreQuest = OMQ
 local function loadAddon(path) assert(loadfile("OneMoreQuest/" .. path))("OneMoreQuest", OMQ) end
 loadAddon("Data/DungeonQuests.lua")
+local baseCounts = {}
+for _, d in ipairs(OMQ.Dungeons) do baseCounts[d.key] = #d.quests end
 loadAddon("Data/DungeonQuestChains.lua")
 loadAddon("UI/DungeonQuestJournal.lua")
 local J = OMQ.DungeonQuestJournal
+for _, d in ipairs(OMQ.Dungeons) do equal(#d.quests, baseCounts[d.key], "journal additions leave party-check catalog unchanged") end
 local completed, inLog, level = {}, {}, 60
+local raceID = 1
+local function myRace() return "Test race", "TestRace", raceID end
+local function myClass() return "Druid", "DRUID", 11 end
+UnitRace, UnitClass = myRace, myClass
 local secret = {}
 issecretvalue = function(value) return value == secret end
 UnitLevel = function() return level end
@@ -25,6 +32,37 @@ local function reset()
 end
 
 local chains = OMQ.DungeonQuestChains
+local coverage = OMQ.DungeonQuestCoverage
+equal(coverage.dungeons, #OMQ.Dungeons, "generated metadata covers every listed dungeon")
+equal(coverage.catalogIds, 203, "every original quest and faction variant is retained")
+local roots, incomplete = 0, 0
+for id, chain in pairs(chains) do
+    roots = roots + 1
+    equal(chain[#chain].id, id, "dependency graph ends at its dungeon quest")
+    local seen, missing = {}, {}
+    for _, absent in ipairs(chain.missingPrerequisites or {}) do missing[absent] = true end
+    for _, step in ipairs(chain) do
+        assert(not seen[step.id], "dependency graph has no duplicate quest")
+        for _, group in ipairs({ step.requiresAll, step.requiresAny, step.requiresActive, step.requiresStarted }) do
+            for _, parent in ipairs(group or {}) do assert(seen[parent] or missing[parent], "prerequisite precedes its dependent quest") end
+        end
+        assert(step.objective and step.objective[1] and step.objective[2], "each known step has localized directions")
+        seen[step.id] = true
+    end
+    if not chain.complete then
+        incomplete = incomplete + 1
+        equal(id, 4604, "the source's unresolved Gnomeregan chain remains explicit")
+        equal(missing[2955], true, "missing prerequisite is recorded without invented metadata")
+    end
+end
+equal(roots, coverage.roots, "all generated dungeon quest IDs are available")
+equal(incomplete, coverage.incomplete, "incomplete graph count is accurate")
+for _, d in ipairs(OMQ.Dungeons) do
+    for _, q in ipairs(d.quests) do
+        assert(J.Chain(q), "every displayed dungeon quest has source metadata")
+        for _, id in ipairs(q.alt or {}) do assert(chains[id], "every alternate quest ID has source metadata") end
+    end
+end
 for id, expected in pairs({ [166] = "65,132,135,141,142,155,166", [1491] = "865,1491", [5728] = "5726,5727,5728" }) do
     local chain, ids = chains[id], {}
     equal(J.Chain({ id = id }), chain, "known chain " .. id)
@@ -52,8 +90,10 @@ equal(listed("wc", "Alliance", 1491), true, "Alliance sees neutral Smart Drinks"
 equal(listed("wc", "Horde", 1491), true, "Horde sees neutral Smart Drinks")
 
 -- Every real sample moves forward one step only after the previous quest is handed in.
-for _, chain in pairs(chains) do
+for _, id in ipairs({ 166, 1491, 5728 }) do
+    local chain = chains[id]
     reset()
+    raceID = chain[#chain].faction == "H" and 2 or 1
     local final = chain[#chain]
     equal(J.State(final, chain), "prereq", "terminal starts blocked")
     for i, step in ipairs(chain) do
@@ -125,6 +165,44 @@ C_QuestLog.IsQuestFlaggedCompleted = function(id)
     return false
 end
 equal(J.State(final, chain), "unknown", "unknown prerequisite does not mean ready")
+
+reset()
+local branched = { id = 900001, level = 1, requiresAll = { 900002, 900003 }, requiresAny = { 900004, 900005 } }
+local graph = { branched }
+equal(J.State(branched, graph), "prereq", "AND prerequisites must all be handed in")
+completed[900002], completed[900003] = true, true
+equal(J.State(branched, graph), "prereq", "OR prerequisites need at least one completed alternative")
+completed[900005] = true
+equal(J.State(branched, graph), "ready", "one OR alternative is sufficient")
+branched.requiresActive = { 900006 }
+completed[900006] = true
+equal(J.State(branched, graph), "prereq", "an active prerequisite cannot be replaced by an already handed-in quest")
+completed[900006], inLog[900006] = nil, 3
+equal(J.State(branched, graph), "ready", "an active prerequisite must be in the log")
+branched.requiresActive = nil
+graph.complete = false
+equal(J.State(branched, graph), "unknown", "incomplete source graph does not claim readiness")
+graph.complete = true
+UnitFactionGroup = function() return "Horde" end
+branched.faction = "A"
+equal(J.State(branched, graph), "faction", "browsing the other faction does not claim eligibility")
+UnitFactionGroup = nil
+branched.faction, branched.classes = nil, { 2 }
+UnitClass = function() return "Druid", "DRUID", 11 end
+equal(J.State(branched, graph), "class", "other-class quests remain inspectable without claiming eligibility")
+UnitClass = nil
+equal(J.State(branched, graph), "unknown", "missing identity API does not claim eligibility")
+UnitClass = function() error("class unavailable") end
+equal(J.State(branched, graph), "unknown", "identity API errors remain unknown")
+UnitClass = function() return "Druid", "DRUID", secret end
+equal(J.State(branched, graph), "unknown", "secret class identity is not inspected")
+UnitClass = function() return "Druid", "DRUID" end
+equal(J.State(branched, graph), "unknown", "missing numeric class identity remains unknown")
+branched.classes, branched.races = nil, { 1 }
+UnitRace = function() return "Tauren", "Tauren", 6 end
+equal(J.State(branched, graph), "race", "other-race quests remain inspectable without claiming eligibility")
+raceID = 1
+UnitClass, UnitRace = myClass, myRace
 
 -- Exercise the actual shared quest-start resolver before mocking only the click action.
 loadAddon("Data/DungeonGuide.lua")
@@ -201,7 +279,7 @@ local function object(kind, name, parent)
 end
 for _, name in ipairs({ "SetPoint", "SetFrameStrata", "SetClampedToScreen", "SetMovable", "EnableMouse",
     "RegisterForDrag", "SetAllPoints", "SetColorTexture", "SetJustifyH", "SetWordWrap", "SetHighlightTexture",
-    "StartMoving", "StopMovingOrSizing", "ClearAllPoints", "SetTextColor", "SetNormalTexture", "SetPushedTexture" }) do methods[name] = function() end end
+    "StartMoving", "StopMovingOrSizing", "ClearAllPoints", "SetTextColor", "SetNormalTexture", "SetPushedTexture", "SetJustifyV" }) do methods[name] = function() end end
 function methods:SetSize(w, h) self.width, self.height = w, h end
 function methods:SetWidth(w) self.width = w end
 function methods:SetHeight(h) self.height = h end
@@ -211,6 +289,7 @@ function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false end
 function methods:IsShown() return self.shown end
 function methods:SetShown(value) self.shown = value end
+function methods:SetEnabled(value) self.enabled = value end
 function methods:GetStringWidth() return #(self.text or "") * 6 end
 function methods:CreateTexture() return object("Texture", nil, self) end
 function methods:CreateFontString() return object("FontString", nil, self) end
@@ -249,36 +328,85 @@ equal(UISpecialFrames[1], journal.name, "Escape can close journal")
 local collapsed = rowCount()
 click(row(166, 166))
 equal(rowCount(), collapsed + #chains[166], "expansion shows full chain")
+click(row(132))
+equal(J.selected, chains[166][2], "step click selects its directions")
+equal(journal:IsShown(), true, "selection keeps the directions visible")
 local mockQuestClick = OMQ.Ready.QuestClick
 OMQ.Ready.QuestClick = realQuestClick
 guidanceOn = false
-click(row(132))
+equal(J:GuideToTarget(), false, "disabled arrow action reports failure")
 equal(journal:IsShown(), true, "journal stays open when guidance is disabled")
 guidanceOn, inLog[132] = true, 4
-click(row(132))
+J:Select(chains[166][2])
+local logButton
+for _, f in ipairs(frames) do if f.parent == journal and f.text == "Open quest log" then logButton = f end end
+click(logButton)
 equal(journal:IsShown(), true, "journal stays open when no quest-log UI is available")
 QuestMapFrame_OpenToQuestDetails = function(id) selected = id end
-click(row(132))
+click(logButton)
 equal(journal:IsShown(), false, "successful real quest-log action hides journal")
 inLog[132] = nil
 OMQ.Ready.QuestClick = mockQuestClick
 J:Open("dm")
 click(row(132))
-equal(clicked, chains[166][2], "step click uses shared quest action with immediate giver data")
+equal(J:GuideToTarget(), true, "explicit arrow action uses the selected destination")
 equal(journal:IsShown(), false, "arrow action hides journal")
+J:Open("dm")
+click(row(132))
+local shared, mapped = 0, 0
+OMQ.QuestLocations = {
+    Show = function(_, spots, map) mapped = mapped + 1; equal(map, spots[1].map, "map action uses selected region"); return true end,
+    Share = function(_, target) shared = shared + 1; assert(target.label and target.map, "group action includes destination"); return true end,
+}
+J:Render()
+equal(shared, 0, "rendering directions does not share a destination")
+local shareButton
+for _, f in ipairs(frames) do if f.parent == journal and f.text == "Tell group" then shareButton = f end end
+click(shareButton)
+equal(shared, 1, "only explicit group button shares the selected destination")
+equal(J:ShowMap(), true, "explicit map action opens selected target markers")
+equal(mapped, 1, "map action delegates once")
+equal(shared, 1, "viewing markers does not share another destination")
+OMQ.QuestLocations = nil
 J:Open("dm")
 click(row(166, 166))
 equal(rowCount(), collapsed, "collapsing hides every stale chain row")
 J:Open("sfk")
-equal(rowCount(), 0, "dungeon without this faction's quests hides old rows")
-equal(emptyNotice:IsShown(), true, "Alliance Shadowfang Keep explains its empty list")
+equal(rowCount(), #J.Quests(OMQ:DungeonByKey("sfk"), "Alliance"), "faction-filtered list hides stale rows")
+equal(emptyNotice:IsShown(), rowCount() == 0, "empty notice follows the filtered list")
 faction = "Horde"
 J:Render()
-equal(rowCount(), 3, "faction switch displays matching quests")
+equal(rowCount(), #J.Quests(OMQ:DungeonByKey("sfk"), "Horde"), "faction switch displays matching quests")
 equal(emptyNotice:IsShown(), false, "populated faction switch hides empty notice")
 J:Open("dm")
-equal(rowCount(), 0, "Horde cannot see Alliance sample quests")
-equal(emptyNotice:IsShown(), true, "Horde Deadmines explains its empty list")
+equal(rowCount(), #J.Quests(OMQ:DungeonByKey("dm"), "Horde"), "Horde sees its listed dungeon and class quests")
+equal(emptyNotice:IsShown(), rowCount() == 0, "empty notice follows Horde dungeon data")
+local dungeonByKey = OMQ.DungeonByKey
+local factionTest = { key = "faction-test", name = "Faction test", quests = { { id = 166, name = "Alliance quest", faction = "A" } } }
+OMQ.DungeonByKey = function(self, key) return key == factionTest.key and factionTest or dungeonByKey(self, key) end
+J:Open(factionTest.key)
+equal(rowCount(), 0, "empty faction list hides previous rows")
+equal(emptyNotice:IsShown(), true, "empty faction list explains why no quests are listed")
+faction = "Alliance"
+J:Render()
+equal(rowCount(), 1, "changing faction repopulates the list")
+equal(emptyNotice:IsShown(), false, "repopulating removes the empty notice")
+local hordeButton, allianceButton, bothButton
+for _, f in ipairs(frames) do
+    if f.parent == journal then
+        if f.text == "Horde" then hordeButton = f end
+        if f.text == "Alliance" then allianceButton = f end
+        if f.text == "Both factions" then bothButton = f end
+    end
+end
+click(hordeButton)
+equal(rowCount(), 0, "Horde selector is clickable")
+click(bothButton)
+equal(rowCount(), 1, "Both factions selector includes the other faction")
+click(allianceButton)
+equal(rowCount(), 1, "Alliance selector is clickable")
+J.faction = nil
+OMQ.DungeonByKey = dungeonByKey
 J:Open(OMQ.Dungeons[1].key)
 J:Step(-1)
 equal(J.dungeon, OMQ.Dungeons[#OMQ.Dungeons].key, "previous wraps to last dungeon")
@@ -297,7 +425,7 @@ for _, side in ipairs({ "Alliance", "Horde" }) do
     faction = side
     for _, d in ipairs(OMQ.Dungeons) do
         J:Open(d.key)
-        local quests, expected = OMQ:DungeonQuests(d, side), 0
+        local quests, expected = J.Quests(d, side), 0
         for _, q in ipairs(quests) do
             local header = assert(row(q.id, q.id), "dungeon quest header is visible")
             if header.title.text:sub(1, 3) == "[+]" then click(header) end

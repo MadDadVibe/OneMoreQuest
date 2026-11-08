@@ -54,6 +54,7 @@ Data\SkillThresholds.lua
 Data\TrainerSpells.lua
 Data\BuyList.lua
 UI\Ready.lua
+Guide\QuestLocations.lua
 UI\DungeonQuestJournal.lua
 UI\AuctionHelper.lua
 UI\BuyRules.lua
