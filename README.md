@@ -14,6 +14,29 @@ A World of Warcraft addon for **WoW Forever**, made for a small group of friends
 
 Works with English and German clients.
 
+## Dungeon prerequisite journal — sample proposal
+
+This branch adds an optional **Quest journal (sample)** button to the existing dungeon Group Check
+(`/omq ready dm`, for example). `/omq journal dm` opens it directly; the arrow buttons browse all
+listed dungeons. Click a dungeon quest to expand its chain, then click an individual step to open
+your quest log or point the existing guidance arrow at that step's giver.
+
+Three complete chains are included: **The Defias Brotherhood** (Deadmines, quest 166),
+**Smart Drinks** (Wailing Caverns, 1491), and **Hidden Enemies** (Ragefire Chasm, 5728).
+The journal shows your character's completed, in-log, level and prerequisite states. It refreshes
+while open and uses the existing faction filter. “Known prerequisites met” describes only the
+included chain; it does not guarantee that the server offers a quest. Uncovered chains and missing
+client progress APIs show **Unknown**. No character progress is stored or shared by the journal.
+
+The idea comes from [Forever Guide's dungeon quest feature](https://www.curseforge.com/wow/addons/forever-guide).
+This is an independent sample: its small dataset comes from GPL-3.0 QuestieDB Forever, with exact
+source links in `Data/DungeonQuestChains.lua`. Full dungeon coverage, rewards and map pins are
+outside this proposal. No release version is changed.
+
+Run the regression check from the repository root with `lua5.1 tests/dungeon_quest_journal.lua`.
+In-game validation still required: test each faction, expand a chain, accept/turn in a step, check
+that the next step updates and routes to its own giver, then switch dungeons and close with Escape.
+
 ## Install
 
 Download the latest `OneMoreQuest_vX.Y.Z.zip` from [Releases](../../releases), unzip it into the `Interface/AddOns` folder of your WoW Forever installation and `/reload`.

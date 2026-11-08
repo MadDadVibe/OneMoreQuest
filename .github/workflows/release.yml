@@ -51,6 +51,9 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
+      - name: Dungeon prerequisite journal regression
+        run: lua5.1 tests/dungeon_quest_journal.lua
+
   release:
     needs: check
     if: github.event_name != 'pull_request'
