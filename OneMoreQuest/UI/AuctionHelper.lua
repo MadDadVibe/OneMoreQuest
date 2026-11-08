@@ -20,6 +20,8 @@
 -- Trade goods that are not worth it (a price, but under +5%) are remembered for 3 days; "sell grey
 -- items" sells them at the next vendor too. White items of any kind that are not worth it go the same
 -- way, but only on the day my own scan saw that price (decision 276); my buy-list consumables never do.
+-- Consumables and items I made myself ("You create", 14 days) never go that way (decision 468): only with a click
+-- on the vendor helper's list.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -311,10 +313,53 @@ end
 -- the calendar day, for prices I checked today myself (decision 276)
 function AH.Today() return date and date("%Y-%m-%d") or "?" end
 
--- sold at the vendor with the grey items (QoL.lua): not worth the auction house lately, cannot be worn
+-- items I made myself: item ID -> time of the last "You create" message (decision 468), kept CRAFT_DAYS
+AH.CRAFT_DAYS = 14
+function AH.Crafted(itemID)
+    local t = OMQDB and OMQDB.ah and OMQDB.ah.crafted and OMQDB.ah.crafted[itemID]
+    return t and (time() - t) < AH.CRAFT_DAYS * 86400 or false
+end
+local craftPats
+local function onCraftMsg(msg)
+    if type(msg) ~= "string" or isSecret(msg) then return end
+    if not craftPats then
+        craftPats = {}
+        for _, f in ipairs({ LOOT_ITEM_CREATED_SELF_MULTIPLE or false, LOOT_ITEM_CREATED_SELF or false }) do
+            if type(f) == "string" then             -- "You create: %s." -> "^You create: (.+)%."
+                local p = f:gsub("%%%d?%$?s", "\001"):gsub("%%%d?%$?d", "\002")
+                p = p:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1"):gsub("\001", "(.+)"):gsub("\002", "(%%d+)")
+                craftPats[#craftPats + 1] = "^" .. p
+            end
+        end
+    end
+    for _, p in ipairs(craftPats) do
+        if msg:match(p) then
+            local id = tonumber(msg:match("|Hitem:(%d+)") or "")
+            if id and OMQDB then
+                local d = db()
+                d.crafted = d.crafted or {}
+                d.crafted[id] = time()
+            end
+            return
+        end
+    end
+end
+AH._CraftMsg = onCraftMsg
+local craftFrame = CreateFrame("Frame")
+craftFrame:RegisterEvent("CHAT_MSG_LOOT")
+craftFrame:SetScript("OnEvent", function(_, _, msg)
+    local ok, err = pcall(onCraftMsg, msg)
+    if not ok then OMQ:Error("auction crafted", err) end
+end)
+
+-- sold at the vendor with the grey items (QoL.lua): not worth the auction house lately, cannot be worn.
+-- Never consumables (potions, elixirs, food, scrolls, bandages) and never what I made myself (decision 468):
+-- they stay on the vendor helper's list, sold only with a click.
 function AH.VendorIt(itemID)
     local ah = OMQDB and OMQDB.ah
     if not ah then return false end
+    if select(6, instant(itemID)) == 0 then return false end
+    if AH.Crafted(itemID) then return false end
     if ah.lowDay and ah.lowDay[itemID] and ah.lowDay[itemID] == AH.Today() then return true end
     local t = ah.low and ah.low[itemID]
     return t and (time() - t) < AH.LOW_DAYS * 86400 or false
