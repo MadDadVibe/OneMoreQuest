@@ -368,6 +368,32 @@ local function sameList(a, b)
 end
 CH._sameList = sameList
 
+-- decision 463: once per character (and again with /omq clickheals reset) the addon takes Shift + left and
+-- Shift + right back for its macros: whatever is bound there is removed, the "given" marks are cleared, and
+-- Plan binds the OMQ macros fresh. Many dads had rebound these keys by hand because of the rank problems,
+-- so the macros never came. Only for the healing classes and with the option on; other keys stay.
+CH.RECLAIM = 463
+function CH.Reclaim(list, st)
+    local _, class = UnitClass("player")
+    if not CH.HEALS[class] then return false end
+    if st.reclaimed == CH.RECLAIM then return false end
+    local out, changed = {}, false
+    for _, e in ipairs(list) do
+        if isShift(e.modifiers) and (e.button == "LeftButton" or e.button == "RightButton") then
+            changed = true
+        else
+            out[#out + 1] = e
+        end
+    end
+    for i = #list, 1, -1 do list[i] = nil end
+    for i, e in ipairs(out) do list[i] = e end
+    st.given = {}
+    st.LeftButton, st.RightButton = nil, nil
+    if st.mac then st.mac.LeftButton, st.mac.RightButton = nil, nil end
+    st.reclaimed = CH.RECLAIM
+    return changed
+end
+
 local pending = false
 function CH.Update()
     local CB = C_ClickBindings
@@ -382,6 +408,7 @@ function CH.Update()
     local on = enabled()
     local now = on and CH.Steady(CH.Tops(), st.tops) or nil
     local work = CH.Unwrap(profile, st)
+    if on then CH.Reclaim(work, st) end
     local new, notes = CH.Plan(work, st, function(b) return CH.Wanted(b, now) end, on)
     local final = new or copyList(work)
     if now then CH.Follow(final, st.tops, now) end
@@ -441,6 +468,23 @@ watch:SetScript("OnUpdate", function(_, elapsed)
 end)
 
 OMQ:On("READY", function() C_Timer.After(3, soon) end)
+
+-- /omq clickheals reset: take Shift + left and Shift + right back for the OMQ heal macros (decision 463)
+OMQ:RegisterCommand("clickheals", function(arg)
+    if (arg or ""):lower():match("^%s*reset") then
+        local st = store()
+        if not st then return end
+        st.reclaimed = nil
+        if InCombatLockdown and InCombatLockdown() then
+            OMQ:Print("Click casting: Shift-click heals are set again after the fight")
+        else
+            OMQ:Print("Click casting: Shift + left and Shift + right are set to the OMQ heal macros again")
+        end
+        soon()
+    else
+        OMQ:Print("/omq clickheals reset - Shift + left and Shift + right click cast the OMQ heal macros again")
+    end
+end, "clickheals reset - give the Shift-click heals back to OMQ")
 
 -- decision 243: the first time the heals are set, one card explains them (once per character)
 CH.TITLE = { LeftButton = "Shift + left click", RightButton = "Shift + right click" }
