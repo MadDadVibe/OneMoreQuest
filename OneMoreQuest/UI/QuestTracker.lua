@@ -13,6 +13,7 @@ local STAMP_SIZE = 190
 local U = {}
 OMQ.QTrackFrame = U
 
+local runEdges = {}
 local frame, header, title, level, prevBtn, navText, nextBtn, stampFrame, stampTex, stampAnim, dim
 local texts, texs, tUsed, xUsed = {}, {}, 0, 0
 local moveMode = false
@@ -161,6 +162,16 @@ local function build()
     local edge = frame:CreateTexture(nil, "BORDER")
     edge:SetPoint("TOPLEFT"); edge:SetPoint("TOPRIGHT"); edge:SetHeight(3)
     edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
+    -- while a Quest Run goes the card has a gold frame all around (decision 465)
+    runEdges = {}
+    for _, side in ipairs({ "LEFT", "RIGHT", "BOTTOM" }) do
+        local e = frame:CreateTexture(nil, "BORDER")
+        if side == "BOTTOM" then e:SetPoint("BOTTOMLEFT"); e:SetPoint("BOTTOMRIGHT"); e:SetHeight(3)
+        else e:SetPoint("TOP" .. side); e:SetPoint("BOTTOM" .. side); e:SetWidth(3) end
+        e:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
+        e:Hide()
+        runEdges[#runEdges + 1] = e
+    end
 
     header = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     header:SetPoint("TOPLEFT", PAD, -10)
@@ -306,6 +317,9 @@ function U:Render()
         y = y - ROW_H
     end
     frame:SetSize(width, -y + 10)
+    local running = OMQ.QuestRun and OMQ.QuestRun:Active() and not moveMode
+    for _, e in ipairs(runEdges) do if running then e:Show() else e:Hide() end end
+    U.runFrame = running and true or false
 
     if view.stamp then
         stampFrame:Show()
@@ -330,6 +344,7 @@ function U:Frame() return frame end
 OMQ:On("READY", function() build(); U:Render() end)
 OMQ:On("QTRACK_CHANGED", function() U:Render() end)
 OMQ:On("SETTINGS_CHANGED", function() U:Render() end)
+OMQ:On("QUEST_RUN_CHANGED", function() U:Render() end)
 OMQ:On("MOVE_MODE", function(on)
     moveMode = on and true or false
     if not frame then return end

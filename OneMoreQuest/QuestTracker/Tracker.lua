@@ -59,6 +59,7 @@ local near = {}              -- questID -> { on, area, lastAt }: nearby now (on)
 local dist = {}              -- questID -> yards to its point on my map, from the last check
 local dismissed = {}         -- questID -> true: closed by a right click while nearby, until I left it
 local nearAt = 0             -- time of the next nearby check
+local pinned = {}            -- questID -> true: a quest of the running Quest Run, its card stays (decision 465)
 
 ----------------------------------------------------------------------
 -- Counts
@@ -385,6 +386,7 @@ end
 
 -- held by the nearness: nearby now or within the grace, and not closed by hand
 local function held(qid, t)
+    if pinned[qid] and mine[qid] then return true end
     local n = near[qid]
     return n ~= nil and not dismissed[qid] and (n.on or (t or now()) < n.lastAt + GRACE)
 end
@@ -418,6 +420,9 @@ function T:CheckNear()
     for qid in pairs(near) do                            -- a held card that went another way comes back
         if held(qid, t) and not cardIndex(qid) then cards[#cards + 1] = qid; added = added + 1 end
     end
+    for qid in pairs(pinned) do                          -- the quests of the Quest Run stay (decision 465)
+        if mine[qid] and T.Trackable(qid) and not cardIndex(qid) then cards[#cards + 1] = qid; added = added + 1 end
+    end
     if added > 0 then
         visible = true
         fire()
@@ -433,6 +438,21 @@ function T:Around()
     return out
 end
 function T:Near() return near end
+
+-- the Quest Run (decision 465): its open quests keep their cards until the run is over; front = the quest of
+-- the next stop comes to the front when it changed
+local pinFront
+function T:Pin(set, front)
+    pinned = set or {}
+    local added = 0
+    for qid in pairs(pinned) do
+        if mine[qid] and T.Trackable(qid) and not cardIndex(qid) then cards[#cards + 1] = qid; added = added + 1 end
+    end
+    if front and front ~= pinFront and mine[front] and T.Trackable(front) and not stamp then toFront(front); added = added + 1 end
+    pinFront = front
+    if added > 0 then visible = true; fire() end
+end
+function T:Pinned() return pinned end
 function T:Distance(qid) return dist[qid] end
 
 ----------------------------------------------------------------------

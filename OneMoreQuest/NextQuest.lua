@@ -25,6 +25,7 @@ OMQ.NextQuest = NQ
 
 NQ.ZONE_PENALTY, NQ.NEAR, NQ.BONUS, NQ.BONUS_MAX = 300, 150, 0.7, 3
 NQ.ASK_WAIT, NQ.AVAIL_ASK, NQ.CYCLE = 1.5, 15, 120
+NQ.RUN_ASK = 20                    -- the Quest Run asks about this many new quests (decision 465)
 NQ.DONE_MAX = 20                   -- an addon message holds 255 characters: quest IDs go in base 36
 NQ.OBJ_RADIUS, NQ.NPC_RADIUS = 40, 12
 NQ.FAR = 1e6                       -- cost of a place on another continent
@@ -399,7 +400,20 @@ function NQ.Finish(reqid)
     if not ask or ask.reqid ~= reqid then return end
     local st = ask
     ask = nil
+    if st.after then return st.after(st) end
     return NQ.Decide(st)
+end
+
+-- the same question for the Quest Run (decision 465): which quests are done for the others, which of these
+-- new ones they can take; after(st) gets st.replies once everybody answered or ASK_WAIT has passed
+function NQ.Ask(st, availIds, after)
+    st.reqid = tostring(math.random(100000, 999999))
+    st.at, st.replies, st.after = now(), st.replies or {}, after
+    st.members = st.members or NQ.Members()
+    ask = st
+    OMQ:Send("OQ", "a", st.reqid, OMQ:GetSelf() and OMQ:GetSelf().guid or "?", idsOf(availIds, NQ.RUN_ASK))
+    if C_Timer and C_Timer.After then C_Timer.After(NQ.ASK_WAIT, function() NQ.Finish(st.reqid) end) end
+    return st
 end
 
 OMQ:RegisterMessage("OQ", function(f)
@@ -416,7 +430,7 @@ OMQ:RegisterMessage("OQ", function(f)
         local can = {}
         for id in pairs(setOf(f[4])) do if NQ.CanTake(id, who, log) then can[#can + 1] = id end end
         table.sort(can)
-        if mine then OMQ:Send("OQ", "r", f[2], mine.guid, idsOf(done, NQ.DONE_MAX), idsOf(can, NQ.AVAIL_ASK)) end
+        if mine then OMQ:Send("OQ", "r", f[2], mine.guid, idsOf(done, NQ.DONE_MAX), idsOf(can, NQ.RUN_ASK)) end
     elseif op == "r" then
         if not ask or ask.reqid ~= f[2] then return end
         ask.replies[f[3]] = { done = setOf(f[4]), avail = setOf(f[5]) }
@@ -544,9 +558,12 @@ function NQ.Diag()
 end
 
 -- only the vote starts it (decision 302): "One more quest!" wins, the starter of the vote looks for the quest
+-- since decision 465 the winning vote starts a Quest Run with one quest (the old search stays for the fallback)
 OMQ:On("VOTE_END", function(result, by)
     local mine = OMQ:GetSelf()
-    if result == "quest" and mine and by == mine.guid then NQ.Press() end
+    if result == "quest" and mine and by == mine.guid then
+        if OMQ.QuestRun then OMQ.QuestRun:QuickOne() else NQ.Press() end
+    end
 end)
 
 OMQ:RegisterCommand("next", function(arg)
