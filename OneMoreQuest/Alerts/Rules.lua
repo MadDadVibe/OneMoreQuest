@@ -201,6 +201,72 @@ local function knowsSpell(id)
     if IsSpellKnown and IsSpellKnown(id) then return true end
     return false
 end
+-- the spell book by name: the highest rank of every spell in it, 0 for a spell without a rank, also
+-- passive ones (Parry, Dual Wield). Read again after SPELLS_CHANGED, nil when the book cannot be read.
+local trainBook, trainBookDirty = nil, true
+local trainBookFrame = CreateFrame("Frame")
+for _, e in ipairs({ "SPELLS_CHANGED", "LEARNED_SPELL_IN_TAB", "PLAYER_LEVEL_UP" }) do
+    pcall(trainBookFrame.RegisterEvent, trainBookFrame, e)
+end
+trainBookFrame:SetScript("OnEvent", function() trainBookDirty = true end)
+local function rankOf(sub)
+    return type(sub) == "string" and tonumber(sub:match("%d+")) or nil
+end
+function M.TrainerBook()
+    if not trainBookDirty and trainBook then return trainBook end
+    local SB = C_SpellBook
+    if not (SB and SB.GetNumSpellBookSkillLines and SB.GetSpellBookSkillLineInfo and SB.GetSpellBookItemInfo) then
+        return nil
+    end
+    local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+    local spellType = Enum and Enum.SpellBookItemType and Enum.SpellBookItemType.Spell
+    local book, any = {}, false
+    for line = 1, SB.GetNumSpellBookSkillLines() or 0 do
+        local info = SB.GetSpellBookSkillLineInfo(line)
+        if info then
+            for i = 1, info.numSpellBookItems or 0 do
+                local item = SB.GetSpellBookItemInfo((info.itemIndexOffset or 0) + i, bank)
+                if item and item.spellID and (spellType == nil or item.itemType == spellType) and not item.isOffSpec then
+                    local name = item.name or spellName(item.spellID)
+                    local sub = item.subName
+                    if (sub == nil or sub == "") and C_Spell and C_Spell.GetSpellSubtext then
+                        sub = C_Spell.GetSpellSubtext(item.spellID)
+                    end
+                    local r = rankOf(sub) or 0
+                    if name then
+                        any = true
+                        if not book[name] or r > book[name] then book[name] = r end
+                    end
+                end
+            end
+        end
+    end
+    if not any then return nil end          -- a book not loaded yet: read it again next time
+    trainBook, trainBookDirty = book, false
+    return book
+end
+-- known for the trainer list: the game says so, or the spell book has this spell with this rank or a
+-- higher one (a newer rank can take the older one's place in the book, and an id of the classic data
+-- may differ in Forever), or a later rank of it in the data is known
+local function trainerKnows(id, book, later, seen)
+    if knowsSpell(id) then return true end
+    local name = book and spellName(id)
+    if name and book[name] then
+        local sub = C_Spell and C_Spell.GetSpellSubtext and C_Spell.GetSpellSubtext(id)
+        local r = rankOf(sub)
+        if r then
+            if book[name] >= r then return true end
+        elseif book[name] == 0 then
+            return true                     -- a spell without ranks that is in the book
+        end
+    end
+    seen = seen or {}
+    seen[id] = true
+    for _, nid in ipairs(later[id] or {}) do
+        if not seen[nid] and trainerKnows(nid, book, later, seen) then return true end
+    end
+    return false
+end
 function M.NewAtTrainer(level, class)
     local _, myClass = UnitClass("player")
     local data = OMQ.TrainerSpells and OMQ.TrainerSpells[class or myClass]
@@ -211,6 +277,18 @@ function M.NewAtTrainer(level, class)
     raceId = raceId or RACE_ID[raceFile or ""]
     local fac = UnitFactionGroup and UnitFactionGroup("player")
     fac = (fac == "Alliance" and "A") or (fac == "Horde" and "H") or nil
+    local book = M.TrainerBook()
+    local later = {}                        -- spell id -> the later spells that require it (next ranks)
+    for _, list in pairs(data) do
+        for _, e in ipairs(list) do
+            for _, r in ipairs(e[3] or {}) do later[r] = later[r] or {}; table.insert(later[r], e[1]) end
+        end
+    end
+    local known = {}
+    local function knows(id)
+        if known[id] == nil then known[id] = trainerKnows(id, book, later) end
+        return known[id]
+    end
     local cand = {}
     for lvl, list in pairs(data) do
         if lvl <= level then
@@ -221,7 +299,7 @@ function M.NewAtTrainer(level, class)
                     raceOk = false
                     for _, r in ipairs(races) do if r == raceId then raceOk = true end end
                 end
-                if raceOk and (not efac or not fac or efac == fac) and not knowsSpell(id) then
+                if raceOk and (not efac or not fac or efac == fac) and not knows(id) then
                     cand[id] = { id = id, cost = cost or 0, level = lvl, req = req }
                 end
             end
@@ -233,7 +311,7 @@ function M.NewAtTrainer(level, class)
         changed = false
         for id, c in pairs(cand) do
             for _, r in ipairs(c.req or {}) do
-                if not knowsSpell(r) and not cand[r] then cand[id] = nil; changed = true; break end
+                if not knows(r) and not cand[r] then cand[id] = nil; changed = true; break end
             end
         end
     end
