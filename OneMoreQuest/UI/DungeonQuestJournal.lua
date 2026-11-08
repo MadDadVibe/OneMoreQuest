@@ -64,7 +64,7 @@ local function questTitle(q)
     return (de and (q.nameDe or (chain and chain[#chain].nameDe))) or q.name
 end
 
-local frame, title, scroll, content
+local frame, title, scroll, content, emptyNotice
 local buttons, expanded = {}, {}
 local ROW_H = 52
 
@@ -110,6 +110,13 @@ local function build()
     content = CreateFrame("Frame", nil, scroll)
     content:SetSize(600, 1)
     scroll:SetScrollChild(content)
+    emptyNotice = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    emptyNotice:SetPoint("TOPLEFT", 12, -85)
+    emptyNotice:SetWidth(600)
+    emptyNotice:SetJustifyH("LEFT")
+    emptyNotice:SetText(text("No quests are listed for your faction in this dungeon.",
+        "Für deine Fraktion sind für diesen Dungeon keine Quests hinterlegt."))
+    emptyNotice:Hide()
     local elapsed = 0
     frame:SetScript("OnUpdate", function(_, dt)
         elapsed = elapsed + dt
@@ -175,6 +182,7 @@ function J:Render()
         end
     end
     for i = n + 1, #buttons do buttons[i]:Hide() end
+    emptyNotice:SetShown(n == 0)
     content:SetHeight(math.max(1, n * ROW_H))
 end
 

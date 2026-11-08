@@ -237,9 +237,14 @@ reset()
 equal(J:Open("not-a-dungeon"), false, "invalid dungeon cannot open")
 equal(#frames, 0, "invalid dungeon does not build UI")
 equal(J:Open("dm"), true, "journal builds and opens")
-local journal
-for _, f in ipairs(frames) do if f.name == "OneMoreQuestDungeonJournal" then journal = f end end
+local journal, emptyNotice
+for _, f in ipairs(frames) do
+    if f.name == "OneMoreQuestDungeonJournal" then journal = f end
+    if f.text == "No quests are listed for your faction in this dungeon." then emptyNotice = f end
+end
+assert(emptyNotice, "journal explains an empty faction-filtered list")
 equal(journal:IsShown(), true, "journal is shown")
+equal(emptyNotice:IsShown(), false, "populated dungeon hides empty notice")
 equal(UISpecialFrames[1], journal.name, "Escape can close journal")
 local collapsed = rowCount()
 click(row(166, 166))
@@ -266,11 +271,14 @@ click(row(166, 166))
 equal(rowCount(), collapsed, "collapsing hides every stale chain row")
 J:Open("sfk")
 equal(rowCount(), 0, "dungeon without this faction's quests hides old rows")
+equal(emptyNotice:IsShown(), true, "Alliance Shadowfang Keep explains its empty list")
 faction = "Horde"
 J:Render()
 equal(rowCount(), 3, "faction switch displays matching quests")
+equal(emptyNotice:IsShown(), false, "populated faction switch hides empty notice")
 J:Open("dm")
 equal(rowCount(), 0, "Horde cannot see Alliance sample quests")
+equal(emptyNotice:IsShown(), true, "Horde Deadmines explains its empty list")
 J:Open(OMQ.Dungeons[1].key)
 J:Step(-1)
 equal(J.dungeon, OMQ.Dungeons[#OMQ.Dungeons].key, "previous wraps to last dungeon")
