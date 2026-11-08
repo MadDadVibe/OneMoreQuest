@@ -8,7 +8,7 @@
 -- flight is only taken when it is at least that much quicker than walking. Costs are in yards on foot
 -- (seconds x SPEED), so a planner that adds yards keeps working.
 --   P.Cost(p, q)  the cost of the way, nil when the network cannot tell (no data, other continent)
---   P.Way(p, q)   the way for an arrow: { cost, straight, a, b (the point to head for now), via, flight }
+--   P.Way(p, q)   the way for an arrow (Quest Run's small arrow, the main arrow of Guide.lua): { cost, straight, a, b (the point to head for now), via, flight }
 -- /omq path [on|off|diag|probe|log]
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
@@ -24,6 +24,7 @@ P.DIRECT = 150              -- closer than this: straight
 P.NEAR = 5                  -- anchors tried around a place
 P.NEAR_MAX = 1200           -- yards to an anchor at most
 P.BOUND = 3000              -- yards searched for the planner
+P.WAY_KEEP = 4                -- targets whose search back is kept
 P.WAY_BOUND = 40000         -- yards searched back from the arrow's target
 P.SLACK, P.SLACK_YD = 1.12, 25   -- a part of the way this close to the straight line is walked straight
 P.ISLAND, P.ISLAND_YD = 1.5, 600 -- target in ground the network does not join (an island): boat, a guess
@@ -390,17 +391,23 @@ function P.SearchTo(q, bound)
     return { dist = dist, nxt = nxt, flew = flew, g = g, taxis = taxis, to = q }
 end
 
-local wayCache = nil
+local wayCache = {}
 function P.Way(p, q)
     if not (P.Enabled() and p and q and num(p.a) and num(q.a)) or p.inst ~= q.inst then return nil end
     local s = straight(p.a, p.b, q.a, q.b)
     local plain = { cost = s, straight = s, a = q.a, b = q.b, via = false }
     if s <= P.DIRECT or not P.Graph(p.inst) then return plain end
     P.Taxis(p.inst)
-    local c = wayCache
-    if not (c and c.q == q and c.v == P.taxiVersion) then
-        c = { q = q, v = P.taxiVersion, s = P.SearchTo(q, P.WAY_BOUND) }
-        wayCache = c
+    -- the searches of the last few targets (the small Quest Run arrow and the main arrow each have one), found by
+    -- the target's place: a target table made anew every time (a pin) finds its search again
+    local c = nil
+    for _, x in ipairs(wayCache) do
+        if x.v == P.taxiVersion and x.inst == q.inst and math.abs(x.qa - q.a) < 5 and math.abs(x.qb - q.b) < 5 then c = x; break end
+    end
+    if not c then
+        c = { qa = q.a, qb = q.b, inst = q.inst, v = P.taxiVersion, s = P.SearchTo(q, P.WAY_BOUND) }
+        table.insert(wayCache, 1, c)
+        wayCache[P.WAY_KEEP + 1] = nil
     end
     local srch = c.s
     if not srch then return plain end
@@ -445,9 +452,9 @@ function P.Way(p, q)
     way.a, way.b = xy(pick or first)
     return way
 end
-function P._ResetWay() wayCache = nil end
+function P._ResetWay() wayCache = {} end
 function P._Reset()
-    graphs, taxiCache, wayCache = {}, {}, nil
+    graphs, taxiCache, wayCache = {}, {}, {}
     for k in pairs(memo) do memo[k] = nil end
     P.taxiVersion = P.taxiVersion + 1
 end

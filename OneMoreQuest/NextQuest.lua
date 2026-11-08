@@ -194,7 +194,9 @@ function NQ.Rank(cands, pos)
                 local p = { id = c.id, kind = c.kind, spot = s, a = w[1], b = w[2], inst = w[3] }
                 if pos and w[3] == pos.inst then
                     p.d = math.sqrt((w[1] - pos.a) ^ 2 + (w[2] - pos.b) ^ 2)
-                    p.cost = p.d + ((pos.map and s[1] ~= pos.map) and NQ.ZONE_PENALTY or 0)
+                    -- the way over the land when the walking network knows it (471), else straight + zone penalty
+                    local way = OMQ.Path and OMQ.Path.Enabled() and OMQ.Path.Cost(pos, p)
+                    p.cost = way or (p.d + ((pos.map and s[1] ~= pos.map) and NQ.ZONE_PENALTY or 0))
                 else
                     p.cost = NQ.FAR
                 end

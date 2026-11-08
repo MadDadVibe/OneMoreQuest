@@ -359,7 +359,17 @@ function G:Current()
     if c.name and title and title ~= c.name then shownName = c.name .. " (" .. title .. ")" end
     local st = { label = dest.label, name = shownName, distance = c.d,
                  otherZone = c.d == nil, count = #dest.cands, idx = dest.idx }
-    if c.d and OMQ.Arrow then st.heading = OMQ.Arrow.Heading(c.a - mine.a, c.b - mine.b) end
+    local ha, hb = c.a, c.b
+    -- the way over the land (471): head for the next point of the way, the yards are the way's
+    local P = OMQ.Path
+    if c.d and P and P.Enabled() then
+        local way = P.Way({ a = mine.a, b = mine.b, inst = mine.inst }, c)
+        if way and way.via then
+            st.distance, st.via, st.flight = way.cost, true, way.flight
+            ha, hb = way.a, way.b
+        end
+    end
+    if c.d and OMQ.Arrow then st.heading = OMQ.Arrow.Heading(ha - mine.a, hb - mine.b) end
     return st
 end
 

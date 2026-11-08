@@ -354,7 +354,7 @@ local function render()
             rotate(0)
             texture:SetVertexColor(0.6, 0.63, 0.68)
         else
-            distText:SetText(string.format("%d yd", math.floor(g.distance + 0.5)))
+            distText:SetText(string.format("%d yd", math.floor(g.distance + 0.5)) .. (g.flight and (" - fly from " .. g.flight) or ""))
             texture:SetVertexColor(0.45, 0.8, 1)
             if g.heading then point(g.heading) end
         end
