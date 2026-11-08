@@ -3,8 +3,8 @@
 -- group of walkable ground, with the walk to the anchors of the next tiles, made from the game's walkable terrain
 -- (mountains, cliffs, lakes and the sea are walked around, passes and bridges are used). A way goes from a place
 -- straight to the nearest anchors, over the anchors, and straight from the last anchors to the target.
--- Flights: the flight masters I know on this continent (C_TaxiMap.GetTaxiNodesForMap, isUndiscovered false, my
--- faction or neutral) join the network; a flight costs its time (OMQ.Taxi:Time) plus FLIGHT_EXTRA seconds, so a
+-- Flights: the flight masters this character knows on this continent (learned at the flight map, fix 470) join
+-- the network; a flight costs its time (OMQ.Taxi:Time) plus FLIGHT_EXTRA seconds, so a
 -- flight is only taken when it is at least that much quicker than walking. Costs are in yards on foot
 -- (seconds x SPEED), so a planner that adds yards keeps working.
 --   P.Cost(p, q)  the cost of the way, nil when the network cannot tell (no data, other continent)
@@ -27,7 +27,6 @@ P.BOUND = 3000              -- yards searched for the planner
 P.WAY_BOUND = 40000         -- yards searched back from the arrow's target
 P.SLACK, P.SLACK_YD = 1.12, 25   -- a part of the way this close to the straight line is walked straight
 P.ISLAND, P.ISLAND_YD = 1.5, 600 -- target in ground the network does not join (an island): boat, a guess
-P.CONTINENT_MAP = { [0] = 1415, [1] = 1414 }
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
 local function num(v) return type(v) == "number" and not isSecret(v) end
@@ -93,11 +92,6 @@ end
 ----------------------------------------------------------------------
 local taxiCache = {}
 P.taxiVersion = 0
-local function myFaction()
-    local f = UnitFactionGroup and UnitFactionGroup("player")
-    if f == "Horde" then return 1 elseif f == "Alliance" then return 2 end
-    return nil
-end
 
 function P.FlightYards(from, to)
     local yd = straight(from.a, from.b, to.a, to.b)
@@ -106,27 +100,70 @@ function P.FlightYards(from, to)
     return (s + P.FLIGHT_EXTRA) * P.SPEED
 end
 
+-- The flight masters a character knows (fix 470): the Forever client reports every flight master of the faction as
+-- discovered in C_TaxiMap.GetTaxiNodesForMap, so OMQ learns them where the game is sure, at the flight master: when
+-- the flight map opens, the nodes it shows as current or reachable are known (C_TaxiMap.GetAllTaxiNodes, else the
+-- old TaxiNodeGetType slots). Kept per character in OMQDB.pathTaxi[guid] = { [node id] = true }; a node once known
+-- stays known. Until a flight map was opened, the planner uses no flights.
+local function myGuid() local m = OMQ.GetSelf and OMQ:GetSelf(); return m and m.guid end
+function P.Known()
+    local g = myGuid()
+    if not (OMQDB and g) then return nil end
+    OMQDB.pathTaxi = OMQDB.pathTaxi or {}
+    local k = OMQDB.pathTaxi[g]
+    if not k then k = {}; OMQDB.pathTaxi[g] = k end
+    return k
+end
+
+local KNOWN_STATE = { [0] = true, [1] = true }      -- Enum.FlightPathState Current, Reachable
+function P.LearnTaxis()
+    local known = P.Known()
+    if not known then return 0 end
+    local added = 0
+    local function add(id)
+        if num(id) and not known[id] then known[id] = true; added = added + 1 end
+    end
+    local mapID = OMQ.Taxi and OMQ.Taxi._TaxiMap and OMQ.Taxi._TaxiMap()
+    local list
+    if C_TaxiMap and C_TaxiMap.GetAllTaxiNodes and num(mapID) then
+        local ok, l = pcall(C_TaxiMap.GetAllTaxiNodes, mapID)
+        if ok and type(l) == "table" then list = l end
+    end
+    if list then
+        for _, n in ipairs(list) do
+            if type(n) == "table" and KNOWN_STATE[n.state] then add(n.nodeID) end
+        end
+    elseif NumTaxiNodes and TaxiNodeGetType and TaxiNodeName and OMQ.taxiNodeIds then
+        local fac = UnitFactionGroup and UnitFactionGroup("player")
+        local byName = fac and OMQ.taxiNodeIds[fac] or {}
+        for i = 1, (NumTaxiNodes() or 0) do
+            local t = TaxiNodeGetType(i)
+            if t == "CURRENT" or t == "REACHABLE" then
+                local nm = TaxiNodeName(i)
+                add(type(nm) == "string" and byName[nm:match("^([^,]+)") or nm])
+            end
+        end
+    end
+    if added > 0 then taxiCache = {}; P.taxiVersion = P.taxiVersion + 1 end
+    return added
+end
+
 -- { {id, a, b, name}, ... } of the flight masters I know on that continent
 function P.Taxis(inst)
     local c = taxiCache[inst]
     local now = GetTime()
     if c and now - c.at < 30 then return c.list end
     local list, sig = {}, {}
-    local map = P.CONTINENT_MAP[inst]
     local data = OMQ.PathTaxi or {}
-    if map and C_TaxiMap and C_TaxiMap.GetTaxiNodesForMap then
-        local ok, nodes = pcall(C_TaxiMap.GetTaxiNodesForMap, map)
-        local fac = myFaction()
-        if ok and type(nodes) == "table" then
-            for _, n in ipairs(nodes) do
-                local id = type(n) == "table" and n.nodeID
-                local d = num(id) and data[id]
-                local usable = n.faction == nil or n.faction == 0 or fac == nil or n.faction == fac
-                if d and d[1] == inst and n.isUndiscovered == false and usable then
-                    list[#list + 1] = { id = id, a = d[2], b = d[3], name = d[4] }
-                    sig[#sig + 1] = id
-                end
-            end
+    local known = P.Known() or {}
+    local ids = {}
+    for id in pairs(known) do ids[#ids + 1] = id end
+    table.sort(ids)
+    for _, id in ipairs(ids) do
+        local d = data[id]
+        if d and d[1] == inst and not tostring(d[4]):find("^zz") then
+            list[#list + 1] = { id = id, a = d[2], b = d[3], name = d[4] }
+            sig[#sig + 1] = id
         end
     end
     for _, t in ipairs(list) do
@@ -434,7 +471,8 @@ function P.Diag()
     local taxis = P.Taxis(pos.inst)
     local names = {}
     for _, t in ipairs(taxis) do names[#names + 1] = t.name end
-    out[#out + 1] = string.format("flight masters I know here: %d%s", #taxis, #names > 0 and (" (" .. table.concat(names, ", ") .. ")") or "")
+    out[#out + 1] = string.format("flight masters I know here: %d%s", #taxis, #names > 0 and (" (" .. table.concat(names, "; ") .. ")")
+        or " - talk to a flight master once, then OMQ knows which ones you have")
     local t = OMQ.QuestRun and OMQ.QuestRun.Target and OMQ.QuestRun:Target()
     if t and t.place then
         local w = P.Way(pos, t.place)
@@ -471,6 +509,10 @@ end
 local function show(lines)
     if OMQ.ShowReport then OMQ:ShowReport(lines) else for _, l in ipairs(lines) do print(l) end end
 end
+
+local taxiFrame = CreateFrame("Frame")
+pcall(taxiFrame.RegisterEvent, taxiFrame, "TAXIMAP_OPENED")
+taxiFrame:SetScript("OnEvent", function() pcall(P.LearnTaxis) end)
 
 OMQ:RegisterCommand("path", function(arg)
     arg = (arg or ""):lower()
