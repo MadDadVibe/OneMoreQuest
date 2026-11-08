@@ -48,11 +48,14 @@ Data\QuestPlaces.lua
 Data\QuestItems.lua
 Data\QuestZones.lua
 Data\ForeverDungeons.lua
+Data\DungeonQuestChains.lua
 Data\Milestones.lua
 Data\SkillThresholds.lua
 Data\TrainerSpells.lua
 Data\BuyList.lua
 UI\Ready.lua
+Guide\QuestLocations.lua
+UI\DungeonQuestJournal.lua
 UI\AuctionHelper.lua
 UI\BuyRules.lua
 UI\AuctionBuy.lua

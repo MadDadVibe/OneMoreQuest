@@ -328,7 +328,7 @@ local GREEN = { 0.49, 0.78, 0.44 }
 local QNAME_W, QCOL_W, QROW_H = 280, 62, 34          -- the dungeon part has more room (decision 193)
 local ENT_W = 84
 local STATE_TEXT = { done = { "Done", GREEN }, log = { "In log", { 0.89, 0.71, 0.29 } }, none = { "-", GREY } }
-local frame, cells, footer, title, qhead, qcells, entrance, qbuttons, prevBtn, nextBtn
+local frame, cells, footer, title, qhead, qcells, entrance, qbuttons, prevBtn, nextBtn, journalBtn
 
 -- the dungeons the arrows switch between (decision 256): those of the check bar (my level), plus the open one
 function R.Relevant()
@@ -474,6 +474,13 @@ local function build()
     end
     qcells = {}
     qbuttons = {}
+    journalBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    journalBtn:SetSize(150, 22)
+    journalBtn:SetText(GetLocale and GetLocale() == "deDE" and "Questlogbuch (Sample)" or "Quest journal (sample)")
+    journalBtn:SetScript("OnClick", function()
+        if OMQ.DungeonQuestJournal and OMQ.DungeonQuestJournal:Open(R.dungeon) then frame:Hide() end
+    end)
+    journalBtn:Hide()
 
     local acc = 0
     frame:SetScript("OnUpdate", function(_, elapsed)
@@ -582,7 +589,7 @@ end
 -- where a dungeon quest starts: info table or nil
 function R.QuestStart(q)
     local S = OMQ.QuestStarts or {}
-    local st = S[q.id]
+    local st = q.start or S[q.id]
     if not st then
         for _, alt in ipairs(q.alt or {}) do if S[alt] then st = S[alt]; break end end
     end
@@ -601,7 +608,7 @@ local function myLogId(q)
     for _, a in ipairs(q.alt or {}) do ids[#ids + 1] = a end
     for _, id in ipairs(ids) do
         local ok, idx = pcall(CQ.GetLogIndexForQuestID, id)
-        if ok and idx then return id, idx end
+        if ok and not isSecret(idx) and type(idx) == "number" and idx > 0 then return id, idx end
     end
 end
 
@@ -615,12 +622,13 @@ function R.OpenQuestLog(qid, idx)
         if pcall(QuestLog_OpenToQuest, idx) then return true end
     end
     if QuestLogFrame and ShowUIPanel then
-        pcall(ShowUIPanel, QuestLogFrame)
-        if QuestLog_SetSelection and idx then pcall(QuestLog_SetSelection, idx) end
-        if QuestLog_Update then pcall(QuestLog_Update) end
-        return true
+        if pcall(ShowUIPanel, QuestLogFrame) then
+            if QuestLog_SetSelection and idx then pcall(QuestLog_SetSelection, idx) end
+            if QuestLog_Update then pcall(QuestLog_Update) end
+            return true
+        end
     end
-    if ToggleQuestLog then pcall(ToggleQuestLog); return true end
+    if ToggleQuestLog then return (pcall(ToggleQuestLog)) end
     return false
 end
 
@@ -628,9 +636,12 @@ end
 function R:QuestClick(q)
     local qid, idx = myLogId(q)
     if qid then
-        frame:Hide()
-        R.OpenQuestLog(qid, idx)
-        return "log"
+        if R.OpenQuestLog(qid, idx) then
+            if frame then frame:Hide() end
+            return "log"
+        end
+        OMQ:Print("The quest log could not be opened")
+        return "none"
     end
     local st = R.QuestStart(q)
     if st and st.kind == "inside" then
@@ -648,8 +659,11 @@ function R:QuestClick(q)
         OMQ:Print((st.giver or "The quest giver") .. " is on another continent (" .. zoneName(st.map) .. ")")
         return "continent"
     end
-    OMQ.Guide:StartAt(st.giver ~= "" and st.giver or (q.name or "Quest giver"), w[1], w[2], w[3])   -- only for me
-    frame:Hide()                                         -- so the arrow can be seen (decision 195)
+    if not OMQ.Guide:StartAt(st.giver ~= "" and st.giver or (q.name or "Quest giver"), w[1], w[2], w[3]) then
+        OMQ:Print("Guidance is disabled")
+        return "none"
+    end
+    if frame then frame:Hide() end                       -- the journal can open before the Group Check
     if st.chain then OMQ:Print(string.format("%s starts with \"%s\" - arrow to %s", q.name or "The quest", st.rootName, st.giver)) end
     return "arrow"
 end
@@ -740,6 +754,7 @@ function R:Render()
     local width = PAD * 2 + NAME_W + COL_W * 3 + XCOL_W + (d and ENT_W or 0)
     local height = y + lines * 14 + PAD
     local quests = d and OMQ:DungeonQuests(d, UnitFactionGroup and UnitFactionGroup("player")) or {}
+    journalBtn:SetShown(d and OMQ.DungeonQuestJournal and true or false)
     title:SetText(d and ("Group Check: " .. d.name) or "Group Check")
     local arrows = d and #R.Relevant() > 1
     prevBtn:SetShown(arrows and true or false)
@@ -755,6 +770,9 @@ function R:Render()
         local qy = height + 10
         width = math.max(width, PAD * 2 + QNAME_W + nm * QCOL_W)
         qhead.name:ClearAllPoints()
+        journalBtn:ClearAllPoints()
+        journalBtn:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -qy)
+        qy = qy + 26
         qhead.name:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -qy)
         qhead.name:SetText(#quests > 0 and "Dungeon quests  |cff9aa0aa(click: your quest log, or an arrow to the quest giver)|r" or "No dungeon quests known")
         for c = 1, nm do

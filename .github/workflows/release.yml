@@ -51,6 +51,18 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
+      - name: Dungeon prerequisite journal regression
+        run: lua5.1 tests/dungeon_quest_journal.lua
+
+      - name: Quest location map and group actions
+        run: lua5.1 tests/quest_locations.lua
+
+      - name: Quest directions and region grouping
+        run: lua5.1 tests/dungeon_quest_locations.lua
+
+      - name: Quest data generator regression
+        run: python3 -B -m unittest discover -s tests -p test_generate_dungeon_quests.py
+
   release:
     needs: check
     if: github.event_name != 'pull_request'
