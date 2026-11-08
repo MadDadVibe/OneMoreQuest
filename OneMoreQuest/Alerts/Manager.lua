@@ -326,6 +326,19 @@ local function makeSkin(parent)
     return s
 end
 
+-- a title longer than one line ran into the sub line ("Reload needed - your spells have been updated",
+-- decision 459): it gets one font step smaller and stays on one line; the card keeps its height
+local TITLE_W = CARD_W - 56
+local function fitTitle(fs)
+    if not (fs.SetFontObject and fs.GetStringWidth) then return end
+    fs:SetFontObject(GameFontNormal)
+    if fs.SetWordWrap then fs:SetWordWrap(false) end
+    local w = (fs.GetUnboundedStringWidth and fs:GetUnboundedStringWidth()) or fs:GetStringWidth() or 0
+    if type(w) == "number" and w > TITLE_W and GameFontNormalSmall then fs:SetFontObject(GameFontNormalSmall) end
+    fs:SetTextColor(0.95, 0.82, 0.48)
+end
+M._fitTitle = fitTitle
+
 local function fill(s, a)
     local title, sub = a.title, a.sub
     if not title then title, sub = M.SplitText(a.text) end
@@ -333,6 +346,7 @@ local function fill(s, a)
     s.tag:SetText(a.tag or TAGS[a.rule] or "ALERT")
     s.tag:SetTextColor(c[1], c[2], c[3])
     s.title:SetText(title or "")
+    fitTitle(s.title)
     s.sub:SetText(sub or "")
     s.title:ClearAllPoints()
     s.title:SetPoint("TOPLEFT", 30, (sub and sub ~= "") and -18 or -24)
