@@ -4,7 +4,7 @@
 --   Shift + right click = the comfortable heal
 -- A binding casts exactly the spell id it holds: it does NOT move to a new rank by itself (a Classic
 -- rank is its own spell id). So the addon binds the highest learned rank and sets the binding again
--- on every rank up. It picks the best spell the character knows and moves the binding along when a
+-- on every rank up (since decision 461 through a macro without rank, see CH.Wrap). It picks the best spell the character knows and moves the binding along when a
 -- better spell or a higher rank is learned.
 -- Rules: existing bindings are never overwritten, only the addon's own. One exception (decision 393):
 -- a spell binding of the dad on the highest rank moves along to a newly learned rank. A binding of ours
@@ -19,6 +19,7 @@ OMQ.ClickHeals = CH
 
 CH.SHIFT = 3
 local SPELL = 1        -- Enum.ClickBindingType.Spell
+local MACRO = 2        -- Enum.ClickBindingType.Macro
 
 -- per class: the candidates in order of preference, the last known one wins (base spell ids)
 CH.HEALS = {
@@ -216,6 +217,157 @@ function CH.Plan(profile, st, wantOf, on)
     return final, notes
 end
 
+-- decision 461: the addon's own Shift-click heals are bound to a character macro "/cast <spell>" without a rank,
+-- the game then always casts the highest learned rank and a rank up needs no change at all. One macro per
+-- spell ("OMQ <spell>"); when the button gets another spell (Flash Heal learned) a new macro is made and the
+-- old one is deleted once nothing binds it. The dad's own bindings are not touched (they keep decision 393).
+-- A click binding holds the macro's index, and the indices of the character macros shift when one is made
+-- or deleted (sorted by name): our own changes remap every macro binding by name, a change of the dad
+-- (UPDATE_MACROS) brings our binding back to our macro by its name. No free character macro slot or no macro
+-- functions: the plain spell binding as before.
+CH.MACRO_ICON = 134400
+CH.MAX_NAME = 16
+
+local function macroApi()
+    return CreateMacro and DeleteMacro and GetMacroIndexByName and GetMacroInfo and true or false
+end
+
+local function cutUtf8(s, n)
+    if #s <= n then return s end
+    s = s:sub(1, n)
+    -- never cut inside a multi-byte letter
+    while #s > 0 do
+        local b = s:byte(#s)
+        if b < 0x80 then break end
+        local i = #s
+        while i > 0 and s:byte(i) >= 0x80 and s:byte(i) < 0xC0 do i = i - 1 end
+        local lead = i > 0 and s:byte(i) or 0
+        local need = lead >= 0xF0 and 4 or lead >= 0xE0 and 3 or lead >= 0xC0 and 2 or 1
+        if #s - i + 1 >= need then break end
+        s = s:sub(1, i - 1)
+    end
+    return s
+end
+
+function CH.MacroName(spell)
+    local n = spellName(spell)
+    return n and cutUtf8("OMQ " .. n, CH.MAX_NAME) or nil
+end
+function CH.MacroBody(spell)
+    local n = spellName(spell)
+    -- @mouseover: the clicked unit frame is the mouseover unit; [] the target as a fallback
+    return n and ("#showtooltip\n/cast [@mouseover,exists][] " .. n) or nil
+end
+
+local function macroIndex(name)
+    local i = name and GetMacroIndexByName(name)
+    return (type(i) == "number" and i > 0) and i or nil
+end
+local function macroNameAt(idx)
+    if type(idx) ~= "number" or idx <= 0 then return nil end
+    return (GetMacroInfo(idx))
+end
+local function freeCharSlot()
+    if not GetNumMacros then return true end
+    local _, char = GetNumMacros()
+    local max = MAX_CHARACTER_MACROS or 18
+    return (char or 0) < max
+end
+
+-- the first Shift binding of every button: { [button] = index in list }
+local function shiftSlots(list)
+    local slot = {}
+    for i, info in ipairs(list) do
+        if isShift(info.modifiers) and info.button and slot[info.button] == nil then slot[info.button] = i end
+    end
+    return slot
+end
+
+local function copyList(list)
+    local o = {}
+    for i, e in ipairs(list) do o[i] = { type = e.type, actionID = e.actionID, button = e.button, modifiers = e.modifiers } end
+    return o
+end
+
+-- the profile with our macro bindings shown as the spell binding they stand for, so Plan and Follow work
+-- on spells as before. Ours: the macro binding on our Shift slot with the index we set last time (the macro
+-- may have moved since) or with our macro's name.
+function CH.Unwrap(profile, st)
+    local out = copyList(profile)
+    if not (st.mac and macroApi()) then return out end
+    local slot = shiftSlots(out)
+    for _, button in ipairs(CH.BUTTONS) do
+        local m, idx = st.mac[button], slot[button]
+        local e = idx and out[idx]
+        if m and st[button] and e and e.type == MACRO and (e.actionID == m.idx or macroNameAt(e.actionID) == m.name) then
+            e.type = SPELL; e.actionID = st[button]
+        end
+    end
+    return out
+end
+
+-- puts our Shift bindings back on macros (makes the missing ones, deletes ours nobody binds any more).
+-- Changes list and st in place. Returns true when a macro could not be made (no free slot).
+function CH.Wrap(list, st)
+    if not macroApi() then return false end
+    st.mac = st.mac or {}
+    st.made = st.made or {}
+    -- every macro binding by name, to set its index again after macros were made or deleted
+    local names = {}
+    for i, e in ipairs(list) do
+        if e.type == MACRO then names[i] = macroNameAt(e.actionID) end
+    end
+    local full = false
+    local slot = shiftSlots(list)
+    for _, button in ipairs(CH.BUTTONS) do
+        local spell, idx = st[button], slot[button]
+        local e = idx and list[idx]
+        if spell and e and e.type == SPELL and e.actionID == spell then
+            local name, body = CH.MacroName(spell), CH.MacroBody(spell)
+            local have = name and macroIndex(name)
+            if name and not have and freeCharSlot() then
+                local ok, r = pcall(CreateMacro, name, CH.MACRO_ICON, body, true)
+                if ok and macroIndex(name) then have = true; st.made[name] = true end
+            end
+            if name and have then
+                e.type = MACRO; names[idx] = name
+                st.mac[button] = { name = name }
+            else
+                st.mac[button] = nil
+                full = true
+            end
+        elseif not spell then
+            st.mac[button] = nil
+        end
+    end
+    -- delete our macros nobody binds any more (not ours to the click casting nor a binding of the dad)
+    local used = {}
+    for _, n in pairs(names) do used[n] = true end
+    for name in pairs(st.made) do
+        if not used[name] then
+            local i = macroIndex(name)
+            if i then pcall(DeleteMacro, i) end
+            st.made[name] = nil
+        end
+    end
+    for i, n in pairs(names) do
+        local at = macroIndex(n)
+        if at then list[i].actionID = at end
+    end
+    for _, m in pairs(st.mac) do m.idx = macroIndex(m.name) end
+    return full
+end
+
+local function sameList(a, b)
+    if #a ~= #b then return false end
+    for i = 1, #a do
+        local x, y = a[i], b[i]
+        if x.type ~= y.type or x.actionID ~= y.actionID or x.button ~= y.button or x.modifiers ~= y.modifiers then return false end
+    end
+    return true
+end
+CH._sameList = sameList
+
 local pending = false
 function CH.Update()
     local CB = C_ClickBindings
@@ -229,20 +381,20 @@ function CH.Update()
     if not ok or type(profile) ~= "table" then return end
     local on = enabled()
     local now = on and CH.Steady(CH.Tops(), st.tops) or nil
-    local new, notes = CH.Plan(profile, st, function(b) return CH.Wanted(b, now) end, on)
-    if now then
-        local base = new
-        if not base then
-            base = {}
-            for i, e in ipairs(profile) do base[i] = { type = e.type, actionID = e.actionID, button = e.button, modifiers = e.modifiers } end
-        end
-        if CH.Follow(base, st.tops, now) > 0 then new = base end
+    local work = CH.Unwrap(profile, st)
+    local new, notes = CH.Plan(work, st, function(b) return CH.Wanted(b, now) end, on)
+    local final = new or copyList(work)
+    if now then CH.Follow(final, st.tops, now) end
+    local full = CH.Wrap(final, st)
+    if full and not CH.fullWarned then
+        CH.fullWarned = true
+        OMQ:Print("Click casting: no free character macro slot, the Shift-click heals stay plain spell bindings")
     end
-    if not new then
+    if sameList(final, profile) then
         if now then st.tops = topIds(now) end
         return
     end
-    local okSet, err = pcall(CB.SetProfileByInfo, new)
+    local okSet, err = pcall(CB.SetProfileByInfo, final)
     if not okSet then
         CH.lastError = tostring(err)
         if not CH.warned then
@@ -252,7 +404,7 @@ function CH.Update()
         return
     end
     if now then st.tops = topIds(now) end
-    for _, n in ipairs(notes) do
+    for _, n in ipairs(notes or {}) do
         -- a higher rank of the same spell is set quietly; a new spell gets one line
         if not (n.from and spellName(n.from) == spellName(n.spell)) then
             OMQ:Print(string.format("Click casting: %s on a unit frame casts %s", WHAT[n.button], spellName(n.spell) or "?"))
@@ -269,7 +421,8 @@ end
 CH.Soon = soon
 
 local ev = CreateFrame("Frame")
-for _, e in ipairs({ "SPELLS_CHANGED", "PLAYER_LEVEL_UP", "LEARNED_SPELL_IN_TAB", "PLAYER_REGEN_ENABLED" }) do
+for _, e in ipairs({ "SPELLS_CHANGED", "PLAYER_LEVEL_UP", "LEARNED_SPELL_IN_TAB", "PLAYER_REGEN_ENABLED",
+                        "UPDATE_MACROS" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 ev:SetScript("OnEvent", function(_, event)
