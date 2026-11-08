@@ -1,9 +1,10 @@
 -- One More Quest: Spell Rhythm (from level 20, inside the ledger)
 -- Pick one of four songs (Media\Track1-4.ogg, note times in Data/Beats.lua). After a countdown the song plays and
 -- spell icons run on a timeline from right to left; the key bound to that spell must be pressed when the icon
--- crosses the hit zone. Spells come from the own action bars (only those with a keyboard key). While a song runs a
--- keyboard frame takes every key, so nothing is cast; the bindings themselves are never changed. Out of combat
--- only: combat, Esc or closing the window stops the song at once and gives the keys back.
+-- crosses the hit zone. Spells come from the own action bars (only those with a key: keyboard, mouse button from the
+-- middle one on, or mouse wheel). While a song runs a fullscreen frame takes every key, mouse button and wheel turn,
+-- so nothing is cast; the bindings themselves are never changed. Out of combat only: combat, Esc or closing the
+-- window stops the song at once and gives the keys back.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -72,9 +73,15 @@ function R.SlotOf(cmd)
     return nil
 end
 
-local function keyboardKey(k)
-    return str(k) and not k:find("BUTTON") and not k:find("MOUSEWHEEL") and k ~= "ESCAPE"
+-- a key the game can play: keyboard keys, the mouse buttons from the middle button on (BUTTON3, BUTTON4, ...) and the
+-- mouse wheel, also with ALT / CTRL / SHIFT; never the left or right mouse button and never Esc
+local function playKey(k)
+    if not str(k) or k == "ESCAPE" then return false end
+    local b = k:match("BUTTON(%d+)$")
+    if b then return tonumber(b) >= 3 end
+    return true
 end
+R.PlayKey = playKey
 
 -- only action bars 1, 2 and 3: the main bar (with its pages and stance bars), bottom left (61-72), bottom right (49-60)
 function R.OnBars(cmd, slot)
@@ -84,7 +91,7 @@ function R.OnBars(cmd, slot)
     return false
 end
 
--- every spell with a keyboard key on bars 1-3: { id, name, icon, key, slot }, one per spell name and per key
+-- every spell with a key (keyboard, mouse button or wheel) on bars 1-3: { id, name, icon, key, slot }, one per spell name and per key
 function R:Spells()
     local out, names, keys = {}, {}, {}
     local n = GetNumBindings and call(GetNumBindings) or 0
@@ -92,7 +99,7 @@ function R:Spells()
         local cmd, _, k1, k2 = call(GetBinding, i)
         local slot = self.SlotOf(cmd)
         if not self.OnBars(cmd, slot) then slot = nil end
-        local key = keyboardKey(k1) and k1 or (keyboardKey(k2) and k2 or nil)
+        local key = playKey(k1) and k1 or (playKey(k2) and k2 or nil)
         if slot and key and not keys[key] then
             local kind, id = call(GetActionInfo, slot)
             if kind == "spell" and num(id) then
@@ -134,9 +141,17 @@ function R.FullKey(key)
     if IsShiftKeyDown and call(IsShiftKeyDown) then mods = mods .. "SHIFT-" end
     return mods .. key
 end
--- the short form shown under an icon: S-1, C-Q, A-E
+-- the short form shown under an icon: S-1, C-Q, A-E, M4 (mouse button 4), MwU / MwD (mouse wheel)
 function R.ShortKey(key)
-    return (tostring(key or ""):gsub("ALT%-", "A-"):gsub("CTRL%-", "C-"):gsub("SHIFT%-", "S-"))
+    return (tostring(key or ""):gsub("ALT%-", "A-"):gsub("CTRL%-", "C-"):gsub("SHIFT%-", "S-")
+        :gsub("MOUSEWHEELUP", "MwU"):gsub("MOUSEWHEELDOWN", "MwD"):gsub("BUTTON(%d+)", "M%1"))
+end
+-- the binding name of a mouse button from OnMouseDown: MiddleButton = BUTTON3, Button4 = BUTTON4; nil for left and right
+function R.MouseKey(button)
+    if button == "MiddleButton" then return "BUTTON3" end
+    local n = str(button) and button:match("^Button(%d+)$")
+    if n and tonumber(n) >= 3 then return "BUTTON" .. n end
+    return nil
 end
 
 ----------------------------------------------------------------------
@@ -169,6 +184,13 @@ function R:Catcher()
     f:EnableKeyboard(true)
     if f.SetPropagateKeyboardInput then pcall(f.SetPropagateKeyboardInput, f, false) end
     f:SetScript("OnKeyDown", function(_, key) R:Key(key) end)
+    -- mouse buttons and the wheel too, so spells on Button4 / Button5 / the wheel are played and not cast; the left
+    -- and right button go through to the window and the world as before
+    if f.EnableMouse then f:EnableMouse(true) end
+    if f.SetPassThroughButtons then pcall(f.SetPassThroughButtons, f, "LeftButton", "RightButton") end
+    if f.EnableMouseWheel then f:EnableMouseWheel(true) end
+    f:SetScript("OnMouseDown", function(_, button) local k = R.MouseKey(button); if k then R:Key(k) end end)
+    f:SetScript("OnMouseWheel", function(_, delta) R:Key(num(delta) and delta < 0 and "MOUSEWHEELDOWN" or "MOUSEWHEELUP") end)
     f:Hide()
     self.catcher = f
     return f
