@@ -25,6 +25,7 @@ OMQ.NextQuest = NQ
 
 NQ.ZONE_PENALTY, NQ.NEAR, NQ.BONUS, NQ.BONUS_MAX = 300, 150, 0.7, 3
 NQ.ASK_WAIT, NQ.AVAIL_ASK, NQ.CYCLE = 1.5, 15, 120
+NQ.CHAIN_ASK = 8                   -- and about this many follow-up quests (decision 466)
 NQ.RUN_ASK = 20                    -- the Quest Run asks about this many new quests (decision 465)
 NQ.DONE_MAX = 20                   -- an addon message holds 255 characters: quest IDs go in base 36
 NQ.OBJ_RADIUS, NQ.NPC_RADIUS = 40, 12
@@ -132,7 +133,9 @@ local function contains(list, v)
     for _, x in ipairs(list or {}) do if x == v then return true end end
     return false
 end
-function NQ.CanTake(id, who, log)
+-- assume (decision 466): quests treated as done already (the Quest Run plans to turn them in first)
+function NQ.CanTake(id, who, log, assume)
+    local function done(p) return everDone(p) or (assume ~= nil and assume[p] == true) end
     local d = data(id)
     if not d then return false end
     who = who or me()
@@ -146,10 +149,10 @@ function NQ.CanTake(id, who, log)
     if d[4] and who.fac and d[4] ~= who.fac then return false end
     if d[5] and who.race and not contains(d[5], who.race) then return false end
     if d[6] and who.class and not contains(d[6], who.class) then return false end
-    for _, p in ipairs(d[10] or {}) do if not everDone(p) then return false end end
+    for _, p in ipairs(d[10] or {}) do if not done(p) then return false end end
     if d[11] then
         local any = false
-        for _, p in ipairs(d[11]) do if everDone(p) then any = true; break end end
+        for _, p in ipairs(d[11]) do if done(p) then any = true; break end end
         if not any then return false end
     end
     for _, p in ipairs(d[12] or {}) do if everDone(p) or (log and log[p]) then return false end end
@@ -406,12 +409,12 @@ end
 
 -- the same question for the Quest Run (decision 465): which quests are done for the others, which of these
 -- new ones they can take; after(st) gets st.replies once everybody answered or ASK_WAIT has passed
-function NQ.Ask(st, availIds, after)
+function NQ.Ask(st, availIds, after, chainIds)
     st.reqid = tostring(math.random(100000, 999999))
     st.at, st.replies, st.after = now(), st.replies or {}, after
     st.members = st.members or NQ.Members()
     ask = st
-    OMQ:Send("OQ", "a", st.reqid, OMQ:GetSelf() and OMQ:GetSelf().guid or "?", idsOf(availIds, NQ.RUN_ASK))
+    OMQ:Send("OQ", "a", st.reqid, OMQ:GetSelf() and OMQ:GetSelf().guid or "?", idsOf(availIds, NQ.RUN_ASK), idsOf(chainIds or {}, NQ.CHAIN_ASK))
     if C_Timer and C_Timer.After then C_Timer.After(NQ.ASK_WAIT, function() NQ.Finish(st.reqid) end) end
     return st
 end
@@ -430,10 +433,21 @@ OMQ:RegisterMessage("OQ", function(f)
         local can = {}
         for id in pairs(setOf(f[4])) do if NQ.CanTake(id, who, log) then can[#can + 1] = id end end
         table.sort(can)
-        if mine then OMQ:Send("OQ", "r", f[2], mine.guid, idsOf(done, NQ.DONE_MAX), idsOf(can, NQ.RUN_ASK)) end
+        -- follow-up quests of the Quest Run (decision 466): could I take them once the quests of my log and the
+        -- asked chain itself are turned in?
+        local later = {}
+        if f[5] and f[5] ~= "" then
+            local chain = setOf(f[5])
+            local assume = {}
+            for id in pairs(log) do assume[id] = true end
+            for id in pairs(chain) do assume[id] = true end
+            for id in pairs(chain) do if NQ.CanTake(id, who, log, assume) then later[#later + 1] = id end end
+            table.sort(later)
+        end
+        if mine then OMQ:Send("OQ", "r", f[2], mine.guid, idsOf(done, NQ.DONE_MAX), idsOf(can, NQ.RUN_ASK), idsOf(later, NQ.CHAIN_ASK)) end
     elseif op == "r" then
         if not ask or ask.reqid ~= f[2] then return end
-        ask.replies[f[3]] = { done = setOf(f[4]), avail = setOf(f[5]) }
+        ask.replies[f[3]] = { done = setOf(f[4]), avail = setOf(f[5]), later = setOf(f[6]) }
         for _, u in ipairs(ask.members) do if not ask.replies[u.guid] then return end end
         NQ.Finish(ask.reqid)                                   -- everybody answered
     elseif op == "g" then

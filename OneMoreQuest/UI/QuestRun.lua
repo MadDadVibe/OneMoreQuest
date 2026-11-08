@@ -186,11 +186,13 @@ function UI:Render()
         local shown = {}
         local order = {}
         for _, s in ipairs(plan.stops) do
-            if not shown[s.qid] then
+            if s.kind ~= "t" and not shown[s.qid] then       -- a turn-in is no row: the follow-up says it (466)
                 shown[s.qid] = true
-                local isNew = false
-                for _, e in ipairs(plan.quests) do if e.id == s.qid and e.new then isNew = true end end
-                order[#order + 1] = { qid = s.qid, new = isNew }
+                local isNew, parent = false, nil
+                for _, e in ipairs(plan.quests) do
+                    if e.id == s.qid then isNew = e.new and true or false; if e.follow then parent = e.parent end end
+                end
+                order[#order + 1] = { qid = s.qid, new = isNew, parent = parent }
             end
         end
         local n = #order
@@ -200,14 +202,15 @@ function UI:Render()
             local r = rows[i]
             if not r then break end
             local t = Q.Title(o.qid, prep.titles)
-            r.name:SetText(i .. ". " .. t .. (o.new and "  |cff7fc76fnew|r" or ""))
+            r.name:SetText(i .. ". " .. t .. (o.parent and "  |cff7fc76ffollow-up|r" or o.new and "  |cff7fc76fnew|r" or ""))
             r.name:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-            r.what:SetText(o.new and "pick it up first, then the objectives" or (Q.OpenObjective(o.qid) or "objectives"))
+            r.what:SetText(o.parent and ("turn in " .. Q.Title(o.parent, prep.titles) .. " first, then pick it up")
+                or o.new and "pick it up first, then the objectives" or (Q.OpenObjective(o.qid) or "objectives"))
             r.skip.qid = o.qid
             r.skip:Show()
             r:SetPoint("TOPLEFT", 14, -60 - (i - 1) * ROW_H)
             r:Show()
-            view.rows[i] = { qid = o.qid, new = o.new, title = t }
+            view.rows[i] = { qid = o.qid, new = o.new, parent = o.parent, title = t }
         end
         view.length = plan.length
         foot:ClearAllPoints()
@@ -234,13 +237,13 @@ function UI:Render()
                 r.skip:Hide()
             else
                 r.name:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-                r.what:SetText((e.current and "next: " or "") .. (e.new and "pick it up" or (Q.OpenObjective(e.qid) or "objectives")))
+                r.what:SetText((e.current and "next: " or "") .. (e.follow and e.new and e.what or e.new and "pick it up" or (Q.OpenObjective(e.qid) or "objectives")))
                 r.skip.qid = e.qid
                 r.skip:Show()
             end
             r:SetPoint("TOPLEFT", 14, -60 - (i - 1) * ROW_H)
             r:Show()
-            view.rows[i] = { qid = e.qid, done = e.done, current = e.current, title = e.title }
+            view.rows[i] = { qid = e.qid, done = e.done, current = e.current, title = e.title, what = e.what }
         end
         local n = math.min(#list, ROWS)
         startBtn:SetText("Close"); enable(startBtn, true)

@@ -215,7 +215,101 @@ function R.Pool(pos, opts)
             if #e.spots > 0 then out[#out + 1] = e end
         end
     end
+    -- follow-up quests (decision 466): behind a quest of the pool (alone also behind a new one) or behind a quest of
+    -- my log whose objectives are fulfilled already (a "door": it does not count, only its follow-up does)
+    local roots = {}
+    for _, e in ipairs(out) do if solo or not e.new then roots[#roots + 1] = { id = e.id, door = false } end end
+    for _, id in ipairs(ids) do
+        local doneAll = complete(id)
+        for _, u in ipairs(members) do
+            local set = opts.doneBy and opts.doneBy[u.guid]
+            if not (set and set[id]) then doneAll = false end
+        end
+        if doneAll then roots[#roots + 1] = { id = id, door = true } end
+    end
+    for _, f in ipairs(R.Follows(pos, roots, log, opts, solo)) do out[#out + 1] = f end
     return out, free
+end
+
+-- the follow-up quests of a quest: the quests that name it as a pre-quest (built once per quest data)
+local followsOf, followsData = {}, nil
+function R.FollowsOf(id)
+    if followsData ~= OMQ.QuestPlaces then
+        followsData, followsOf = OMQ.QuestPlaces, {}
+        for qid, d in pairs(OMQ.QuestPlaces or {}) do
+            for _, list in ipairs({ d[10] or {}, d[11] or {} }) do
+                for _, p in ipairs(list) do
+                    followsOf[p] = followsOf[p] or {}
+                    table.insert(followsOf[p], qid)
+                end
+            end
+        end
+        for _, l in pairs(followsOf) do table.sort(l) end
+    end
+    return followsOf[id] or {}
+end
+
+local function nearestPlace(spots, pos)
+    local best, bd
+    for _, s in ipairs(spots or {}) do
+        local p = placeOf(s)
+        local dd = p and dist(pos, p)
+        if dd and dd < R.FAR and (not bd or dd < bd) then best, bd = p, dd end
+    end
+    return best
+end
+
+-- the follow-ups behind roots { id, door }, up to CHAIN_DEPTH quests deep: { id, new, follow, parent, door, turnin, pick, spots }
+R.CHAIN_DEPTH = 3
+function R.Follows(pos, roots, log, opts, solo)
+    local out, seen = {}, {}
+    local level = UnitLevel and tonumber((UnitLevel("player"))) or 1
+    local queue = {}
+    for _, r in ipairs(roots) do queue[#queue + 1] = { id = r.id, door = r.door, depth = 0, chain = { [r.id] = true } }; seen[r.id] = true end
+    local qi = 1
+    while queue[qi] do
+        local a = queue[qi]; qi = qi + 1
+        local da = data(a.id)
+        local turnin = da and da[8] and nearestPlace(da[8], pos)
+        if turnin and a.depth < R.CHAIN_DEPTH then
+            for _, b in ipairs(R.FollowsOf(a.id)) do
+                local d = data(b)
+                if not seen[b] and not log[b] and not (opts.skip and opts.skip[b]) and d and d[7] and d[9]
+                   and (d[3] or 0) <= level + R.LEVEL_ABOVE and NQ().CanTake(b, nil, log, a.chain)
+                   and not (solo and R.IsElite(b)) then
+                    local ok = true
+                    for _, u in ipairs(opts.members or {}) do
+                        local set = opts.laterBy and opts.laterBy[u.guid]
+                        if not (set and set[b]) then ok = false; break end
+                    end
+                    local pick = ok and nearestPlace(d[7], pos)
+                    if pick then
+                        local spots = {}
+                        for _, p in ipairs(objPlaces(d[9])) do if dist(pos, p) < R.FAR then spots[#spots + 1] = p end end
+                        if #spots > 0 then
+                            seen[b] = true
+                            out[#out + 1] = { id = b, new = true, follow = true, parent = a.id, door = a.door,
+                                              turnin = turnin, pick = pick, spots = spots }
+                            local chain = {}
+                            for k in pairs(a.chain) do chain[k] = true end
+                            chain[b] = true
+                            queue[#queue + 1] = { id = b, door = false, depth = a.depth + 1, chain = chain }
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- the follow-ups a group run asks the others about: behind the quests every dad has
+function R.ChainIds(pos, log, members)
+    local roots = {}
+    for _, id in ipairs(NQ().Common(log, members)) do roots[#roots + 1] = { id = id, door = false } end
+    local out = {}
+    for _, f in ipairs(R.Follows(pos, roots, log, { members = {} }, false)) do out[#out + 1] = f.id end
+    return out
 end
 
 -- the nearest new quests that a group run asks the others about (before the pool)
@@ -251,15 +345,25 @@ local function pathCost(pos, stops)
 end
 R.PathCost = pathCost
 
--- every pick up before the objectives of its quest
+-- every pick up before the objectives of its quest, a turn-in after its objectives, the pick up of a follow-up
+-- after the turn-in of its pre-quest (s.after)
 local function valid(stops)
-    local seenObj = {}
+    local seenObj, seenT = {}, {}
     for _, s in ipairs(stops) do
-        if s.kind == "o" then seenObj[s.qid] = true
-        elseif seenObj[s.qid] then return false end
+        local q = s.qid
+        if s.kind == "o" then
+            if seenT[q] then return false end
+            seenObj[q] = true
+        elseif s.kind == "t" then
+            seenT[q] = true
+        else
+            if seenObj[q] or seenT[q] then return false end
+            if s.after and not seenT[s.after] then return false end
+        end
     end
     return true
 end
+R._valid = valid
 
 -- better order: reverse parts and move single stops while the way gets shorter
 function R.Improve(pos, stops)
@@ -294,6 +398,47 @@ function R.Improve(pos, stops)
     return stops
 end
 
+-- the cheapest way to add a follow-up: the turn-in of its pre-quest (unless planned already), then its pick up,
+-- then its objectives. Returns the added yards and the new list of stops.
+local function insertAt(list, i, x)
+    local t = {}
+    for k = 1, i do t[k] = list[k] end
+    t[#t + 1] = x
+    for k = i + 1, #list do t[#t + 1] = list[k] end
+    return t
+end
+function R.TryFollow(pos, stops, e, sp)
+    local base = pathCost(pos, stops)
+    local tAt
+    for idx, s in ipairs(stops) do if s.kind == "t" and s.qid == e.parent then tAt = idx end end
+    local P = { qid = e.id, kind = "p", place = e.pick, after = e.parent }
+    local O = { qid = e.id, kind = "o", place = sp }
+    local m = #stops
+    local bestC, bestArr
+    local function consider(arr)
+        if valid(arr) then
+            local c = pathCost(pos, arr) - base
+            if not bestC or c < bestC - 0.01 then bestC, bestArr = c, arr end
+        end
+    end
+    if tAt then
+        for j = tAt, m do
+            local a1 = insertAt(stops, j, P)
+            for k = j + 1, m + 1 do consider(insertAt(a1, k, O)) end
+        end
+    else
+        local T = { qid = e.parent, kind = "t", place = e.turnin }
+        for i = 0, m do
+            local a0 = insertAt(stops, i, T)
+            for j = i + 1, m + 1 do
+                local a1 = insertAt(a0, j, P)
+                for k = j + 1, m + 2 do consider(insertAt(a1, k, O)) end
+            end
+        end
+    end
+    return bestC, bestArr
+end
+
 -- choose n quests of the pool and their order. Returns { stops, quests = { entry }, length }
 function R.Plan(pos, pool, n, free)
     local stops, chosen, used = {}, {}, {}
@@ -302,7 +447,14 @@ function R.Plan(pos, pool, n, free)
     for _ = 1, n do
         local best
         for _, e in ipairs(pool) do
-            if not used[e.id] and (not e.new or newCount < free) then
+            if e.follow then
+                if not used[e.id] and (e.door or used[e.parent]) then
+                    for _, sp in ipairs(e.spots) do
+                        local c, arr = R.TryFollow(pos, stops, e, sp)
+                        if c and (not best or c < best.c - 0.01) then best = { c = c, e = e, arr = arr } end
+                    end
+                end
+            elseif not used[e.id] and (not e.new or newCount < free) then
                 for _, sp in ipairs(e.spots) do
                     local m = #stops
                     local function at(i) if i == 0 then return pos end return stops[i] and stops[i].place end
@@ -336,7 +488,9 @@ function R.Plan(pos, pool, n, free)
         used[e.id] = true
         chosen[#chosen + 1] = e
         local o = { qid = e.id, kind = "o", place = best.sp }
-        if e.new then
+        if best.arr then
+            stops = best.arr                      -- a follow-up: turn-in, pick up and objectives already placed
+        elseif e.new then
             newCount = newCount + 1
             table.insert(stops, best.j + 1, o)
             table.insert(stops, best.i + 1, { qid = e.id, kind = "p", place = e.pick })
@@ -350,9 +504,11 @@ end
 
 -- how many quests fit at most, for the buttons
 function R.Fit(pool, free)
-    local logN, newN = 0, 0
-    for _, e in ipairs(pool) do if e.new then newN = newN + 1 else logN = logN + 1 end end
-    return logN + math.min(newN, free or newN)
+    local logN, newN, folN = 0, 0, 0
+    for _, e in ipairs(pool) do
+        if e.follow then folN = folN + 1 elseif e.new then newN = newN + 1 else logN = logN + 1 end
+    end
+    return logN + math.min(newN, free or newN) + folN
 end
 
 ----------------------------------------------------------------------
@@ -368,12 +524,12 @@ local function members()
 end
 
 local function finishPrep(st, after)
-    local doneBy, availBy = {}, {}
+    local doneBy, availBy, laterBy = {}, {}, {}
     for _, u in ipairs(st.members) do
         local r = st.replies and st.replies[u.guid]
-        if r then doneBy[u.guid] = r.done; availBy[u.guid] = r.avail end
+        if r then doneBy[u.guid] = r.done; availBy[u.guid] = r.avail; laterBy[u.guid] = r.later end
     end
-    st.doneBy, st.availBy = doneBy, availBy
+    st.doneBy, st.availBy, st.laterBy = doneBy, availBy, laterBy
     st.pool, st.free = R.Pool(st.pos, st)
     st.ready = true
     OMQ:Fire("QUEST_RUN_PREP")
@@ -390,7 +546,7 @@ function R:Prepare(after)
     prep = st
     if #st.members == 0 then finishPrep(st, after); return st end
     local ids = R.NewNear(pos, log, R.NEW_GROUP)
-    NQ().Ask(st, ids, function(s) if prep == s then finishPrep(s, after) end end)
+    NQ().Ask(st, ids, function(s) if prep == s then finishPrep(s, after) end end, R.ChainIds(pos, log, st.members))
     OMQ:Fire("QUEST_RUN_PREP")
     return st
 end
@@ -450,8 +606,8 @@ local function save()
     if not run then OMQ.db.questRun[g] = nil; return end
     local s = { id = run.id, leader = run.leader, started = run.started, total = run.total, group = run.group,
                 quests = {}, stops = {} }
-    for qid, q in pairs(run.quests) do s.quests[#s.quests + 1] = { qid, q.new and 1 or 0, q.done and 1 or 0, q.picked and 1 or 0, q.dropped and 1 or 0 } end
-    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i } end
+    for qid, q in pairs(run.quests) do s.quests[#s.quests + 1] = { qid, q.new and 1 or 0, q.done and 1 or 0, q.picked and 1 or 0, q.dropped and 1 or 0, q.follow or 0 } end
+    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after } end
     OMQ.db.questRun[g] = s
 end
 
@@ -461,6 +617,7 @@ local function pin()
     local set = {}
     if run then
         for qid, q in pairs(run.quests) do if not q.done and not q.dropped then set[qid] = true end end
+        for _, s in ipairs(run.stops) do if s.kind == "t" then set[s.qid] = true end end   -- still to turn in (466)
     end
     OMQ.QTrack:Pin(set, run and run.stops[1] and run.stops[1].qid or nil)
 end
@@ -480,7 +637,7 @@ function R:Current() return run and run.stops[1] or nil end
 
 local function newRun(id, leader)
     return { id = id, leader = leader, started = time and time() or 0, quests = {}, stops = {}, all = {},
-             reports = {}, total = 0, group = false, nextI = 1 }
+             reports = {}, total = 0, group = false, nextI = 1, doors = {} }
 end
 
 local function addStop(r, s)
@@ -488,14 +645,18 @@ local function addStop(r, s)
     r.nextI = math.max(r.nextI, s.i + 1)
     r.all[s.i] = s
     r.stops[#r.stops + 1] = s
+    if s.kind == "t" then                         -- a turn-in: a quest of the run, or a door that does not count (466)
+        if not r.quests[s.qid] then r.doors[s.qid] = true end
+        return
+    end
     local q = r.quests[s.qid]
     if not q then q = { qid = s.qid, new = false, done = false }; r.quests[s.qid] = q end
-    if s.kind == "p" then q.new = true end
+    if s.kind == "p" then q.new = true; q.follow = s.after end
 end
 
 local function sendStop(s)
     OMQ:Send("RN", "p", run.id, tostring(s.i), s.kind, b36(s.qid), string.format("%.1f", s.place.a), string.format("%.1f", s.place.b),
-        tostring(s.place.inst or 0), tostring(s.place.map or 0), s.kind == "p" and "1" or "0")
+        tostring(s.place.inst or 0), tostring(s.place.map or 0), s.after and b36(s.after) or "")
 end
 
 local function sendState()
@@ -521,7 +682,7 @@ function R:Start(plan)
     run.skip = prep and prep.skip or {}
     run.members = prep and prep.members or {}
     run.group = #run.members > 0
-    for _, s in ipairs(plan.stops) do addStop(run, { qid = s.qid, kind = s.kind, place = s.place }) end
+    for _, s in ipairs(plan.stops) do addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after }) end
     run.total = 0
     for _ in pairs(run.quests) do run.total = run.total + 1 end
     run.startedAt = now()
@@ -545,9 +706,24 @@ function R:Skip(qid)
     end
     local q = run.quests[qid]
     if not q or q.done then return false end
-    run.skip[qid] = true
-    q.dropped = true
-    for k = #run.stops, 1, -1 do if run.stops[k].qid == qid then table.remove(run.stops, k) end end
+    -- the quest and its follow-ups in the run go (decision 466), each one replaced
+    local gone, n = { [qid] = true }, 1
+    local more = true
+    while more do
+        more = false
+        for id, x in pairs(run.quests) do
+            if x.follow and gone[x.follow] and not gone[id] and not x.done and not x.dropped then gone[id] = true; n = n + 1; more = true end
+        end
+    end
+    for id in pairs(gone) do
+        run.skip[id] = true
+        run.quests[id].dropped = true
+        for k = #run.stops, 1, -1 do
+            local st = run.stops[k]
+            if st.qid == id and st.kind ~= "t" then table.remove(run.stops, k) end
+        end
+    end
+    R.DropTurnins(run)
     -- the next best quest from where I stand
     local pos = NQ().MyPos()
     local used = {}
@@ -558,21 +734,48 @@ function R:Skip(qid)
     local news = 0
     for _, x in pairs(run.quests) do if x.new and not x.picked and not x.done and not x.dropped then news = news + 1 end end
     local free = math.max(0, R.FreeSlots(log) - news)
-    local extra = pos and R.Plan(pos, pool, 1, free)
-    if extra and extra.quests[1] then
+    local extra = pos and R.Plan(pos, pool, n, free)
+    local got = extra and #extra.quests or 0
+    if got > 0 then
         for _, s in ipairs(extra.stops) do
-            addStop(run, { qid = s.qid, kind = s.kind, place = s.place })
-            if run.group then sendStop(run.stops[#run.stops]) end
+            local dup = false
+            if s.kind == "t" then for _, x in ipairs(run.stops) do if x.kind == "t" and x.qid == s.qid then dup = true end end end
+            if not dup then
+                addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after })
+                if run.group then sendStop(run.stops[#run.stops]) end
+            end
         end
         run.quests[extra.quests[1].id].replaces = qid
-        run.total = run.total + 1
-    else
-        OMQ:Print("Quest Run: no other quest fits - one quest less")
+        run.total = run.total + got
+    end
+    if got < n then
+        OMQ:Print("Quest Run: no other quest fits - " .. (n - got == 1 and "one quest" or ((n - got) .. " quests")) .. " less")
     end
     if pos then run.stops = R.Improve(pos, run.stops) end
     sendState()
     fire()
     return true
+end
+
+-- a turn-in stays only while a follow-up of the run still waits for it (decision 466)
+function R.DropTurnins(r)
+    for k = #r.stops, 1, -1 do
+        local st = r.stops[k]
+        if st.kind == "t" then
+            local needed = false
+            for _, x in ipairs(r.stops) do if x.kind == "p" and x.after == st.qid then needed = true end end
+            if not needed then table.remove(r.stops, k) end
+        end
+    end
+end
+
+local function everDone(id)
+    local CQ = C_QuestLog
+    if CQ and CQ.IsQuestFlaggedCompleted then
+        local ok, v = pcall(CQ.IsQuestFlaggedCompleted, id)
+        if ok and v == true then return true end
+    end
+    return false
 end
 
 local function closeRun(reason)
@@ -623,7 +826,23 @@ local function doneForAll(qid)
     if not run.group then return true end
     for _, u in ipairs(present()) do
         local rep = run.reports[u.guid]
-        if not (rep and rep[qid] == "d") then return false end
+        if not (rep and (rep[qid] == "d" or rep[qid] == "t")) then return false end
+    end
+    return true
+end
+-- turned in (decision 466): gone from the log after its objectives were fulfilled, or done before
+local function turnedIn(qid)
+    local log = myLog()
+    if log[qid] then return false end
+    local q = run.quests[qid]
+    return (q and q.wasComplete) or (run.wasComplete and run.wasComplete[qid]) or everDone(qid)
+end
+local function turnedInByAll(qid)
+    if not turnedIn(qid) then return false end
+    if not run.group then return true end
+    for _, u in ipairs(present()) do
+        local rep = run.reports[u.guid]
+        if not (rep and rep[qid] == "t") then return false end
     end
     return true
 end
@@ -633,7 +852,7 @@ local function pickedByAll(qid)
     if not run.group then return true end
     for _, u in ipairs(present()) do
         local rep = run.reports[u.guid]
-        if not (rep and (rep[qid] == "p" or rep[qid] == "d")) then return false end
+        if not (rep and (rep[qid] == "p" or rep[qid] == "d" or rep[qid] == "t")) then return false end
     end
     return true
 end
@@ -650,14 +869,20 @@ function R:Tick()
     if not run then return end
     local log = myLog()
     local changed = false
+    run.wasComplete = run.wasComplete or {}
+    for qid in pairs(run.doors) do if complete(qid) then run.wasComplete[qid] = true end end
     for qid, q in pairs(run.quests) do
         if complete(qid) then q.wasComplete = true end
         if log[qid] then q.inLog = true end
         -- what the others need to know from me
         if run.group and not R:IsLeader() then
-            if complete(qid) or (q.wasComplete and not log[qid]) then report(qid, "d")
+            if turnedIn(qid) then report(qid, "t")
+            elseif complete(qid) or (q.wasComplete and not log[qid]) then report(qid, "d")
             elseif log[qid] then report(qid, "p") end
         end
+    end
+    if run.group and not R:IsLeader() then
+        for qid in pairs(run.doors) do if turnedIn(qid) then report(qid, "t") end end
     end
     if run.group and not R:IsLeader() then return end        -- the leader decides
     for qid, q in pairs(run.quests) do
@@ -672,14 +897,37 @@ function R:Tick()
             end
             if (not q.new or q.picked) and doneForAll(qid) then
                 q.done = true
-                for k = #run.stops, 1, -1 do if run.stops[k].qid == qid then table.remove(run.stops, k) end end
+                for k = #run.stops, 1, -1 do                     -- its turn-in stays for a follow-up (466)
+                    local s = run.stops[k]
+                    if s.qid == qid and s.kind ~= "t" then table.remove(run.stops, k) end
+                end
                 changed = true
                 if OMQ.Sound then OMQ.Sound:Play("update") end
             elseif q.inLog and not log[qid] and not q.wasComplete then
                 q.dropped = true                                   -- abandoned: left out, one quest less
                 for k = #run.stops, 1, -1 do if run.stops[k].qid == qid then table.remove(run.stops, k) end end
+                -- its follow-ups (and theirs) cannot come any more
+                local gone, more = { [qid] = true }, true
+                while more do
+                    more = false
+                    for id, x in pairs(run.quests) do
+                        if x.follow and gone[x.follow] and not gone[id] and not x.done and not x.picked and not x.dropped then
+                            gone[id], more, x.dropped = true, true, true
+                            for k = #run.stops, 1, -1 do if run.stops[k].qid == id then table.remove(run.stops, k) end end
+                        end
+                    end
+                end
+                R.DropTurnins(run)
                 changed = true
             end
+        end
+    end
+    -- turn-ins (decision 466): done when every dad turned the quest in
+    for k = #run.stops, 1, -1 do
+        local s = run.stops[k]
+        if s.kind == "t" and turnedInByAll(s.qid) then
+            table.remove(run.stops, k); changed = true
+            for _, x in ipairs(run.stops) do if x.kind == "p" and x.after == s.qid then x.after = nil end end
         end
     end
     local done, all = R:Counts()
@@ -706,6 +954,7 @@ function R:Target()
     if not s then return nil end
     local pos = NQ().MyPos()
     local view = { qid = s.qid, kind = s.kind, place = s.place, title = R.Title(s.qid) }
+    local near = s.kind ~= "o"
     if pos and pos.inst == s.place.inst then
         view.distance = math.sqrt((s.place.a - pos.a) ^ 2 + (s.place.b - pos.b) ^ 2)
         if OMQ.Arrow then view.heading = OMQ.Arrow.Heading(s.place.a - pos.a, s.place.b - pos.b) end
@@ -715,9 +964,15 @@ function R:Target()
         local ok, v = pcall(C_Minimap.IsInsideQuestBlob, s.qid)
         inside = ok and v == true and not isSecret(v)
     end
-    local radius = s.kind == "p" and R.PICK_RADIUS or R.OBJ_RADIUS
+    local radius = near and R.PICK_RADIUS or R.OBJ_RADIUS
     view.there = inside or (view.distance ~= nil and view.distance <= radius)
-    if s.kind == "p" then view.what = "pick up the quest"
+    if s.kind == "p" then
+        view.what = "pick up the quest"
+        local q = run.quests[s.qid]
+        if q and q.follow then view.what = "pick up the follow-up of " .. R.Title(q.follow) end
+    elseif s.kind == "t" then
+        local nxt = R.FollowUpIn(run, s.qid)
+        view.what = "turn in" .. (nxt and (", then pick up " .. R.Title(nxt)) or "")
     else view.what = R.OpenObjective(s.qid) or "objectives" end
     return view
 end
@@ -727,20 +982,33 @@ function R:MainArrow()
     local t = self:Target()
     if not (t and OMQ.Guide) then return false end
     OMQ.Guide:StartAt("Quest Run: " .. t.title, t.place.a, t.place.b, t.place.inst, "run", nil,
-        { name = t.what, radius = t.kind == "p" and R.PICK_RADIUS or R.OBJ_RADIUS })
+        { name = t.what, radius = t.kind ~= "o" and R.PICK_RADIUS or R.OBJ_RADIUS })
     return true
 end
 
--- the quests of the run in their order, for the list (open ones first by their next stop, then done ones)
+-- the follow-up of the run that waits behind turning in qid (466)
+function R.FollowUpIn(r, qid)
+    for _, x in ipairs(r and r.stops or {}) do if x.kind == "p" and x.after == qid then return x.qid end end
+    return nil
+end
+
+-- the quests of the run in their order, for the list (open ones first by their next stop, then done ones);
+-- a turn-in stop is no row of its own: the follow-up's row says to turn in first
 function R:List()
     if not run then return {} end
     local out, seen = {}, {}
     for _, s in ipairs(run.stops) do
-        if not seen[s.qid] then
+        local q = run.quests[s.qid]
+        if s.kind ~= "t" and q and not seen[s.qid] then
             seen[s.qid] = true
-            local q = run.quests[s.qid]
-            out[#out + 1] = { qid = s.qid, new = q.new and not q.picked, title = R.Title(s.qid),
-                              what = (s.kind == "p") and "pick up" or "objectives", current = #out == 0 }
+            local what = (s.kind == "p") and "pick up" or "objectives"
+            if s.kind == "p" and q.follow then
+                local waiting = false
+                for _, x in ipairs(run.stops) do if x.kind == "t" and x.qid == q.follow then waiting = true end end
+                what = waiting and ("turn in " .. R.Title(q.follow) .. " first, then pick up") or "pick up the follow-up"
+            end
+            out[#out + 1] = { qid = s.qid, new = q.new and not q.picked, follow = q.follow, title = R.Title(s.qid),
+                              what = what, current = #out == 0 }
         end
     end
     for qid, q in pairs(run.quests) do
@@ -771,7 +1039,9 @@ OMQ:RegisterMessage("RN", function(f)
         local i, qid = tonumber(f[3]), tonumber(f[5], 36)
         local a, b = tonumber(f[6]), tonumber(f[7])
         if not (i and qid and a and b) or run.all[i] then return end
-        addStop(run, { i = i, qid = qid, kind = f[4] == "p" and "p" or "o",
+        local kind = (f[4] == "p" or f[4] == "t") and f[4] or "o"
+        local after = f[10] and f[10] ~= "" and tonumber(f[10], 36) or nil
+        addStop(run, { i = i, qid = qid, kind = kind, after = after,
                        place = { a = a, b = b, inst = tonumber(f[8]) or 0, map = tonumber(f[9]) } })
         fire()
     elseif op == "o" then
@@ -831,10 +1101,12 @@ local function restore()
     run.total = s.total or 0
     run.startedAt = now() - math.max(0, (time and s.started) and (time() - s.started) or 0)
     for _, q in ipairs(s.quests or {}) do
-        run.quests[q[1]] = { qid = q[1], new = q[2] == 1, done = q[3] == 1, picked = q[4] == 1, dropped = q[5] == 1, inLog = true }
+        run.quests[q[1]] = { qid = q[1], new = q[2] == 1, done = q[3] == 1, picked = q[4] == 1, dropped = q[5] == 1,
+                             inLog = q[2] ~= 1 or q[4] == 1, wasComplete = q[3] == 1,      -- a new quest not picked up is not in the log
+                             follow = (q[6] and q[6] ~= 0) and q[6] or nil }
     end
     for _, st in ipairs(s.stops) do
-        addStop(run, { qid = st[1], kind = st[2], place = { a = st[3], b = st[4], inst = st[5], map = st[6] }, i = st[7] })
+        addStop(run, { qid = st[1], kind = st[2], place = { a = st[3], b = st[4], inst = st[5], map = st[6] }, i = st[7], after = st[8] })
     end
     run.members = members()
     run.pool, run.skip = {}, {}
