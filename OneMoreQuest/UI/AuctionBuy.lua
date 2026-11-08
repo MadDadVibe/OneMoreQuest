@@ -172,7 +172,7 @@ end
 -- 1. a class that buffs the same stat itself needs no consumable for it (Arcane Intellect, Power Word:
 --    Fortitude, Divine Spirit); only once it knows the spell
 B.CLASS_BUFFS = {
-    MAGE   = { { lines = { "s_int" }, spells = { 1459, 1460, 1461, 10156, 10157 } } },     -- the elixirs stack with it
+    MAGE   = { { lines = { "s_int" }, spells = { 1459, 1460, 1461, 10156, 10157 } } },     -- elixirs stay: Greater Intellect beats ranks 1-4
     PRIEST = { { lines = { "s_sta" }, spells = { 1243, 1244, 1245, 2791, 10937, 10938 } },
                { lines = { "s_spi" }, spells = { 14752, 14818, 14819, 27841 } } },
 }

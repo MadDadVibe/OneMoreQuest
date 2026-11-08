@@ -144,15 +144,19 @@ function C.Active(id, kind, auras)
 end
 
 -- a scroll does not stack with the class buff of the same stat (Arcane Intellect, Power Word:
--- Fortitude, Divine Spirit): no reminder while such a buff is on that is as strong or stronger,
--- whoever cast it. Spell ID = the stat it gives; scrolls by their place in the buy line (weakest first).
+-- Fortitude, Divine Spirit), and neither do the pure Intellect elixirs (Elixir of Wisdom, Elixir of
+-- Greater Intellect) with Arcane Intellect: no reminder while such a buff is on that is as strong or
+-- stronger, whoever cast it. Spell ID = the stat it gives; items by their place in the buy line (weakest
+-- first). Elixir of the Sages (Intellect and Spirit) has no amount here: it keeps its reminder.
 C.CLASS_BUFF = {
     s_int = { [1459] = 2, [1460] = 7, [1461] = 15, [10156] = 22, [10157] = 31, [23028] = 31 },    -- Arcane Intellect, Brilliance
     s_sta = { [1243] = 3, [1244] = 8, [1245] = 20, [2791] = 32, [10937] = 43, [10938] = 54,         -- Power Word: Fortitude
               [21562] = 43, [21564] = 54 },                                                        -- Prayer of Fortitude
     s_spi = { [14752] = 17, [14818] = 23, [14819] = 33, [27841] = 40, [27681] = 40 },              -- Divine Spirit, Prayer of Spirit
 }
-C.SCROLL_STAT = { s_int = { 4, 8, 12, 16 }, s_sta = { 4, 8, 12, 16 }, s_spi = { 3, 7, 11, 15 } }
+C.CLASS_BUFF.e_int = C.CLASS_BUFF.s_int
+C.SCROLL_STAT = { s_int = { 4, 8, 12, 16 }, s_sta = { 4, 8, 12, 16 }, s_spi = { 3, 7, 11, 15 },
+                  e_int = { 6, 25 } }                                -- Elixir of Wisdom, Elixir of Greater Intellect
 local scrollOf
 local function scrollLine(id)
     if not scrollOf then
@@ -165,11 +169,12 @@ local function scrollLine(id)
     local s = scrollOf[id]
     if s then return s[1], s[2] end
 end
--- the name of the class buff that makes this scroll useless, or nil
+-- the name of the class buff that makes this scroll or elixir useless, or nil
 function C.BetterBuff(id, auras)
     local key, tier = scrollLine(id)
     if not key or not auras then return nil end
-    local need = C.SCROLL_STAT[key][tier] or 0
+    local need = C.SCROLL_STAT[key][tier]
+    if not need then return nil end                  -- no amount known (Elixir of the Sages): keep the reminder
     local ids = auras.__ids or {}
     local found = false
     for sid, amount in pairs(C.CLASS_BUFF[key]) do
@@ -216,7 +221,7 @@ function C.Check()
                 local fits = kind ~= "stone" or not OMQ.AuctionBuy or not OMQ.AuctionBuy.StoneFits
                     or OMQ.AuctionBuy.StoneFits(id) ~= false                      -- weightstone not on a blade (decision 426)
                 if name and fits and (minLevel or 0) <= level and s and not spells[s] and C.Active(id, kind, auras) == false
-                    and not (kind == "scroll" and C.BetterBuff(id, auras)) then
+                    and not ((kind == "scroll" or kind == "elixir") and C.BetterBuff(id, auras)) then
                     spells[s] = true
                     local wpn = (kind == "stone" or kind == "oil") and C.WeaponNeed(id, kind) or nil
                     local how = "left click uses it"
@@ -271,7 +276,7 @@ function C.Explain()
                 elseif kind == "stone" and OMQ.AuctionBuy and OMQ.AuctionBuy.StoneFits
                     and OMQ.AuctionBuy.StoneFits(id) == false then why = "does not fit your weapon (blade: sharpening stone, blunt: weightstone)"
                 elseif not s then why = "its buff spell is not known yet"
-                elseif kind == "scroll" and C.BetterBuff(id, auras) then
+                elseif (kind == "scroll" or kind == "elixir") and C.BetterBuff(id, auras) then
                     why = "not needed: " .. C.BetterBuff(id, auras) .. " is on (as strong or stronger, does not stack)"
                 else
                     local a = C.Active(id, kind, auras)
