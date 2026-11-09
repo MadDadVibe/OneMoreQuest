@@ -33,6 +33,7 @@ local function contains(list, v)
     return false
 end
 local function ever(id) return NQ().EverDone(id) end
+local function chainOf(id) return OMQ.DungeonChains and OMQ.DungeonChains[id] end      -- Data/DungeonChains.lua (478)
 
 -- a place of the data for the planner (any continent: the run takes every quest, D2)
 local function placeOf(spot)
@@ -81,8 +82,12 @@ end
 -- entry = { id, goal = "pick" | "turnin", pick, obj, turnin, needs = { id }, dungeon = dungeon quest id it serves }
 -- returns true when the quest is reachable (done already, in the log, or with its stops planned)
 local resolve
-local function needsOf(ctx, d, visiting, depth)
+local function needsOf(ctx, d, visiting, depth, id)
     local needs = {}
+    local c = chainOf(id)
+    if not d[10] and not d[11] and c and c.prev then       -- the data knows no pre-quest, the chain list does (478)
+        d = { [10] = c.prev }
+    end
     for _, p in ipairs(d[10] or {}) do                       -- all of them
         if not ever(p) then
             if not resolve(ctx, p, "turnin", visiting, depth + 1) then return nil end
@@ -108,13 +113,66 @@ local function needsOf(ctx, d, visiting, depth)
     return needs
 end
 
+local function startOf(id)
+    local st = OMQ.QuestStarts and OMQ.QuestStarts[id]
+    if not st then return nil end
+    return { root = st[1], rootName = st[2], giver = st[3], map = st[5], x = st[6], y = st[7], kind = st[8] }
+end
+local function giverPlace(st)
+    if not st or st.kind == "item" or st.kind == "inside" or not (st.map and st.map ~= 0) then return nil end
+    return placeOf({ st.map, st.x, st.y, 1 })
+end
+local function lastPlace(e) return e and (e.follow or e.turnin or e.obj or e.pick) end
+
+-- a quest Data/QuestPlaces.lua does not know (or knows without a giver place): its pre-quests from the chain list
+-- (478) or the chain start of OMQ.QuestStarts; its giver when OMQ.QuestStarts has it; else stop "w": follow the
+-- quest in the log (a pre-quest until it is turned in, a dungeon quest until it is in the log)
+local function resolveChain(ctx, id, goal, visiting, depth)
+    local c, st = chainOf(id), startOf(id)
+    if not c and not st then return false end
+    if c and c.fac and ctx.who.fac and c.fac ~= ctx.who.fac then return false end
+    if c and c.class and ctx.who.class and c.class ~= ctx.who.class then return false end
+    local inLog = ctx.log[id] and true or false
+    local needs = {}
+    visiting[id] = true
+    if not inLog then
+        if c and c.prev and #c.prev > 0 then
+            for _, p in ipairs(c.prev) do
+                if not ever(p) then
+                    if not resolve(ctx, p, "turnin", visiting, depth + 1) then visiting[id] = nil; return false end
+                    if ctx.quests[p] then needs[#needs + 1] = p end
+                end
+            end
+        elseif st and st.root ~= id then
+            local root = st.root
+            if not ever(root) and not ctx.log[root] and not resolve(ctx, root, "turnin", visiting, depth + 1) then
+                local g = giverPlace(st)                -- an unknown chain start: a stop at its giver, it counts when taken
+                if g then
+                    ctx.quests[root] = { id = root, goal = "pick", pick = g, needs = {} }
+                    ctx.order[#ctx.order + 1] = root
+                end
+            end
+            if ctx.quests[root] then needs[#needs + 1] = root end
+        end
+    end
+    visiting[id] = nil
+    local pick = (not inLog and st and st.root == id) and giverPlace(st) or nil
+    local e = { id = id, goal = goal, needs = needs, pick = pick }
+    if goal == "turnin" or not pick then
+        e.follow = pick or lastPlace(ctx.quests[needs[#needs]]) or giverPlace(st) or ctx.pos
+    end
+    ctx.quests[id] = e
+    ctx.order[#ctx.order + 1] = id
+    return true
+end
+
 function resolve(ctx, id, goal, visiting, depth)
     if ctx.quests[id] then return true end
     if ever(id) then return true end
     if goal == "pick" and ctx.log[id] then return true end
     if depth > D.MAX_DEPTH or visiting[id] then return false end
     local d = data(id)
-    if not d then return false end
+    if not d or (not ctx.log[id] and not d[7] and not has(d[13], 4)) then return resolveChain(ctx, id, goal, visiting, depth) end
     if not D.ForMe(id, ctx.who, ctx.log) then return false end
     local inLog = ctx.log[id] and true or false
     if not inLog and (has(d[13], 4) or not d[7]) then return false end    -- from an item or no known giver
@@ -122,7 +180,7 @@ function resolve(ctx, id, goal, visiting, depth)
     visiting[id] = true
     local needs = {}
     if not inLog then
-        needs = needsOf(ctx, d, visiting, depth)
+        needs = needsOf(ctx, d, visiting, depth, id)
         if not needs then visiting[id] = nil; return false end
     end
     visiting[id] = nil
@@ -150,8 +208,13 @@ local function addStops(ctx, e)
         if (kind == "p" or kind == "w") and e.needs and #e.needs > 0 then s.needs = e.needs end
         ctx.stops[#ctx.stops + 1] = s
     end
-    if e.follow then stop("w", e.follow); return end
     stop("p", e.pick)
+    if e.follow then
+        local s = { qid = e.id, kind = "w", place = e.follow, goal = e.goal }
+        if not e.pick and e.needs and #e.needs > 0 then s.needs = e.needs end
+        ctx.stops[#ctx.stops + 1] = s
+        return
+    end
     stop("o", e.obj)
     stop("t", e.turnin)
 end
@@ -193,44 +256,15 @@ function D.Build(key, pos, log, who, skip)
         else
             local d = data(q.id)
             local before = #ctx.order
+            local st = starts(q)
             if d and d[7] and not has(d[13], 4) then
                 if not D.ForMe(q.id, who, ctx.log) then info.notForMe[#info.notForMe + 1] = q.id
                 elseif resolve(ctx, q.id, "pick", {}, 0) then dqs[#dqs + 1] = q.id
                 else info.unknown[#info.unknown + 1] = q.id end
-            else
-                local st = starts(q)
-                if not st then
-                    if d and has(d[13], 4) then info.item[#info.item + 1] = q.id else info.unknown[#info.unknown + 1] = q.id end
-                elseif st.kind == "inside" then info.inside[#info.inside + 1] = q.id
-                elseif st.kind == "item" or not (st.map and st.map ~= 0) then info.item[#info.item + 1] = q.id
-                else
-                    local giver = placeOf({ st.map, st.x, st.y, 1 })
-                    if not giver then
-                        info.unknown[#info.unknown + 1] = q.id
-                    elseif st.root == q.id then
-                        ctx.quests[q.id] = { id = q.id, goal = "pick", pick = giver, needs = {} }
-                        ctx.order[#ctx.order + 1] = q.id
-                        dqs[#dqs + 1] = q.id
-                    else
-                        -- the known chain start, then follow the quest in the log until the dungeon quest is there
-                        local needs = {}
-                        local rootOk = ever(st.root)
-                        if not rootOk and data(st.root) and resolve(ctx, st.root, "turnin", {}, 0) then rootOk = true end
-                        if not rootOk and ctx.log[st.root] then rootOk = true end
-                        if not rootOk then
-                            ctx.quests[st.root] = { id = st.root, goal = "pick", pick = giver, needs = {} }
-                            ctx.order[#ctx.order + 1] = st.root
-                            rootOk = true
-                        end
-                        if ctx.quests[st.root] then needs[1] = st.root end
-                        local root = ctx.quests[st.root]
-                        local at = (root and (root.turnin or root.pick)) or giver
-                        ctx.quests[q.id] = { id = q.id, goal = "pick", follow = at, needs = needs }
-                        ctx.order[#ctx.order + 1] = q.id
-                        dqs[#dqs + 1] = q.id
-                    end
-                end
-            end
+            elseif st and st.kind == "inside" then info.inside[#info.inside + 1] = q.id
+            elseif (d and has(d[13], 4)) or (st and st.root == q.id and not giverPlace(st)) then info.item[#info.item + 1] = q.id
+            elseif resolve(ctx, q.id, "pick", {}, 0) then dqs[#dqs + 1] = q.id
+            else info.unknown[#info.unknown + 1] = q.id end
             for i = before + 1, #ctx.order do
                 local e = ctx.quests[ctx.order[i]]
                 if e and not e.dungeon then e.dungeon = q.id end
@@ -257,7 +291,7 @@ function D.Order(pos, stops)
         -- the quest's own stops in their order: p, o, t
         for _, x in ipairs(left) do
             if x ~= s and x.qid == s.qid then
-                local rank = { p = 1, w = 1, o = 2, t = 3 }
+                local rank = { p = 1, w = 2, o = 2, t = 3 }
                 if rank[x.kind] < rank[s.kind] then return false end
             end
         end

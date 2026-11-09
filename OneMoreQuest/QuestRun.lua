@@ -372,7 +372,7 @@ local function valid(stops)
             end
         end
         if seen then seen[q] = (seen[q] or 0) + 1 end
-        if s.kind == "o" then
+        if s.kind == "o" or s.kind == "w" then             -- "w" (follow the log) comes after its pick up like objectives
             if seenT[q] then return false end
             seenObj[q] = true
         elseif s.kind == "t" then
@@ -406,7 +406,7 @@ function R.Improve(pos, stops, maxIter)
         return c
     end
     local best = pathCost(pos, stops)
-    maxIter = maxIter or (n > 16 and 4 or 60)
+    maxIter = maxIter or (n > 40 and 2 or n > 16 and 4 or 60)
     for _ = 1, maxIter do
         local better = false
         for i = 1, n - 1 do
@@ -1058,7 +1058,7 @@ function R:Tick()
     if done >= all then sendState(); finish(); return end
     if changed then
         local pos = NQ().MyPos()
-        if pos then run.stops = R.Improve(pos, run.stops, run.kind == "dungeon" and 2 or nil) end
+        if pos then run.stops = R.Improve(pos, run.stops, run.kind == "dungeon" and (#run.stops > 40 and 1 or 2) or nil) end
         sendState()
         fire()
     end
@@ -1115,6 +1115,19 @@ function R.FollowTarget(s, pos)
     local known = run and run.quests or {}
     local log = myLog()
     local best, bd
+    if log[s.qid] then                                  -- the quest itself is in the log: the game's own point of it
+        local p = mapPoint(s.qid, pos)
+        if p then
+            bd = math.sqrt((p.a - pos.a) ^ 2 + (p.b - pos.b) ^ 2)
+            view.place, view.straight, view.distance = p, bd, bd
+            view.what = NQ().IsComplete(s.qid) and "turn it in" or (R.OpenObjective(s.qid) or "follow the quest in your log")
+            if OMQ.Arrow then view.heading = OMQ.Arrow.Heading(p.a - pos.a, p.b - pos.b) end
+            view.there = bd <= R.OBJ_RADIUS
+            return view
+        end
+        view.what = NQ().IsComplete(s.qid) and "turn it in - follow the quest in your log" or view.what
+        return view
+    end
     for id in pairs(log) do
         if not known[id] and not data(id) then
             local p = mapPoint(id, pos)

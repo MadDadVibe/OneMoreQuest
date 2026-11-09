@@ -315,12 +315,14 @@ function OMQ:DungeonsForLevel(level)
     return out
 end
 
--- quests of the dungeon that the faction can take ("Alliance" / "Horde")
+-- quests of the dungeon that the faction can take ("Alliance" / "Horde"); class quests of the chain list (478)
+-- only for my own class
 function OMQ:DungeonQuests(d, faction)
     local out = {}
     local want = faction == "Alliance" and "A" or (faction == "Horde" and "H" or nil)
+    local myClass = UnitClass and select(3, UnitClass("player"))
     for _, q in ipairs(d.quests) do
-        if not q.faction or not want or q.faction == want then out[#out + 1] = q end
+        if (not q.faction or not want or q.faction == want) and (not q.class or not myClass or q.class == myClass) then out[#out + 1] = q end
     end
     return out
 end
