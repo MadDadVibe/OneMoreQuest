@@ -15,7 +15,7 @@
 --   (quest IDs in base 36, separated by commas)
 --   OQ|proto|a|reqid|guid|availIds            ask: the new quests I could take
 --   OQ|proto|r|reqid|guid|doneIds|availIds    answer: my quests that are done, which of the new ones I can take
---   OQ|proto|g|guid|label|name|a|b|inst|radius the target for everybody
+--   OQ|proto|g|guid|label|name|a|b|inst|radius|qid the target for everybody (qid of an objective area, fix 473)
 -- Pressing again within CYCLE seconds goes to the next best place of the same list.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
@@ -330,14 +330,15 @@ local function sendTarget(label, name, p, radius)
     local mine = OMQ:GetSelf()
     if not mine then return end
     OMQ:Send("OQ", "g", mine.guid, (label or ""):sub(1, 60), (name or ""):sub(1, 70),
-        string.format("%.1f", p.a), string.format("%.1f", p.b), tostring(p.inst or 0), tostring(radius))
+        string.format("%.1f", p.a), string.format("%.1f", p.b), tostring(p.inst or 0), tostring(radius),
+        p.kind == "obj" and tostring(p.id or "") or "")
 end
 
 local function go(p, titles, share)
     local title, what = NQ.Describe(p, titles)
     local radius = p.kind == "obj" and NQ.OBJ_RADIUS or NQ.NPC_RADIUS
     local label = "One more quest: " .. title
-    if OMQ.Guide then OMQ.Guide:StartAt(label, p.a, p.b, p.inst, "omq", nil, { name = what, radius = radius }) end
+    if OMQ.Guide then OMQ.Guide:StartAt(label, p.a, p.b, p.inst, "omq", nil, { name = what, radius = radius, qid = p.id, area = p.kind == "obj" }) end
     if share then sendTarget(label, what, p, radius) end
     OMQ:Fire("NEXT_QUEST", p)
 end
@@ -458,7 +459,7 @@ OMQ:RegisterMessage("OQ", function(f)
         local a, b = tonumber(f[5]), tonumber(f[6])
         if not (a and b and OMQ.Guide) then return end
         OMQ.Guide:StartAt(f[3] ~= "" and f[3] or "One more quest", a, b, tonumber(f[7]) or 0, "omq", f[2],
-            { name = f[4] ~= "" and f[4] or nil, radius = tonumber(f[8]) })
+            { name = f[4] ~= "" and f[4] or nil, radius = tonumber(f[8]), qid = tonumber(f[9]), area = tonumber(f[9]) ~= nil })
     end
 end)
 

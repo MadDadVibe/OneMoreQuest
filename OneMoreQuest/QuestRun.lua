@@ -997,7 +997,7 @@ function R:MainArrow()
     local t = self:Target()
     if not (t and OMQ.Guide) then return false end
     OMQ.Guide:StartAt("Quest Run: " .. t.title, t.place.a, t.place.b, t.place.inst, "run", nil,
-        { name = t.what, radius = t.kind ~= "o" and R.PICK_RADIUS or R.OBJ_RADIUS })
+        { name = t.what, radius = t.kind ~= "o" and R.PICK_RADIUS or R.OBJ_RADIUS, qid = t.qid, area = t.kind == "o" })
     return true
 end
 

@@ -349,7 +349,12 @@ local function render()
     if g then
         nameText:SetText(g.name)
         if g.class then nameText:SetTextColor(classColor(g.class)) else nameText:SetTextColor(0.55, 0.85, 1) end
-        if g.otherZone then
+        if g.there then
+            -- in the quest's area (fix 473): no pointing at the middle, like the Quest Run arrow
+            distText:SetText("|cff7fc76fyou are there|r")
+            texture:SetVertexColor(0.5, 0.78, 0.44)
+            rotate(shownRot)
+        elseif g.otherZone then
             distText:SetText(g.where or "other continent")
             rotate(0)
             texture:SetVertexColor(0.6, 0.63, 0.68)
@@ -372,6 +377,7 @@ function A:SetMoveMode(on)
 end
 
 function A:ToggleMoveMode() self:SetMoveMode(not moveMode) end
+function A:_Texts() if not distText then return nil end; return nameText:GetText(), distText:GetText() end
 function A:IsMoveMode() return moveMode end
 
 ----------------------------------------------------------------------

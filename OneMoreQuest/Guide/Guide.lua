@@ -247,11 +247,15 @@ end
 
 -- A fixed target (meeting point, shared pin or corpse of a group member).
 -- tag: "meet" | "pin" | "corpse"; src: guid of the player it came from.
--- opts (decision 295): { name = shown under the label, radius = arrival in yards }
+-- opts (decision 295): { name = shown under the label, radius = arrival in yards,
+--   qid + area (fix 473): a quest's objective area: inside the game's quest area (or within radius) the arrow
+--   says "you are there" instead of pointing at the middle, it points again when I leave, and it ends once the
+--   quest's objectives are fulfilled }
 function G:StartAt(label, a, b, inst, tag, src, opts)
     if not OMQ:Master("guidance") then return end
     opts = opts or {}
     dest = { kind = "point", tag = tag, src = src, label = label, radius = opts.radius,
+             qid = tonumber(opts.qid), area = opts.area and tonumber(opts.qid) ~= nil or nil,
              cands = { { name = opts.name or label, a = a, b = b, inst = inst } }, idx = 1 }
     OMQ:Fire("GUIDE_CHANGED", "point")
 end
@@ -295,6 +299,18 @@ local function groupCurrent()
     return { label = "Group", name = t.name or "?", class = t.class, distance = st.distance,
              heading = st.heading, otherZone = st.otherZone, where = where,
              count = st.members and #st.members or 1, idx = 1 }
+end
+
+-- the quest area tests of an objective target (fix 473)
+function G.InsideArea(qid)
+    if not (qid and C_Minimap and C_Minimap.IsInsideQuestBlob) then return false end
+    local ok, v = pcall(C_Minimap.IsInsideQuestBlob, qid)
+    return ok and v == true and not isSecret(v)
+end
+function G.QuestDone(qid)
+    if not (qid and C_QuestLog and C_QuestLog.IsComplete) then return false end
+    local ok, v = pcall(C_QuestLog.IsComplete, qid)
+    return ok and v == true and not isSecret(v)
 end
 
 function G:Clear()
@@ -349,7 +365,11 @@ function G:Current()
     end
     local c = dest.cands[dest.idx]
     if not c then self:Clear(); return nil end
-    if c.d and c.d <= (dest.radius or ARRIVE_YARDS) then
+    local there = false
+    if dest.area then
+        if G.QuestDone(dest.qid) then self:Clear(); return nil end
+        there = G.InsideArea(dest.qid) or (c.d ~= nil and c.d <= (dest.radius or ARRIVE_YARDS))
+    elseif c.d and c.d <= (dest.radius or ARRIVE_YARDS) then
         self:Clear()
         return nil
     end
@@ -359,6 +379,7 @@ function G:Current()
     if c.name and title and title ~= c.name then shownName = c.name .. " (" .. title .. ")" end
     local st = { label = dest.label, name = shownName, distance = c.d,
                  otherZone = c.d == nil, count = #dest.cands, idx = dest.idx }
+    if there then st.there = true; return st end
     local ha, hb = c.a, c.b
     -- the way over the land (471): head for the next point of the way, the yards are the way's
     local P = OMQ.Path
