@@ -255,6 +255,44 @@ function B.IsBuffFood(id)
     foodSeen[id] = yes
     return yes
 end
+-- does this buff food still give the +5% XP from kills? (decision 475) Its tooltip is read in the game: a food
+-- whose readable text names no experience is left out of the cheapest XP food. The test only counts once one food
+-- of the list has shown such a line this session, so a client whose food tooltips never name it keeps the list.
+-- Answers: true (XP line), false (readable, no XP line), nil (tooltip not loaded yet).
+B.XP_WORDS = { "experience", "erfahrung" }       -- English and German tooltip wording
+local xpSeen = {}
+B.xpProof = nil                                  -- the first food whose tooltip named experience
+function B.FoodXP(id)
+    if xpSeen[id] ~= nil then return xpSeen[id] end
+    local text = tipText(id)
+    if not text or text == "" then return nil end
+    local yes = false
+    for _, w in ipairs(B.XP_WORDS) do
+        if text:find(w, 1, true) then yes = true; break end
+    end
+    xpSeen[id] = yes
+    if yes and not B.xpProof then B.xpProof = id end
+    return yes
+end
+-- is the food out of the cheapest XP food row? only when its tooltip has no XP line and another food's has one
+function B.NoXP(id)
+    for _, f in ipairs(OMQ.BuyFoods or {}) do if B.xpProof then break end; B.FoodXP(f[1]) end
+    return B.xpProof ~= nil and B.FoodXP(id) == false
+end
+function B._ResetXP() for k in pairs(xpSeen) do xpSeen[k] = nil end; B.xpProof = nil end
+-- /omq ah food: what the tooltips say about the XP of every buff food up to my level
+function B.FoodReport()
+    local lines = { "buff foods with +5% XP (tooltip check): " .. (B.xpProof and ("on, proof item " .. B.xpProof) or "off, no food tooltip names experience yet") }
+    local lvl = UnitLevel and UnitLevel("player") or 60
+    for _, f in ipairs(OMQ.BuyFoods or {}) do
+        if f[2] <= lvl then
+            local x = B.FoodXP(f[1])
+            local name = C_Item and C_Item.GetItemInfo and C_Item.GetItemInfo(f[1]) or ("item " .. f[1])
+            lines[#lines + 1] = string.format("  %s (%d): %s", tostring(name), f[1], x == true and "XP" or x == false and "NO XP - left out" or "tooltip not loaded")
+        end
+    end
+    return lines
+end
 function OMQ.BuyKind(id)
     if not id then return nil end
     local k = OMQ.BuyKnown and OMQ.BuyKnown[id]
@@ -905,7 +943,7 @@ end
 function B.FoodCandidates(lvl)
     for i = #foods, 1, -1 do foods[i] = nil end
     for _, f in ipairs(OMQ.BuyFoods or {}) do
-        if f[2] <= lvl then
+        if f[2] <= lvl and not B.NoXP(f[1]) then
             local r = rowFor(f[1], "food", nil, B.TARGET.food or 10, false)
             foods[#foods + 1] = r
         end
@@ -916,7 +954,7 @@ function B.CheapestFood(lvl)
     local best
     for _, r in ipairs(foods) do
         local o = r.offers and r.offers[1]
-        if r.state == "ok" and o and (not best or o.unit < best.offers[1].unit) then best = r end
+        if r.state == "ok" and o and not B.NoXP(r.itemID) and (not best or o.unit < best.offers[1].unit) then best = r end
     end
     return best
 end

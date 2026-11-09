@@ -1441,7 +1441,12 @@ OMQ:RegisterCommand("ah", function(arg)
         for _, l in ipairs(B and B.BagReport and B.BagReport() or { "bags: no buy mode" }) do OMQ:Print(l) end
         return
     end
+    if arg == "food" then                                -- which buff foods still give XP (decision 475)
+        local B = OMQ.AuctionBuy
+        for _, l in ipairs(B and B.FoodReport and B.FoodReport() or { "food: no buy mode" }) do OMQ:Print(l) end
+        return
+    end
     local n = 0
     for _ in pairs(db().skip) do n = n + 1 end
-    OMQ:Print("auction helper: " .. AH.Mode() .. " mode, " .. n .. " skipped items. " .. AH.EarnedText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. ".  /omq ah fast | select | unskip | bags")
+    OMQ:Print("auction helper: " .. AH.Mode() .. " mode, " .. n .. " skipped items. " .. AH.EarnedText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. ".  /omq ah fast | select | unskip | bags | food")
 end, "auction helper: fast or select mode, forget the skipped items")
