@@ -133,11 +133,12 @@ function LP.Rewards(q, class, level, role, wornOf)
     class = class or (S and S.MyClass())
     level = level or (UnitLevel and UnitLevel("player")) or 1
     role = role or (S and S.MyRole())
-    local list, loading = {}, 0
+    local list, loading, pend = {}, 0, {}
     for i, id in ipairs(ids) do
         local name, link, quality, _, minLevel = info(id)
         if not name or not link or isSecret(link) then
             loading = loading + 1
+            pend[#pend + 1] = id
             request(id)
         else
             local _, _, _, equipLoc = instant(id)
@@ -158,7 +159,7 @@ function LP.Rewards(q, class, level, role, wornOf)
         if (a.gain or 0) ~= (b.gain or 0) then return (a.gain or 0) > (b.gain or 0) end
         return a.order < b.order
     end)
-    return list, loading
+    return list, loading, pend
 end
 
 local function rewardColor(q)
@@ -169,6 +170,92 @@ local function rewardColor(q)
     local c = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q]
     if c then return c.r, c.g, c.b end
     return 1, 1, 1
+end
+
+----------------------------------------------------------------------
+-- Reward icons in the quest rows of the Group Check (fix 490)
+-- Every item reward of a dungeon quest as a small icon with its quality border; hover shows the
+-- game's own item tooltip (stats, armor, level) with the item score below, an upgrade gets a green
+-- "+", gear I cannot use a grey icon. Click like any item (Shift links it, Ctrl tries it on).
+----------------------------------------------------------------------
+LP.REWARD_ICON = 22
+LP.REWARD_STEP = 24
+
+-- the icons of a quest in their order: the loaded ones as Rewards sorts them, then the ones still loading
+function LP.RewardIcons(q)
+    local list, loading, pend = LP.Rewards(q)
+    if not list then return {}, 0 end
+    local out = {}
+    for _, e in ipairs(list) do out[#out + 1] = e end
+    for _, id in ipairs(pend or {}) do
+        local _, _, _, equipLoc, icon = instant(id)
+        out[#out + 1] = { id = id, loading = true, icon = icon, equipLoc = equipLoc, state = "other" }
+    end
+    return out, loading
+end
+
+function LP.RewardScoreLine(tip, e)
+    if not (tip and e) or e.loading then return end
+    local S = SC()
+    local role = S and S.MyRole and S.MyRole() or "damage"
+    local label = (S and S.ROLE_LABEL and S.RoleOf and S.ROLE_LABEL[S.RoleOf(S.MyClass(), role) or role]) or role
+    if e.state == "up" then
+        tip:AddLine(" ")
+        tip:AddLine("Item score (" .. label .. "): |cff40e060+" .. e.gain .. " upgrade|r")
+    elseif e.state == "no" then
+        tip:AddLine(" ")
+        tip:AddLine("Item score (" .. label .. "): no upgrade", 0.6, 0.63, 0.68)
+    elseif e.state == "cannot" then
+        tip:AddLine(" ")
+        tip:AddLine("Item score: not for you", 0.6, 0.63, 0.68)
+    end
+end
+
+local function rewardEnter(self)
+    local e = self.omqReward
+    if not (GameTooltip and e) then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    pcall(GameTooltip.SetHyperlink, GameTooltip, e.link or ("item:" .. e.id))   -- the game's own item tooltip
+    LP.RewardScoreLine(GameTooltip, e)
+    if e.loading then LP.tipOwner = self end    -- drawn again when the item arrives
+    GameTooltip:Show()
+end
+
+function LP.MakeRewardIcon(parent)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(LP.REWARD_ICON, LP.REWARD_ICON)
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetPoint("TOPLEFT", b, "TOPLEFT", 1, -1)
+    b.icon:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -1, 1)
+    b.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    b.edges = {}
+    for i = 1, 4 do b.edges[i] = b:CreateTexture(nil, "OVERLAY") end
+    local e = b.edges
+    e[1]:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0); e[1]:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0); e[1]:SetHeight(1)
+    e[2]:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0); e[2]:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0); e[2]:SetHeight(1)
+    e[3]:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0); e[3]:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0); e[3]:SetWidth(1)
+    e[4]:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0); e[4]:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0); e[4]:SetWidth(1)
+    b.up = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    b.up:SetPoint("TOPRIGHT", b, "TOPRIGHT", 2, 3)
+    b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    b:RegisterForClicks("AnyUp")
+    b:SetScript("OnEnter", rewardEnter)
+    b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    b:SetScript("OnClick", function(self)
+        local r = self.omqReward
+        if r and HandleModifiedItemClick then HandleModifiedItemClick(r.link or select(2, info(r.id)) or ("item:" .. r.id)) end
+    end)
+    return b
+end
+
+function LP.SetRewardIcon(b, e)
+    b.omqReward = e
+    b.icon:SetTexture(e.icon or select(5, instant(e.id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+    if b.icon.SetDesaturated then b.icon:SetDesaturated(e.state == "cannot") end
+    local r, g, bl = 0.4, 0.4, 0.4
+    if not e.loading then r, g, bl = rewardColor(e.quality) end
+    for _, edge in ipairs(b.edges) do edge:SetColorTexture(r, g, bl, 1) end
+    b.up:SetText(e.state == "up" and "|cff40e060+|r" or "")
 end
 
 -- adds the reward lines to the GameTooltip; true when there were rewards
@@ -343,7 +430,7 @@ ev:SetScript("OnEvent", function(_, event)
         local f = o:GetScript("OnEnter")
         if f then pcall(f, o) end
     end
-    if event == "GET_ITEM_INFO_RECEIVED" and not (LP.loading and LP.loading > 0) then return end
+    if event == "GET_ITEM_INFO_RECEIVED" and not (LP.loading and LP.loading > 0) and not (LP.rewardLoading and LP.rewardLoading > 0) then return end
     if pendingRedraw then return end
     pendingRedraw = true
     C_Timer.After(0.5, function()

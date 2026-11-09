@@ -326,9 +326,11 @@ local GREY = { 0.45, 0.47, 0.5 }
 local RED = { 0.92, 0.36, 0.31 }
 local GREEN = { 0.49, 0.78, 0.44 }
 local QNAME_W, QCOL_W, QROW_H = 280, 62, 34          -- the dungeon part has more room (decision 193)
+local QREW_W = 5 * 24 + 6                            -- the reward icons of a quest, up to five (fix 490)
 local ENT_W = 84
 local STATE_TEXT = { done = { "Done", GREEN }, log = { "In log", { 0.89, 0.71, 0.29 } }, none = { "-", GREY } }
 local frame, cells, footer, title, qhead, qcells, entrance, qbuttons, prevBtn, nextBtn
+local qicons = {}                  -- reward icons per quest row (fix 490)
 local drunBtn                      -- the Dungeon Run button (decision 476)
 
 -- the dungeons the arrows switch between (decision 256): those of the check bar (my level), plus the open one
@@ -767,18 +769,36 @@ function R:Render()
     local nm = math.max(1, math.min(#rows, 5))
     for i = 1, #qcells do for k = 1, 7 do qcells[i][k]:SetText("") end end
     for _, btn in ipairs(qbuttons) do btn:Hide() end
+    for _, row in pairs(qicons) do for _, ic in ipairs(row) do ic:Hide() end end
+    if qhead.rew then qhead.rew:SetText("") end
     qhead.name:SetText("")
     for c = 1, 5 do qhead.cols[c]:SetText("") end
     if d then
         local qy = height + 10
-        width = math.max(width, PAD * 2 + QNAME_W + nm * QCOL_W)
+        local LP = OMQ.LootPreview
+        local rewW = 0
+        if LP and LP.RewardIDs then
+            for _, q in ipairs(quests) do if LP.RewardIDs(q) then rewW = QREW_W; break end end
+        end
+        width = math.max(width, PAD * 2 + QNAME_W + rewW + nm * QCOL_W)
+        if rewW > 0 then
+            if not qhead.rew then
+                qhead.rew = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                qhead.rew:SetJustifyH("LEFT")
+            end
+            qhead.rew:ClearAllPoints()
+            qhead.rew:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD + QNAME_W, -(qy + 16))
+            qhead.rew:SetText("Rewards")
+            qhead.rew:SetTextColor(0.6, 0.63, 0.68)
+        end
+        local rewLoading = 0
         qhead.name:ClearAllPoints()
         qhead.name:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -qy)
         qhead.name:SetText(#quests > 0 and "Dungeon quests  |cff9aa0aa(click: your quest log, or an arrow to the quest giver)|r" or "No dungeon quests known")
         for c = 1, nm do
             local r = rows[c]
             qhead.cols[c]:ClearAllPoints()
-            qhead.cols[c]:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD + QNAME_W + (c - 1) * QCOL_W, -(qy + 16))
+            qhead.cols[c]:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD + QNAME_W + rewW + (c - 1) * QCOL_W, -(qy + 16))
             qhead.cols[c]:SetText(#quests > 0 and (r.name or "?") or "")
             qhead.cols[c]:SetTextColor(classColor(r.class))
         end
@@ -852,11 +872,25 @@ function R:Render()
             qcells[i][7]:ClearAllPoints()
             qcells[i][7]:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -(yy + 15))
             qcells[i][7]:SetText(sub)
+            -- the item rewards as icons: hover shows the game's item tooltip (fix 490)
+            if rewW > 0 then
+                local icons, loading = LP.RewardIcons(q)
+                rewLoading = rewLoading + (loading or 0)
+                qicons[i] = qicons[i] or {}
+                for k = 1, math.min(#icons, 5) do
+                    local ic = qicons[i][k] or LP.MakeRewardIcon(frame)
+                    qicons[i][k] = ic
+                    LP.SetRewardIcon(ic, icons[k])
+                    ic:ClearAllPoints()
+                    ic:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD + QNAME_W + (k - 1) * LP.REWARD_STEP, -(yy + 3))
+                    ic:Show()
+                end
+            end
             for c = 1, nm do
                 local stt = self:QuestState(rows[c], q)
                 local fs = qcells[i][c + 1]
                 fs:ClearAllPoints()
-                fs:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD + QNAME_W + (c - 1) * QCOL_W, -(yy + 6))
+                fs:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD + QNAME_W + rewW + (c - 1) * QCOL_W, -(yy + 6))
                 if stt then
                     fs:SetText(STATE_TEXT[stt][1])
                     fs:SetTextColor(STATE_TEXT[stt][2][1], STATE_TEXT[stt][2][2], STATE_TEXT[stt][2][3])
@@ -867,6 +901,7 @@ function R:Render()
             end
         end
         height = qy + 34 + #quests * QROW_H + PAD
+        if LP then LP.rewardLoading = rewLoading end
         -- the best boss loot for me (decision 233)
         if OMQ.LootPreview then
             width = math.max(width, OMQ.LootPreview.MIN_W)
@@ -893,6 +928,7 @@ end
 R._DungeonRunButton = function() return drunBtn end
 function R:Frame() return frame end
 R._QuestButtons = function() return qbuttons end
+R._RewardIcons = function() return qicons end
 
 function R:Open(dungeonKey)
     if not frame then build() end
