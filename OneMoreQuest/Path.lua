@@ -30,6 +30,7 @@ P.WAY_KEEP = 4                -- targets whose search back is kept
 P.WAY_BOUND = 40000         -- yards searched back from the arrow's target
 P.SLACK, P.SLACK_YD = 1.12, 25   -- a part of the way this close to the straight line is walked straight
 P.ISLAND, P.ISLAND_YD = 1.5, 600 -- target in ground the network does not join (an island): boat, a guess
+P.JOIN_MOVE = 8             -- the anchors the arrow may join are found again after this many yards (485)
 P.JOIN_KEEP, P.JOIN_KEEP_YD = 1.03, 20   -- the last join is kept while it costs no more than this (477)
 P.PASSED = 15               -- a way point this close counts as reached: the arrow heads for the next one
 P.CUT, P.CUT_YD = 1.12, 25  -- a way point behind me is skipped when the walk on from it is about this straight
@@ -398,6 +399,29 @@ function P.SearchTo(q, bound)
     return { dist = dist, nxt = nxt, flew = flew, g = g, taxis = taxis, to = q }
 end
 
+-- the anchors the arrow may join (fix 485): ALL anchors of my tile. P.Near keeps only the 5 nearest: when the
+-- cheapest join was the 6th nearest, a step that brought another anchor nearer dropped it, the way jumped up by
+-- hundreds of yards for a few steps and the arrow turned back. The list is found again after JOIN_MOVE yards, the
+-- yards to the anchors every time. Without anchors in my tile: P.Near as before.
+function P.JoinNear(g, p, c)
+    local ids
+    if c and c.jl and c.jinst == p.inst and straight(c.ja, c.jb, p.a, p.b) < P.JOIN_MOVE then
+        ids = c.jl
+    else
+        ids = {}
+        for _, i in ipairs(g.tiles[tileKey(p.a, p.b)] or {}) do
+            if straight(p.a, p.b, g.x[i], g.y[i]) <= P.NEAR_MAX then ids[#ids + 1] = i end
+        end
+        if #ids == 0 then
+            for _, x in ipairs(P.Near(g, p.a, p.b)) do ids[#ids + 1] = x[1] end
+        end
+        if c then c.jl, c.ja, c.jb, c.jinst = ids, p.a, p.b, p.inst end
+    end
+    local list = {}
+    for k, i in ipairs(ids) do list[k] = { i, straight(p.a, p.b, g.x[i], g.y[i]) } end
+    return list
+end
+
 local wayCache = {}
 local function coarseWay(p, q)
     if not (P.Enabled() and p and q and num(p.a) and num(q.a)) or p.inst ~= q.inst then return nil end
@@ -422,7 +446,7 @@ local function coarseWay(p, q)
     -- where I join the way
     local best, first = nil, nil
     local keep = nil                                -- the way I joined last time, if it is still near me
-    for _, x in ipairs(P.Near(g, p.a, p.b)) do
+    for _, x in ipairs(P.JoinNear(g, p, c)) do
         local d = srch.dist[x[1]]
         if d and (best == nil or d + x[2] < best) then best, first = d + x[2], x[1] end
         if d and x[1] == c.join then keep = d + x[2] end
@@ -826,7 +850,8 @@ local function steer(p, w, ka, kb)
         -- a fine way round something, then a clear line: keep the way round a little longer while I am still on it
         -- (at the edge of a wall the line flips between clear and not, the arrow with it, 477)
         local old = c.f
-        if f and f.clear and old and not old.clear and old.path and t - (c.found or 0) < P.FINE_HOLD
+        -- (also when the raster cannot tell for a moment: my cell has more floors or no ground, fix 485)
+        if (not f or f.clear) and old and not old.clear and old.path and t - (c.found or 0) < P.FINE_HOLD
             and P.OnPath(p.a, p.b, old.path) then
             f = old
         elseif f and not f.clear then
