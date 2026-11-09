@@ -177,6 +177,14 @@ local function allSections()
                   OMQ.db.options.clickHeals = v and true or false
                   if OMQ.ClickHeals then OMQ.ClickHeals.Soon() end
               end },
+            -- fix 492: set the Shift-click heals again by hand (after a disconnect, or bindings changed by hand)
+            { type = "button", indent = true, label = "Apply Shift-click heals again",
+              tip = "Sets Shift + left and Shift + right click on the unit frames to the OMQ heals again, as defined above. Whatever is bound to these two clicks now is replaced; all other click casting bindings stay. Out of a fight only, otherwise right after it.",
+              done = "Done - Shift-click heals set again",
+              click = function()
+                  local line = OMQ.ClickHeals and OMQ.ClickHeals.Reapply()
+                  if line then OMQ:Print(line) end
+              end },
             -- decision 423: a dad at low life calls the healer, a click on the card heals him
             { type = "check", label = "Low life calls for healers",
               tip = "When a dad's screen flashes red at low life, the healers of the group (preferred role Healer, or the healer role in the group) get a small red card LOW LIFE / HEAL under his party frame and a warning sound, also in a fight; at your own low life the card shows under your own frame. Left click on the card targets him and casts your emergency heal. In a fight the empty card places under the party frames take no clicks.",

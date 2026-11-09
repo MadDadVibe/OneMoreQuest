@@ -179,7 +179,10 @@ local function isShift(m) return m == 1 or m == 2 or m == 3 end
 
 -- the new profile, or nil when nothing changes (pure, for the tests)
 -- profile: the game's list; st: our store; wantOf(button) -> spell id or nil; on: the option
-function CH.Plan(profile, st, wantOf, on)
+-- byHand: the game's click casting window was open since the last check. Fix 492: only then is a missing
+-- binding of ours the dad's removal; without the window it was lost (disconnect, reconnect, a loading
+-- screen with the macros not loaded yet) and is bound again.
+function CH.Plan(profile, st, wantOf, on, byHand)
     local out, changed, notes = {}, false, {}
     local slot = {}                                    -- button -> index in out of the shift binding
     for _, info in ipairs(profile) do
@@ -192,10 +195,15 @@ function CH.Plan(profile, st, wantOf, on)
         local idx = slot[button]
         local cur = idx and out[idx]
         local want = on and wantOf(button) or nil
+        local lost
         if mine and not (cur and cur.type == SPELL and cur.actionID == mine) then
-            -- our binding is gone or was changed by the dad: the slot is his now
+            if cur or byHand then
+                -- our binding was changed or removed by the dad: the slot is his now
+                st.given[button] = true
+            else
+                lost = mine                            -- gone without the dad: set it again
+            end
             st[button] = nil
-            st.given[button] = true
             mine = nil
         end
         if mine then
@@ -205,10 +213,10 @@ function CH.Plan(profile, st, wantOf, on)
                 notes[#notes + 1] = { button = button, spell = want, from = mine }
                 cur.actionID = want; st[button] = want; changed = true
             end
-        elseif want and not cur and not st.given[button] then
+        elseif want and not cur and (lost or not st.given[button]) then
             out[#out + 1] = { type = SPELL, actionID = want, button = button, modifiers = CH.SHIFT }
             st[button] = want; changed = true
-            notes[#notes + 1] = { button = button, spell = want }
+            notes[#notes + 1] = { button = button, spell = want, from = lost }
         end
     end
     if not changed then return nil, notes end
@@ -394,22 +402,49 @@ function CH.Reclaim(list, st)
     return changed
 end
 
+-- fix 492: right after a login or a reconnect the game may not have loaded the click casting profile or the
+-- character macros yet. An empty profile while we had bindings in it (the game always has its target and
+-- menu clicks too) or no character macro at all while we made some: wait and look again, at most
+-- CH.WAIT_TRIES times, then go on anyway.
+CH.WAIT_TRIES = 10
+function CH.NotLoaded(profile, st)
+    if #profile == 0 and (st.LeftButton or st.RightButton) then return true end
+    if st.made and next(st.made) and macroApi() and GetNumMacros then
+        local _, char = GetNumMacros()
+        if (char or 0) == 0 then return true end
+    end
+    return false
+end
+
+-- the game's click casting window is (or was) open: a binding removed there is the dad's choice
+local function windowOpen() return ClickBindingFrame and ClickBindingFrame:IsShown() end
+CH.windowSeen = false
+
 local pending = false
+local waits = 0
 function CH.Update()
     local CB = C_ClickBindings
     if not (CB and CB.GetProfileInfo and CB.SetProfileByInfo) then return end
     if InCombatLockdown and InCombatLockdown() then pending = true; return end
-    if ClickBindingFrame and ClickBindingFrame:IsShown() then pending = true; return end
+    if windowOpen() then pending = true; CH.windowSeen = true; return end
     pending = false
     local st = store()
     if not st then return end
     local ok, profile = pcall(CB.GetProfileInfo)
     if not ok or type(profile) ~= "table" then return end
+    if CH.NotLoaded(profile, st) and waits < CH.WAIT_TRIES then
+        waits = waits + 1
+        C_Timer.After(2, CH.Soon)
+        return
+    end
+    waits = 0
+    local byHand = CH.windowSeen
+    CH.windowSeen = false
     local on = enabled()
     local now = on and CH.Steady(CH.Tops(), st.tops) or nil
     local work = CH.Unwrap(profile, st)
     if on then CH.Reclaim(work, st) end
-    local new, notes = CH.Plan(work, st, function(b) return CH.Wanted(b, now) end, on)
+    local new, notes = CH.Plan(work, st, function(b) return CH.Wanted(b, now) end, on, byHand)
     local final = new or copyList(work)
     if now then CH.Follow(final, st.tops, now) end
     local full = CH.Wrap(final, st)
@@ -464,23 +499,33 @@ watch:SetScript("OnUpdate", function(_, elapsed)
     acc = acc + (elapsed or 0)
     if acc < 2 then return end
     acc = 0
-    if pending and not (ClickBindingFrame and ClickBindingFrame:IsShown()) then soon() end
+    if windowOpen() then CH.windowSeen = true
+    elseif pending then soon() end
 end)
 
 OMQ:On("READY", function() C_Timer.After(3, soon) end)
 
--- /omq clickheals reset: take Shift + left and Shift + right back for the OMQ heal macros (decision 463)
+-- /omq clickheals reset and the options button (fix 492): take Shift + left and Shift + right back for the
+-- OMQ heal macros (decision 463). Returns the line for the chat or the button.
+function CH.Reapply()
+    local st = store()
+    if not st then return nil end
+    local _, class = UnitClass("player")
+    if not CH.HEALS[class] then return "Click casting: only healers (priest, paladin, druid, shaman) get Shift-click heals" end
+    if not enabled() then return "Click casting: switch on \"Shift-click heals on unit frames\" first" end
+    st.reclaimed = nil
+    CH.windowSeen = false
+    soon()
+    if InCombatLockdown and InCombatLockdown() then
+        return "Click casting: Shift-click heals are set again after the fight"
+    end
+    return "Click casting: Shift + left and Shift + right are set to the OMQ heal macros again"
+end
+
 OMQ:RegisterCommand("clickheals", function(arg)
     if (arg or ""):lower():match("^%s*reset") then
-        local st = store()
-        if not st then return end
-        st.reclaimed = nil
-        if InCombatLockdown and InCombatLockdown() then
-            OMQ:Print("Click casting: Shift-click heals are set again after the fight")
-        else
-            OMQ:Print("Click casting: Shift + left and Shift + right are set to the OMQ heal macros again")
-        end
-        soon()
+        local line = CH.Reapply()
+        if line then OMQ:Print(line) end
     else
         OMQ:Print("/omq clickheals reset - Shift + left and Shift + right click cast the OMQ heal macros again")
     end
