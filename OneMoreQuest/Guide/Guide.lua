@@ -391,6 +391,10 @@ function G:Current()
         end
     end
     if c.d and OMQ.Arrow then st.heading = OMQ.Arrow.Heading(ha - mine.a, hb - mine.b) end
+    -- close to the target (decision 477): the arrow calms down
+    st.straight = c.d
+    local calm = OMQ.Arrow and OMQ.Arrow.CALM or 25
+    st.near = c.d ~= nil and c.d <= calm and (st.distance or c.d) <= calm + 10 or nil
     return st
 end
 

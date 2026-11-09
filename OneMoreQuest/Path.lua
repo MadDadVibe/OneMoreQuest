@@ -30,7 +30,11 @@ P.WAY_KEEP = 4                -- targets whose search back is kept
 P.WAY_BOUND = 40000         -- yards searched back from the arrow's target
 P.SLACK, P.SLACK_YD = 1.12, 25   -- a part of the way this close to the straight line is walked straight
 P.ISLAND, P.ISLAND_YD = 1.5, 600 -- target in ground the network does not join (an island): boat, a guess
-P.PASSED = 30               -- a way point this close counts as reached: the arrow heads for the next one
+P.JOIN_KEEP, P.JOIN_KEEP_YD = 1.03, 20   -- the last join is kept while it costs no more than this (477)
+P.PASSED = 15               -- a way point this close counts as reached: the arrow heads for the next one
+P.CUT, P.CUT_YD = 1.12, 25  -- a way point behind me is skipped when the walk on from it is about this straight
+P.CARROT = 40               -- the arrow heads for a point this far ahead on the way: it glides round corners (477)
+P.CARROT_FINE = 30          -- the same on a fine way round a wall
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
 local function num(v) return type(v) == "number" and not isSecret(v) end
@@ -417,16 +421,22 @@ local function coarseWay(p, q)
     local g = srch.g
     -- where I join the way
     local best, first = nil, nil
+    local keep = nil                                -- the way I joined last time, if it is still near me
     for _, x in ipairs(P.Near(g, p.a, p.b)) do
         local d = srch.dist[x[1]]
         if d and (best == nil or d + x[2] < best) then best, first = d + x[2], x[1] end
+        if d and x[1] == c.join then keep = d + x[2] end
     end
     for k, t in ipairs(srch.taxis) do
         local d = srch.dist[g.n + k]
         local r = straight(p.a, p.b, t.a, t.b)
         if d and r <= P.NEAR_MAX and (best == nil or d + r < best) then best, first = d + r, g.n + k end
+        if d and r <= P.NEAR_MAX and g.n + k == c.join then keep = d + r end
     end
     if not best then return plain end
+    -- two joins that cost about the same: keep the last one, else the arrow flips between them step by step (477)
+    if keep and first ~= c.join and keep <= best * P.JOIN_KEEP + P.JOIN_KEEP_YD then best, first = keep, c.join end
+    c.join = first
     local flew = srch.flew[first]
     if not flew and best <= s * P.SLACK + P.SLACK_YD then return { cost = math.max(best, s), straight = s, a = q.a, b = q.b, via = false } end
     local function xy(n)
@@ -441,7 +451,9 @@ local function coarseWay(p, q)
         steps = steps + 1
         local a, b = xy(n)
         local done = best - srch.dist[n]           -- the cost from me to this node along the way
-        if done <= straight(p.a, p.b, a, b) * P.SLACK + P.SLACK_YD then pick = n end
+        local lim = straight(p.a, p.b, a, b) * P.SLACK + P.SLACK_YD
+        if n == c.pick then lim = lim * P.JOIN_KEEP + P.JOIN_KEEP_YD end   -- the last pick is kept a little longer (477)
+        if done <= lim then pick = n end
         local nx = srch.nxt[n]
         if nx and nx < 0 then
             if not pick or pick == n then
@@ -454,13 +466,63 @@ local function coarseWay(p, q)
     end
     -- a way point I am at or just walked past (the arrow would turn round): head for the one after it (fix 474)
     pick = pick or first
-    local a, b = xy(pick)
-    if not way.flight and straight(p.a, p.b, a, b) < P.PASSED then
-        local nx = srch.nxt[pick]
-        if nx and nx > 0 then a, b = xy(nx)
-        elseif not nx then a, b = q.a, q.b end
+    c.pick = pick
+    -- also one close behind me: going there means turning back on the way to the one after it (477)
+    local hn = pick                                 -- the node I head for, nil for the target itself
+    local skipped = nil                             -- the last node skipped
+    for _ = 1, 3 do
+        if way.flight or not hn then break end
+        local a, b = xy(hn)
+        local nx = srch.nxt[hn]
+        if nx == 0 then nx = nil end                -- 0: from there straight to the target
+        if nx and nx < 0 then break end
+        local na, nb
+        if nx then na, nb = xy(nx) else na, nb = q.a, q.b end
+        local d = straight(p.a, p.b, a, b)
+        -- behind me, and the walk from it to the next one is about straight: I can cut across
+        -- (past it: ahead of it toward the next one, and not farther to the side than ahead, nor than CARROT)
+        local seg0 = straight(a, b, na, nb)
+        local behind = false
+        if seg0 > 0.01 then
+            local ua, ub = (na - a) / seg0, (nb - b) / seg0
+            local along = (p.a - a) * ua + (p.b - b) * ub
+            local side = math.abs((p.a - a) * ub - (p.b - b) * ua)
+            behind = along > 0 and side <= math.max(along, P.CARROT)
+        end
+        if behind and nx then
+            local seg = straight(a, b, na, nb)
+            behind = srch.dist[hn] - srch.dist[nx] <= seg * P.CUT + P.CUT_YD
+        end
+        if not (d < P.PASSED or behind) then break end
+        skipped = hn
+        hn = nx
     end
-    way.a, way.b = a, b
+    if hn then way.a, way.b = xy(hn) else way.a, way.b = q.a, q.b end
+    -- the stretch of the way the gliding point runs on (decision 477): from the node skipped last to the one I head
+    -- for, else from the one I head for to the one after it; none at a flight
+    -- (only a stretch walked about straight: a winding walk between two anchors is no line to glide on)
+    local function cost(n) if n then return srch.dist[n] end return 0 end
+    local function straightOn(n1, n2, a1, b1, a2, b2)
+        return cost(n1) - cost(n2) <= straight(a1, b1, a2, b2) * P.CUT + P.CUT_YD
+    end
+    if not way.flight then
+        if skipped then
+            local a1, b1 = xy(skipped)
+            if straightOn(skipped, hn, a1, b1, way.a, way.b) then
+                way.ga, way.gb, way.na, way.nb = a1, b1, way.a, way.b
+            end
+        elseif hn then
+            local nx = srch.nxt[hn]
+            if nx == 0 then nx = nil end
+            if not (nx and nx < 0) then
+                local a2, b2
+                if nx then a2, b2 = xy(nx) else a2, b2 = q.a, q.b end
+                if straightOn(hn, nx, way.a, way.b, a2, b2) then
+                    way.ga, way.gb, way.na, way.nb = way.a, way.b, a2, b2
+                end
+            end
+        end
+    end
     return way
 end
 ----------------------------------------------------------------------
@@ -479,8 +541,10 @@ P.FINE_MARGIN = 24              -- cells around me and the point the search may 
 P.FINE_GOAL = 3                 -- cells from a point that is not walkable ground that count as there
 P.FINE_KEEP = 16                -- unpacked tiles kept
 P.FINE_MOVE, P.FINE_AGE = 5, 2  -- the fine way is found again after these yards moved or seconds
+P.FINE_HOLD = 4                 -- seconds a way round is kept against a clear line while I am on it (477)
 P.FINE_NEAR = 10                -- or at once this close to the point it heads for
 P.SWIM = 1.5                    -- a swum cell costs this much more
+P.EDGE = 0.7                    -- a cell next to a wall costs this much more: ways keep off walls, corners get round
 P.FINE_SLACK_YD = 15            -- a way round this little longer (x SLACK) is not steered
 local DR = { -1, 1, 0, 0, -1, -1, 1, 1 }    -- N, S, W, E, NW, NE, SW, SE
 local DC = { 0, 0, -1, 1, -1, 1, -1, 1 }
@@ -585,7 +649,9 @@ function P.FineSearch(inst, r0, c0, r1, c1)
                         local j = (nr - rmin) * W + (nc - cmin)
                         if not done[j] then
                             local step = d > 4 and SQ2 or 1
-                            if cellAt(inst, nr, nc) % FLOORS >= SWUM then step = step * P.SWIM end
+                            local nv = cellAt(inst, nr, nc)
+                            if nv % FLOORS >= SWUM then step = step * P.SWIM end
+                            if nv % SWUM ~= 255 then step = step + P.EDGE end   -- next to a wall: keep off it (477)
                             local ng = gi + step
                             if g[j] == nil or ng < g[j] then
                                 g[j], prev[j] = ng, i
@@ -628,8 +694,9 @@ function P.Fine(inst, pa, pb, ha, hb)
     if (r0 == r1 and c0 == c1) or P.Sight(inst, r0, c0, r1, c1) then return { a = ha, b = hb, clear = true } end
     local path, yards, reached = P.FineSearch(inst, r0, c0, r1, c1)
     if not path then return nil end
-    -- a tree, a rock, a fence: a way round that is hardly longer is walked by eye, the arrow stays
-    if reached and yards <= straight(pa, pb, ta, tb) * P.SLACK + P.FINE_SLACK_YD then return { a = ha, b = hb, clear = true } end
+    -- a tree, a rock, a fence: a way round that is hardly longer; the gliding point keeps the arrow almost straight
+    -- (477; before, the arrow then pointed straight through the corner)
+    local minor = reached and yards <= straight(pa, pb, ta, tb) * P.SLACK + P.FINE_SLACK_YD
     -- the farthest cell of the way I walk to straight
     local pick = path[2] or path[1]
     for k = 3, #path do
@@ -645,17 +712,100 @@ function P.Fine(inst, pa, pb, ha, hb)
             if straight(pa, pb, ka, kb) >= P.FINE_NEAR then break end
         end
     end
-    return { a = a, b = b, clear = false, yards = yards, reached = reached and d <= P.LOOK }
+    return { a = a, b = b, clear = false, yards = yards, reached = reached and d <= P.LOOK, path = path, minor = minor }
+end
+
+-- a wide line of sight between two places (477): three lines, the middle one and one on each side a third of a
+-- cell off, so that a straight walk does not clip the corner of a wall
+function P.SightWide(inst, pa, pb, qa, qb)
+    local d = straight(pa, pb, qa, qb)
+    if d < 0.01 then return true end
+    local ua, ub = -(qb - pb) / d * CELL * 0.35, (qa - pa) / d * CELL * 0.35
+    for _, o in ipairs({ 0, 1, -1 }) do
+        local r0, c0 = rc(pa + ua * o, pb + ub * o)
+        local r1, c1 = rc(qa + ua * o, qb + ub * o)
+        if o ~= 0 and cellAt(inst, r0, c0) == 0 then r0, c0 = rc(pa, pb) end   -- I stand right at a wall
+        if not P.Sight(inst, r0, c0, r1, c1) then return false end
+    end
+    return true
+end
+
+-- am I on (within 2 cells of) a fine way, before its last cell?
+function P.OnPath(pa, pb, path)
+    local r0, c0 = rc(pa, pb)
+    for k = 1, #path - 1 do
+        if math.max(math.abs(path[k][1] - r0), math.abs(path[k][2] - c0)) <= 2 then return true end
+    end
+    return false
+end
+
+-- the gliding point (decision 477): the point CARROT_FINE yards ahead of me on the fine way, as far as I see it
+function P.FineCarrot(inst, pa, pb, path)
+    if not path or #path < 2 then return nil end
+    local r0, c0 = rc(pa, pb)
+    local bi, bd = 1, nil
+    for k = 1, #path do
+        local dr, dc = path[k][1] - r0, path[k][2] - c0
+        local d = dr * dr + dc * dc
+        if not bd or d < bd then bi, bd = k, d end
+    end
+    -- the way from me: me, then the cell centres after the nearest cell
+    local pts = { { pa, pb } }
+    for k = bi + 1, #path do
+        local a, b = center(path[k][1], path[k][2])
+        pts[#pts + 1] = { a, b }
+    end
+    if #pts < 2 then return nil end
+    local function along(len)
+        for k = 2, #pts do
+            local x, y = pts[k - 1], pts[k]
+            local s = straight(x[1], x[2], y[1], y[2])
+            if s >= len then
+                local f = s > 0 and len / s or 0
+                return x[1] + (y[1] - x[1]) * f, x[2] + (y[2] - x[2]) * f
+            end
+            len = len - s
+        end
+        return pts[#pts][1], pts[#pts][2]
+    end
+    local len = P.CARROT_FINE
+    while len >= CELL do
+        local a, b = along(len)
+        if P.SightWide(inst, pa, pb, a, b) then return a, b end
+        len = len - CELL / 2
+    end
+    return pts[2][1], pts[2][2]
+end
+
+-- the gliding point on the network's way: near the way point the arrow already turns toward the one after it
+function P.Carrot(p, w)
+    if not (w.na and w.ga) then return w end
+    local seg = straight(w.ga, w.gb, w.na, w.nb)
+    if seg < 1 then return w end
+    local ua, ub = (w.na - w.ga) / seg, (w.nb - w.gb) / seg
+    local along = (p.a - w.ga) * ua + (p.b - w.gb) * ub
+    local L = P.CARROT
+    -- as far along the stretch as I am short of CARROT yards from its start, plus how far along it I am already:
+    -- the point leaves the start gently and then stays CARROT yards ahead of me (all of it changes smoothly)
+    -- (along counts fully up to CARROT yards to the side of the stretch, not at all from twice that)
+    local side = math.abs((p.a - w.ga) * ub - (p.b - w.gb) * ua)
+    local near = math.max(0, math.min(1, (2 * L - side) / L))
+    local t = math.max(0, L - straight(p.a, p.b, w.ga, w.gb)) + math.max(0, along) * near
+    if t <= 0 then return w end                      -- still far before the stretch
+    t = math.min(t, seg)
+    w.a, w.b, w.glide = w.ga + ua * t, w.gb + ub * t, true
+    return w
 end
 
 -- the arrow's heading of a way, steered on the raster; found again after FINE_MOVE yards or FINE_AGE seconds
 local fineCache = {}
-local function steer(p, w)
+local function steer(p, w, ka, kb)
     local ha, hb = w.a, w.b
+    ka, kb = ka or ha, kb or hb                     -- the cache key: the way point, not the gliding point (477)
     local t = GetTime and GetTime() or 0
     local c = nil
     for _, x in ipairs(fineCache) do
-        if x.inst == p.inst and math.abs(x.ha - ha) < 5 and math.abs(x.hb - hb) < 5 then c = x; break end
+        if x.inst == p.inst and math.abs(x.ha - ka) < 5 and math.abs(x.hb - kb) < 5 then c = x; break end
     end
     -- found again when I walked on or waited, and at once when I reach the point it heads for or walk past it
     -- (it would turn round, fix 474)
@@ -668,22 +818,37 @@ local function steer(p, w)
     if stale then
         local ok, f = pcall(P.Fine, p.inst, p.a, p.b, ha, hb)
         if not c then
-            c = { inst = p.inst, ha = ha, hb = hb }
+            c = { inst = p.inst, ha = ka, hb = kb }
             table.insert(fineCache, 1, c)
             fineCache[P.WAY_KEEP + 1] = nil
         end
-        c.pa, c.pb, c.t, c.f = p.a, p.b, t, ok and f or false
+        f = ok and f or false
+        -- a fine way round something, then a clear line: keep the way round a little longer while I am still on it
+        -- (at the edge of a wall the line flips between clear and not, the arrow with it, 477)
+        local old = c.f
+        if f and f.clear and old and not old.clear and old.path and t - (c.found or 0) < P.FINE_HOLD
+            and P.OnPath(p.a, p.b, old.path) then
+            f = old
+        elseif f and not f.clear then
+            c.found = t
+        end
+        c.pa, c.pb, c.t, c.f = p.a, p.b, t, f
     end
     local f = c.f
     if not f or f.clear then return w end
     if not w.via and f.reached then w.cost = math.max(w.cost, f.yards) end
     w.a, w.b, w.via, w.fine = f.a, f.b, true, true
+    local ok, a, b = pcall(P.FineCarrot, p.inst, p.a, p.b, f.path)
+    if ok and a then w.a, w.b = a, b end
     return w
 end
 
 function P.Way(p, q)
     local w = coarseWay(p, q)
-    if w and OMQ.PathRaster and not (OMQDB and OMQDB.pathFineOff) then steer(p, w) end
+    -- the gliding point first, then the fine way to it: a wall between me and the gliding point is walked round
+    local ka, kb = w and w.a, w and w.b
+    if w and w.via then P.Carrot(p, w) end
+    if w and OMQ.PathRaster and not (OMQDB and OMQDB.pathFineOff) then steer(p, w, ka, kb) end
     return w
 end
 function P._ResetWay() wayCache, fineCache = {}, {} end

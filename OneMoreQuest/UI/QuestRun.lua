@@ -455,17 +455,24 @@ end
 ----------------------------------------------------------------------
 -- The bar and the small arrow above the quest tracker
 ----------------------------------------------------------------------
-local shownRot, wantHeading = 0, nil
+local shownRot, wantHeading, smoothHeading, calm = 0, nil, nil, false
+-- decision 477: the direction over the land glides, my own turning is followed at once (as the main arrow)
 local function turn(elapsed)
     if not arrowTex then return end
     local target = 0
+    local Ar = OMQ.Arrow
     if wantHeading then
         local facing = GetPlayerFacing and GetPlayerFacing()
         if type(facing) ~= "number" then return end
-        target = (wantHeading - facing) % TWO_PI
+        if not smoothHeading then smoothHeading = (shownRot + facing) % TWO_PI end
+        if Ar and Ar.Glide then smoothHeading = Ar.Glide(smoothHeading, wantHeading, elapsed, calm and Ar.TURN_NEAR or Ar.TURN)
+        else smoothHeading = wantHeading end
+        target = (smoothHeading - facing) % TWO_PI
+    else
+        smoothHeading = nil
     end
     local diff = (target - shownRot + math.pi) % TWO_PI - math.pi
-    local k = 1 - math.exp(-(elapsed or 0.016) * 22)
+    local k = 1 - math.exp(-(elapsed or 0.016) * (Ar and Ar.SCREEN or 22))
     if math.abs(diff) < 0.002 then shownRot = target else shownRot = (shownRot + diff * k) % TWO_PI end
     arrowTex:SetRotation(shownRot)
     arrowDetail:SetRotation(shownRot)
@@ -586,6 +593,7 @@ function UI:RenderBar()
     if not t then arrowFrame:Hide(); return end
     st.title = t.title
     arrowName:SetText(t.title)
+    local alpha = 1
     if t.kind == "w" and not t.distance then
         st.dist = t.what
         arrowDist:SetText(t.what)
@@ -599,15 +607,20 @@ function UI:RenderBar()
     elseif t.distance then
         st.dist = string.format("%d yd - %s", math.floor(t.distance + 0.5), t.what)
         if t.flight then st.dist = string.format("%d yd - fly from %s - %s", math.floor(t.distance + 0.5), t.flight, t.what) end
+        if t.near then st.dist = string.format("nearby - %d yd - %s", math.floor(t.distance + 0.5), t.what) end
         arrowDist:SetText(st.dist)
         wantHeading = t.heading
         if blue then arrowTex:SetVertexColor(BLUE[1], BLUE[2], BLUE[3]) else arrowTex:SetVertexColor(1, 0.82, 0.25) end
+        if t.near and OMQ.Arrow and OMQ.Arrow.NearAlpha then alpha = OMQ.Arrow.NearAlpha(t.straight) end
     else
         st.dist = "other continent - " .. t.what
         arrowDist:SetText(st.dist)
         wantHeading = nil
         arrowTex:SetVertexColor(0.6, 0.63, 0.68)
     end
+    calm = (t.near and not t.there) and true or false
+    st.alpha = alpha
+    arrowTex:SetAlpha(alpha); if arrowDetail then arrowDetail:SetAlpha(alpha) end
     arrowFrame:Show()
 end
 

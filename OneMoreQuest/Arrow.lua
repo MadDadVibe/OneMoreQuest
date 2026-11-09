@@ -268,24 +268,43 @@ function A:CycleStyle() self:SetStyle(self:Style() % #A.STYLES + 1) end
 -- smooth turning (decision 193): render() only says where the arrow should point; every frame the
 -- facing is read again and the arrow turns there along the shorter way, so it never jumps
 local ARROW_SIZE = 58
+-- decision 477: the direction over the land glides (TURN, slower near the target: TURN_NEAR), my own turning is
+-- followed at once; then the shown arrow turns there quickly (SCREEN)
+A.TURN, A.TURN_NEAR, A.SCREEN = 6, 2.5, 22
+A.CALM = 25                 -- yards to the target from which the arrow calms down and fades
+A.calm = false
 local liveHeading, wantRot, shownRot = nil, 0, 0
-local function rotate(r) liveHeading, wantRot = nil, r or 0 end
+local smoothHeading = nil
+local function rotate(r) liveHeading, wantRot, smoothHeading = nil, r or 0, nil end
 local function point(heading) liveHeading = heading end
+function A.Glide(smooth, want, elapsed, rate)
+    if not smooth then return want end
+    local d = (want - smooth + math.pi) % TWO_PI - math.pi
+    return (smooth + d * (1 - math.exp(-(elapsed or 0.016) * rate))) % TWO_PI
+end
 local function turnStep(elapsed)
     local target = wantRot
     if liveHeading then
         local facing = GetPlayerFacing and GetPlayerFacing()
         if type(facing) ~= "number" then return end
-        target = (liveHeading - facing) % TWO_PI
+        if not smoothHeading then smoothHeading = (shownRot + facing) % TWO_PI end
+        smoothHeading = A.Glide(smoothHeading, liveHeading, elapsed, A.calm and A.TURN_NEAR or A.TURN)
+        target = (smoothHeading - facing) % TWO_PI
     end
     local diff = (target - shownRot + math.pi) % TWO_PI - math.pi
-    local k = 1 - math.exp(-(elapsed or 0.016) * 22)
+    local k = 1 - math.exp(-(elapsed or 0.016) * A.SCREEN)
     if math.abs(diff) < 0.002 then shownRot = target else shownRot = (shownRot + diff * k) % TWO_PI end
     texture:SetRotation(shownRot)
     if detail then detail:SetRotation(shownRot) end
 end
 A._TurnStep = turnStep
 function A:_Rotation() return shownRot, liveHeading, wantRot end
+
+-- how visible the arrow is close to the target: full at CALM yards, 35 % at 5 yards
+function A.NearAlpha(d)
+    if not d then return 1 end
+    return math.max(0.35, math.min(1, 0.35 + 0.65 * (d - 5) / (A.CALM - 5)))
+end
 
 local function build()
     arrowFrame = CreateFrame("Button", "OneMoreQuestArrow", UIParent)
@@ -346,6 +365,7 @@ local function render()
         return
     end
     local g = OMQ.Guide and OMQ.Guide:Current()
+    local alpha = 1
     if g then
         nameText:SetText(g.name)
         if g.class then nameText:SetTextColor(classColor(g.class)) else nameText:SetTextColor(0.55, 0.85, 1) end
@@ -358,16 +378,26 @@ local function render()
             distText:SetText(g.where or "other continent")
             rotate(0)
             texture:SetVertexColor(0.6, 0.63, 0.68)
+        elseif g.near then
+            -- close to the target (decision 477): slower turning, the arrow fades, "nearby"
+            distText:SetText(string.format("nearby - %d yd", math.floor(g.distance + 0.5)))
+            texture:SetVertexColor(0.45, 0.8, 1)
+            alpha = A.NearAlpha(g.straight or g.distance)
+            if g.heading then point(g.heading) end
         else
             distText:SetText(string.format("%d yd", math.floor(g.distance + 0.5)) .. (g.flight and (" - fly from " .. g.flight) or ""))
             texture:SetVertexColor(0.45, 0.8, 1)
             if g.heading then point(g.heading) end
         end
+        A.calm = g.near and true or false
+        texture:SetAlpha(alpha); if detail then detail:SetAlpha(alpha) end
         arrowFrame:Show()
         return
     end
     arrowFrame:Hide()
 end
+
+A.Render = function() render() end
 
 function A:SetMoveMode(on)
     moveMode = on and true or false

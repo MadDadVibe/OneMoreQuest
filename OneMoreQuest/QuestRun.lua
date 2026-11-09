@@ -1084,6 +1084,8 @@ function R:Target()
             ha, hb = way.a, way.b
         end
         if OMQ.Arrow then view.heading = OMQ.Arrow.Heading(ha - pos.a, hb - pos.b) end
+        local calm = OMQ.Arrow and OMQ.Arrow.CALM or 25
+        view.near = view.straight <= calm and view.distance <= calm + 10 or nil       -- decision 477
     end
     local inside = false
     if s.kind == "o" and C_Minimap and C_Minimap.IsInsideQuestBlob then
