@@ -75,7 +75,6 @@ FE.SECTIONS = {
         "Vendor helper: what to sell at the vendor - grey items, gear not worth the auction house or unsold, old food and drink, recipes of professions you do not have",
         "Automatic repair, selling of grey items, water and ammo at vendors",
         "Dad UI: the shared interface of the dads with one click, per character; your old UI can be restored",
-        "Player frame only when needed: hidden in a fight and at full life and mana",
         "Chat filter, with a window for the hidden messages",
         "Hide the objective tracker",
         "Sounds for the alerts and the tracker",
