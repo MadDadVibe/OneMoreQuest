@@ -17,6 +17,7 @@ OMQ.ConsumableAlert = C
 C.KINDS = { elixir = true, flask = true, scroll = true, food = true, stone = true, oil = true, juju = true }
 C.MAX = 3
 C.WELL_FED = 19705                -- "Well Fed": its name in the client's language
+C.FOOD_SILENCE = 10               -- seconds the food card stays away after a left click: no second click (fix 486)
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
 local COLOR = { 0.55, 0.85, 0.45 }
@@ -131,7 +132,8 @@ function C.Active(id, kind, auras)
     if kind == "food" then
         local wf = spellName(C.WELL_FED)
         if not wf then return nil end
-        return auras[wf] and true or false
+        local eat = spellOf(id)                       -- the eating buff ("Food") while I still eat (fix 486)
+        return (auras[wf] or (eat and auras[eat])) and true or false
     end
     local s, sid = spellOf(id)
     if not s then return nil end
@@ -235,6 +237,7 @@ function C.Check()
                         sub = how .. " - right click: never remind",
                         icon = icon or it.iconFileID, color = COLOR, useItem = "item:" .. id,
                         weapon = (kind == "stone" or kind == "oil") or nil, weaponSlots = wpn,
+                        silence = (kind == "food") and C.FOOD_SILENCE or nil,   -- gone at once after the click (fix 486)
                     }
                     if #out >= C.MAX then return out end
                 end

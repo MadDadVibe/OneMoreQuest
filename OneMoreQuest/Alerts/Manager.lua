@@ -99,6 +99,7 @@ function M:Evaluate()
                                 cur.text, cur.icon, cur.color = a.text, a.icon or cur.icon, a.color or cur.color
                                 cur.cast, cur.unit, cur.go, cur.open, cur.macro = a.cast, a.unit, a.go, a.open, a.macro
                                 cur.useItem, cur.weapon, cur.weaponSlots = a.useItem, a.weapon, a.weaponSlots
+                                cur.silence = a.silence
                                 cur.tipLines, cur.tipLink = a.tipLines, a.tipLink
                                 cur.title, cur.sub, cur.tag = a.title, a.sub, a.tag
                             end
@@ -171,6 +172,13 @@ function M:Dismiss(key, forGood, snooze)
     if self._MarkDismissed then self:_MarkDismissed(key) end
     self:Render()
     OMQ:Fire("ALERT_DISMISSED", key)
+end
+
+-- the card goes away for a few seconds and comes back by itself when its problem is still there (fix 486)
+function M:Silence(key, seconds)
+    dismissed[key] = GetTime() + (seconds or 10)
+    active[key] = nil
+    self:Render()
 end
 
 function M:ClearDismissals() dismissed = {}; away = {} end
@@ -539,7 +547,11 @@ local function makeCard(i)
             return
         end
         -- a drink card is not dismissed either: it vanishes while drinking (decision 219)
-        if rawget(self, "useItem") and button ~= "RightButton" then return end
+        -- a buff food card goes away at once for a few seconds, so it is not clicked again while eating (fix 486)
+        if rawget(self, "useItem") and button ~= "RightButton" then
+            if rawget(self, "silence") and self.key then M:Silence(self.key, self.silence) end
+            return
+        end
         -- a macro card (buff back, decision 435) is not dismissed either: it vanishes once the cast went out
         if rawget(self, "macro") and button ~= "RightButton" then return end
         -- a buff card is not dismissed by the cast: it vanishes once the buff is on
@@ -632,6 +644,7 @@ function M:Render()
             card.cast = a.cast or false
             card.macro = a.macro or false
             card.useItem = (not a.weapon) and a.useItem or false
+            card.silence = (not a.weapon) and a.useItem and a.silence or false
             card.weapon = a.weapon and a.useItem or false
             card.wSlots = a.weapon and a.weaponSlots or false
             card.open = a.open or false
