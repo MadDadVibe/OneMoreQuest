@@ -243,10 +243,24 @@ local DEMO = {
     cols = {}, rows = { { text = "Move mode: drag me to a new position", cells = {} } },
 }
 
+-- during a Quest Run or a Dungeon Run the card stays on the screen the whole time (481): without a quest
+-- card of the group it shows the run's current stop, so the run bar and the arrow have their place
+function U.RunView()
+    local R = OMQ.QuestRun
+    if moveMode or not (R and R:Active()) then return nil end
+    local r = R:Run()
+    local ok, t = pcall(R.Target, R)
+    if not ok then t = nil end
+    local what = t and t.what or "all stops done"
+    return { run = (r and r.kind == "dungeon") and "DUNGEON RUN" or "QUEST RUN",
+             qid = t and t.qid, title = t and t.title or "", showNav = false, stamp = false, cols = {},
+             rows = { { text = what, cells = {} } } }
+end
+
 function U:Render()
     if not frame then return end
     local Q = OMQ.QTrack
-    local view = moveMode and DEMO or (Q:Shown() and Q:View())
+    local view = moveMode and DEMO or (Q:Shown() and Q:View()) or U.RunView()
     if not view then
         frame:Hide()
         lastStamp = nil
@@ -257,6 +271,7 @@ function U:Render()
     for _, fs in ipairs(texts) do fs:Hide() end
     for _, t in ipairs(texs) do t:Hide() end
 
+    if view.run then header:SetText(view.run) else header:SetText("GROUP QUEST") end
     title:SetText(view.title or "")
     level:SetText(view.level and ("[" .. view.level .. "]") or "")
     local cols = moveMode and {} or view.cols

@@ -87,7 +87,7 @@ local function buildWindow()
     sub:SetJustifyH("LEFT")
     closeBtn = CreateFrame("Button", nil, win, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", 2, 2)
-    closeBtn:SetScript("OnClick", function() UI:Close() end)
+    closeBtn:SetScript("OnClick", function() if mode == "dungeon" then UI:CloseDungeon() else UI:Close() end end)
 
     sizeBtns = {}
     for i, n in ipairs(R().SIZES) do
@@ -351,10 +351,18 @@ function UI:RenderDungeon(view)
 end
 
 -- the Group Check's button: the preview of the Dungeon Run for this dungeon
+-- the Group Check closes while the preview is open (they would overlap); Close opens it again (decision 480)
+UI._backToCheck = nil
 function UI:OpenDungeon(key)
     if not (D() and key) then return end
     if not win then buildWindow() end
     if not D():Prepare(key) then return end
+    local check = OMQ.Ready and OMQ.Ready.Frame and OMQ.Ready:Frame()
+    UI._backToCheck = nil
+    if check and check:IsShown() then
+        UI._backToCheck = OMQ.Ready.dungeon or key
+        check:Hide()
+    end
     mode = "dungeon"
     win:Show()
     self:Render()
@@ -373,9 +381,17 @@ local function askReplace(go)
     go()
 end
 
+function UI:CloseDungeon()
+    self:Close()
+    local key = UI._backToCheck
+    UI._backToCheck = nil
+    if key and OMQ.Ready and OMQ.Ready.Open then OMQ.Ready:Open(key) end
+end
+
 function UI:StartDungeon()
     local prep = D():Prep()
     if not prep then return false end
+    UI._backToCheck = nil
     local key = prep.key
     local function go()
         if D():Start(prep.plan) then
@@ -447,7 +463,7 @@ end
 UI.AskEnd = askEnd
 
 function UI:Secondary()
-    if mode == "dungeon" then self:Close()
+    if mode == "dungeon" then self:CloseDungeon()
     elseif mode == "preview" then mode = "choose"; self:Render()
     elseif mode == "list" then self:Close(); askEnd() end
 end
