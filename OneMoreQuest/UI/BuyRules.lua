@@ -8,7 +8,8 @@
 --   Health and mana potions: at most 5s; a weaker one when needed, but none that needs 20 levels less than mine.
 --   Buff food: the cheapest food with Well Fed (+5% XP on WoW Forever), and a food for the class under 3s.
 --     When the class food costs at most 50% more than the cheapest one, only the class food is shown.
---   Armor kits and shield spikes stay, at most 15s each.
+--   Armor kits and shield spikes stay, at most 15s each. WoW Forever's new kits from level 15 on: casters and
+--     healers the Mystic kits, damage dealers with weapons (also hunters) the Forceful kits, tanks the old ones.
 -- Pure functions: the buy mode (UI/AuctionBuy.lua) feeds them the live prices.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
@@ -59,9 +60,18 @@ function R.Groups(class, role, ctx)
     if p.caster then add("oil_wiz", "oil", 2) end
     if p.healer then add("oil_mana", "oil", 2) end
     if p.melee then for _, l in ipairs(ctx.stones or {}) do add(l, "stone", 10) end end
-    if (ctx.kitSlots or 0) > 0 then add("kit", "kit", ctx.kitSlots) end
+    if (ctx.kitSlots or 0) > 0 then add(R.KitLine(p), "kit", ctx.kitSlots) end
     if ctx.spike then add("spike", "spike", 1) end
     return out, p
+end
+
+-- the armor kit line that fits the class: Mystic kits (spell power) for casters and healers, Forceful kits
+-- (attack power) for damage dealers with weapons, the old kits (armor only) for tanks. Both new lines keep the
+-- old kits as the weaker fallback below level 15 or when the new ones cost too much.
+function R.KitLine(p)
+    if p.caster or p.healer then return "kit_mystic" end
+    if p.tank then return "kit" end
+    return "kit_forceful"
 end
 
 -- the food line that fits the class: strength, agility, mana per 5 seconds for casters and healers, else stamina
