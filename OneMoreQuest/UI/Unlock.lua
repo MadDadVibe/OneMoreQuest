@@ -22,6 +22,8 @@ local I = "Interface\\Icons\\"
 U.LIST = {
     { id = "bets", level = 5, title = "Bets", icon = I .. "INV_Misc_Coin_02", where = "Check bar",
       desc = "Bet gold against the other dads. Decided automatically, debts paid by mail." },
+    { id = "area", level = 5, title = "Area Run", icon = I .. "INV_Misc_Map_01", where = "Check bar",
+      desc = "Pick a zone: one way through all its quests, follow-ups included." },
     { id = "journey", level = 10, title = "Forever Journey", icon = I .. "INV_Misc_Book_09", where = "Minimap quick options",
       desc = "Every step of your character becomes a card. Collect them and flex them to the dads." },
     { id = "dungeon", level = 13, title = "Dungeon Check", icon = I .. "INV_Misc_Key_03", where = "Check bar",

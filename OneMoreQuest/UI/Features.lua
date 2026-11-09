@@ -21,6 +21,7 @@ FE.SECTIONS = {
         "Item score in every item tooltip, for you and for every dad: what each one wears and whether the item is an upgrade for his class and role",
         "Follow the flights of the group",
         "Follow key for the nearest dad",
+        { "Area Run: pick a zone, OMQ plans one way through all its quests and their follow-ups; quests that start outside the zone are named when you are near their giver", unlock = "area" },
         "Mana break note when a dad drinks",
     } },
     { "Dungeons", {

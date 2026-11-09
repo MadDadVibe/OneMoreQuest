@@ -20,6 +20,7 @@ local GOLD = { 0.89, 0.71, 0.29 }
 local TAN = { 0.72, 0.63, 0.42 }
 local GREEN = { 0.49, 0.78, 0.44 }
 local BLUE = { 0.30, 0.62, 1.00 }       -- the Dungeon Run (476)
+local AREA = { 0.33, 0.84, 0.40 }       -- the Area Run (491)
 local GREY = { 0.6, 0.63, 0.68 }
 local W, ROWS, ROW_H = 360, 10, 30
 local TWO_PI = math.pi * 2
@@ -31,6 +32,9 @@ local card, cardTitle, cardText, cardMore
 local mode = "choose"               -- choose | preview | list | dungeon (the Dungeon Run's preview, 476)
 local winBorder, barEdge
 local function isDungeon() local r = OMQ.QuestRun and OMQ.QuestRun:Run(); return r ~= nil and r.kind == "dungeon" end
+local function isArea() local r = OMQ.QuestRun and OMQ.QuestRun:Run(); return r ~= nil and r.kind == "area" end
+local function runName() return isDungeon() and "Dungeon Run" or isArea() and "Area Run" or "Quest Run" end
+UI.AREA = AREA
 local function D() return OMQ.DungeonRun end
 UI._view = {}
 
@@ -158,7 +162,9 @@ function UI:Render()
     for _, r in ipairs(rows) do r:Hide() end
     startBtn:Hide(); backBtn:Hide(); foot:Hide()
     local blue = mode == "dungeon" or (mode == "list" and isDungeon())
-    local col = blue and BLUE or GOLD
+    local area = mode == "list" and isArea()
+    local col = blue and BLUE or area and AREA or GOLD
+    view.area = area
     winBorder:SetColorTexture(col[1], col[2], col[3], 1)
     title:SetTextColor(col[1], col[2], col[3])
     view.blue = blue
@@ -238,7 +244,8 @@ function UI:Render()
     else
         local list = Q:List()
         local done, all = Q:Counts()
-        title:SetText(blue and ("Dungeon Run: " .. UI.DungeonName(Q:Run().dungeon)) or "Quest Run")
+        title:SetText(blue and ("Dungeon Run: " .. UI.DungeonName(Q:Run().dungeon))
+            or area and ("Area Run: " .. (OMQ.AreaRun and OMQ.AreaRun.ZoneName(Q:Run().zone) or "?")) or "Quest Run")
         sub:SetText(string.format("%d of %d quests done", done, all))
         for i, e in ipairs(list) do
             local r = rows[i]
@@ -250,7 +257,7 @@ function UI:Render()
                 r.skip:Hide()
             else
                 r.name:SetTextColor(col[1], col[2], col[3])
-                if blue then
+                if blue or area then
                     local w = e.kind == "o" and (Q.OpenObjective(e.qid) or "objectives") or e.what
                     r.what:SetText((e.current and "next: " or "") .. w .. (e.dungeonQuest and "  |cff9aa0aa(dungeon quest)|r" or ""))
                 else
@@ -451,7 +458,7 @@ local function askEnd()
     local key = "OMQ_QUEST_RUN_END"
     if StaticPopupDialogs and StaticPopup_Show then
         StaticPopupDialogs[key] = {
-            text = isDungeon() and "End the Dungeon Run?" or "End the Quest Run?", button1 = YES or "Yes", button2 = NO or "No",
+            text = "End the " .. runName() .. "?", button1 = YES or "Yes", button2 = NO or "No",
             OnAccept = function() R():End() end, timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
         }
         StaticPopup_Show(key)
@@ -530,7 +537,7 @@ local function buildBar()
     bar:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText(isDungeon() and "Dungeon Run" or "Quest Run")
+        GameTooltip:SetText(runName())
         for _, e in ipairs(R():List()) do
             if e.done then GameTooltip:AddLine("done: " .. e.title, GREEN[1], GREEN[2], GREEN[3])
             else GameTooltip:AddLine((e.current and "next: " or "") .. e.title, 1, 1, 1) end
@@ -565,7 +572,7 @@ local function buildBar()
     arrowFrame:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Quest Run")
+        GameTooltip:SetText(runName())
         GameTooltip:AddLine("Click: the big arrow to this place too", 0.8, 0.8, 0.8)
         GameTooltip:AddLine("Right click: end the run", 0.8, 0.8, 0.8)
         GameTooltip:Show()
@@ -589,11 +596,14 @@ function UI:RenderBar()
     anchor()
     local done, all = Q:Counts()
     local blue = isDungeon()
-    local col = blue and BLUE or GOLD
+    local area = isArea()
+    local col = blue and BLUE or area and AREA or GOLD
     barEdge:SetColorTexture(col[1], col[2], col[3], 1)
     barText:SetTextColor(col[1], col[2], col[3])
-    st.blue = blue
-    if blue then
+    st.blue, st.area = blue, area
+    if area then
+        st.text = string.format("Area Run: %d/%d", done, all)
+    elseif blue then
         st.text = string.format("Dungeon Run: %d/%d", done, all)
         local fin, n = 0, 0
         if D() then fin, n = D().GroupCounts() end
@@ -601,7 +611,7 @@ function UI:RenderBar()
     else
         st.text = string.format("Quest Run: %d/%d done", done, all)
     end
-    bar:SetWidth(blue and 300 or 230)
+    bar:SetWidth(blue and 300 or area and 200 or 230)
     barText:SetText(st.text)
     st.shown = true
     bar:Show()
@@ -626,7 +636,9 @@ function UI:RenderBar()
         if t.near then st.dist = string.format("nearby - %d yd - %s", math.floor(t.distance + 0.5), t.what) end
         arrowDist:SetText(st.dist)
         wantHeading = t.heading
-        if blue then arrowTex:SetVertexColor(BLUE[1], BLUE[2], BLUE[3]) else arrowTex:SetVertexColor(1, 0.82, 0.25) end
+        if blue then arrowTex:SetVertexColor(BLUE[1], BLUE[2], BLUE[3])
+        elseif area then arrowTex:SetVertexColor(AREA[1], AREA[2], AREA[3])
+        else arrowTex:SetVertexColor(1, 0.82, 0.25) end
         if t.near and OMQ.Arrow and OMQ.Arrow.NearAlpha then alpha = OMQ.Arrow.NearAlpha(t.straight) end
     else
         st.dist = "other continent - " .. t.what
@@ -687,12 +699,18 @@ end
 function UI:ShowCard(done, secs, r)
     if not card then buildCard() end
     local dungeon = r and r.kind == "dungeon"
-    local col = dungeon and BLUE or GOLD
+    local area = r and r.kind == "area"
+    local col = dungeon and BLUE or area and AREA or GOLD
     card.border:SetColorTexture(col[1], col[2], col[3], 1)
     cardTitle:SetTextColor(col[1], col[2], col[3])
-    card.head:SetText(dungeon and "DUNGEON RUN" or "QUEST RUN")
+    card.head:SetText(dungeon and "DUNGEON RUN" or area and "AREA RUN" or "QUEST RUN")
     local text = string.format("%d quest%s in %s", done, done == 1 and "" or "s", UI.FormatTime(secs))
-    if dungeon then
+    local head = dungeon and "All dungeon quests collected!" or area and "Zone done!" or "Quest Run done!"
+    if area then
+        cardTitle:SetText(head)
+        text = (OMQ.AreaRun and OMQ.AreaRun.ZoneName(r.zone) or "?") .. " - " .. text
+        cardMore:Hide()
+    elseif dungeon then
         cardTitle:SetText("All dungeon quests collected!")
         text = "Ready for " .. UI.DungeonName(r.dungeon) .. " - " .. text
         cardMore:Hide()
@@ -701,7 +719,7 @@ function UI:ShowCard(done, secs, r)
         cardMore:Show()
     end
     cardText:SetText(text)
-    UI._card = { text = text, title = dungeon and "All dungeon quests collected!" or "Quest Run done!", dungeon = dungeon }
+    UI._card = { text = text, title = head, dungeon = dungeon, area = area }
     card:Show()
     cardUntil = GetTime() + 30
     if OMQ.Unlock and OMQ.Unlock.Fanfare then pcall(OMQ.Unlock.Fanfare)

@@ -252,7 +252,7 @@ function U.RunView()
     local ok, t = pcall(R.Target, R)
     if not ok then t = nil end
     local what = t and t.what or "all stops done"
-    return { run = (r and r.kind == "dungeon") and "DUNGEON RUN" or "QUEST RUN",
+    return { run = (r and r.kind == "dungeon") and "DUNGEON RUN" or (r and r.kind == "area") and "AREA RUN" or "QUEST RUN",
              qid = t and t.qid, title = t and t.title or "", showNav = false, stamp = false, cols = {},
              rows = { { text = what, cells = {} } } }
 end
@@ -341,10 +341,12 @@ function U:Render()
     -- the Dungeon Run's frame is blue instead of gold (476)
     local r = running and OMQ.QuestRun:Run()
     local blue = r and r.kind == "dungeon" or false
-    local col = blue and BLUE or GOLD
+    local area = r and r.kind == "area" or false          -- the Area Run's frame is green (491)
+    local col = blue and BLUE or area and (OMQ.QuestRunUI and OMQ.QuestRunUI.AREA or { 0.33, 0.84, 0.40 }) or GOLD
     for _, e in ipairs(runEdges) do e:SetColorTexture(col[1], col[2], col[3], 1) end
     if topEdge then topEdge:SetColorTexture(col[1], col[2], col[3], 1) end
     U.runBlue = blue
+    U.runArea = area
 
     if view.stamp then
         stampFrame:Show()

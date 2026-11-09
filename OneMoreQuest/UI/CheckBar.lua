@@ -26,6 +26,8 @@ local ITEMS = {
       icon = MEDIA .. "Icon_Vote" },
     { id = "run", label = "Quest Run", tip = "Click: pick 1, 3, 5 or 7 quests - OMQ plans the shortest way and a small arrow above the quest tracker leads you",   -- decision 465
       icon = MEDIA .. "Icon_Run" },
+    { id = "area", label = "Area Run", tip = "Click: pick a zone - OMQ plans one way through all its quests and their follow-ups",   -- decision 491, from level 5
+      icon = MEDIA .. "Icon_Area", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("area") end },
     { id = "bet", label = "Bet Check", tip = "Click: start a bet with the dads",          -- decision 170, from level 5
       icon = MEDIA .. "Icon_Bet", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("bets") end },
     { id = "progress", label = "Progress Check", tip = "Click: your milestone timeline, from level 1 to 60",   -- decision 184
@@ -96,6 +98,8 @@ local function click(item)
         if OMQ.Vote then OMQ.Vote:Start() end
     elseif item.id == "run" then
         if OMQ.QuestRunUI then OMQ.QuestRunUI:Toggle() end
+    elseif item.id == "area" then
+        if OMQ.AreaRunUI then OMQ.AreaRunUI:Toggle() end
     elseif item.id == "bet" then
         if OMQ.BetUI then OMQ.BetUI:ToggleCreate() end
     elseif item.id == "duel" then
