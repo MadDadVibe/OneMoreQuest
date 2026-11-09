@@ -122,6 +122,8 @@ local function me()
     return { level = level, fac = (f == "Alliance" and "A") or (f == "Horde" and "H") or nil,
              race = raceID or RACE_ID[raceFile or ""], class = classID }
 end
+NQ.Me = me
+NQ.EverDone = everDone
 function NQ.GreyBelow(level)
     if GetQuestGreenRange then
         local ok, r = pcall(GetQuestGreenRange)

@@ -29,6 +29,7 @@ FE.SECTIONS = {
         { "Best boss loot of a dungeon for you, also for the new Forever dungeons", unlock = "dungeon" },
         { "Threat meter: everybody's threat on your target, in every group or only in dungeons; as the tank you see who pulls the aggro off you", unlock = "threat" },
         { "Arrow to the dungeon entrance, with how to get in", unlock = "dungeon" },
+        { "Dungeon Run: one way through every pre-quest that picks up all dungeon quests of a dungeon, from the Group Check", unlock = "dungeon" },
         { "Switch between the dungeons of your level in the Group Check", unlock = "dungeon" },
         "Progress Check: the milestones of your class, the dungeons and, on request, the quest zones by level; a click on a zone leads to its quest hub",
     } },

@@ -19,14 +19,19 @@ OMQ.QuestRunUI = UI
 local GOLD = { 0.89, 0.71, 0.29 }
 local TAN = { 0.72, 0.63, 0.42 }
 local GREEN = { 0.49, 0.78, 0.44 }
-local W, ROWS, ROW_H = 360, 7, 30
+local BLUE = { 0.30, 0.62, 1.00 }       -- the Dungeon Run (476)
+local GREY = { 0.6, 0.63, 0.68 }
+local W, ROWS, ROW_H = 360, 10, 30
 local TWO_PI = math.pi * 2
 local ARROW = 35                     -- the main arrow is 58
 
 local win, title, sub, foot, sizeBtns, rows, startBtn, backBtn, closeBtn
 local bar, barText, arrowFrame, arrowTex, arrowDetail, arrowName, arrowDist
 local card, cardTitle, cardText, cardMore
-local mode = "choose"               -- choose | preview | list
+local mode = "choose"               -- choose | preview | list | dungeon (the Dungeon Run's preview, 476)
+local winBorder, barEdge
+local function isDungeon() local r = OMQ.QuestRun and OMQ.QuestRun:Run(); return r ~= nil and r.kind == "dungeon" end
+local function D() return OMQ.DungeonRun end
 UI._view = {}
 
 local function R() return OMQ.QuestRun end
@@ -68,6 +73,7 @@ local function buildWindow()
     local border = win:CreateTexture(nil, "BACKGROUND", nil, -2)
     border:SetPoint("TOPLEFT", -2, 2); border:SetPoint("BOTTOMRIGHT", 2, -2)
     border:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
+    winBorder = border
     local bg = win:CreateTexture(nil, "BACKGROUND", nil, -1)
     bg:SetAllPoints()
     bg:SetColorTexture(0.08, 0.086, 0.114, 0.97)
@@ -151,8 +157,15 @@ function UI:Render()
     for _, b in ipairs(sizeBtns) do b:Hide() end
     for _, r in ipairs(rows) do r:Hide() end
     startBtn:Hide(); backBtn:Hide(); foot:Hide()
+    local blue = mode == "dungeon" or (mode == "list" and isDungeon())
+    local col = blue and BLUE or GOLD
+    winBorder:SetColorTexture(col[1], col[2], col[3], 1)
+    title:SetTextColor(col[1], col[2], col[3])
+    view.blue = blue
     local height
-    if mode == "choose" then
+    if mode == "dungeon" then
+        height = self:RenderDungeon(view)
+    elseif mode == "choose" then
         local prep = Q:Prep()
         title:SetText("Quest Run")
         if not (prep and prep.ready) then
@@ -225,7 +238,7 @@ function UI:Render()
     else
         local list = Q:List()
         local done, all = Q:Counts()
-        title:SetText("Quest Run")
+        title:SetText(blue and ("Dungeon Run: " .. UI.DungeonName(Q:Run().dungeon)) or "Quest Run")
         sub:SetText(string.format("%d of %d quests done", done, all))
         for i, e in ipairs(list) do
             local r = rows[i]
@@ -236,8 +249,13 @@ function UI:Render()
                 r.what:SetText("done")
                 r.skip:Hide()
             else
-                r.name:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+                r.name:SetTextColor(col[1], col[2], col[3])
+                if blue then
+                    local w = e.kind == "o" and (Q.OpenObjective(e.qid) or "objectives") or e.what
+                    r.what:SetText((e.current and "next: " or "") .. w .. (e.dungeonQuest and "  |cff9aa0aa(dungeon quest)|r" or ""))
+                else
                 r.what:SetText((e.current and "next: " or "") .. (e.follow and e.new and e.what or e.new and "pick it up" or (Q.OpenObjective(e.qid) or "objectives")))
+                end
                 r.skip.qid = e.qid
                 r.skip:Show()
             end
@@ -253,6 +271,121 @@ function UI:Render()
         height = 60 + n * ROW_H + 44
     end
     win:SetSize(W, height)
+end
+
+function UI.DungeonName(key)
+    local d = key and OMQ.DungeonByKey and OMQ:DungeonByKey(key)
+    return d and d.name or tostring(key or "?")
+end
+
+-- the Dungeon Run's preview: the dungeon quests in the order of the way, how many pre-quests each one needs,
+-- Skip per dungeon quest (its pre-quests go too), the quests that are no stops, Start
+function UI:RenderDungeon(view)
+    local Q = R()
+    local prep = D() and D():Prep()
+    local plan = prep and prep.plan
+    title:SetText("Dungeon Run: " .. UI.DungeonName(prep and prep.key))
+    if not plan then sub:SetText("No dungeon quest data"); return 80 end
+    local rws = D().Rows(plan)
+    local n = math.min(#rws, ROWS)
+    local total = #plan.quests
+    sub:SetText(total == 0 and "Nothing to collect here: you have every dungeon quest you can get or did them already." or
+        string.format("%d dungeon quest%s, %d quests in all, in this order:", #rws, #rws == 1 and "" or "s", total))
+    view.rows = {}
+    for i = 1, n do
+        local o = rws[i]
+        local r = rows[i]
+        local t = Q.Title(o.qid, prep.titles)
+        local d = OMQ.QuestPlaces and OMQ.QuestPlaces[o.qid]
+        local lvl = d and d[2] or 0
+        local me = UnitLevel and tonumber((UnitLevel("player"))) or 1
+        r.name:SetText(i .. ". " .. t .. (o.elite and "  |cffff8040Elite|r" or "") ..
+            ((lvl > me) and ("  |cff9aa0aafrom level " .. lvl .. "|r") or ""))
+        r.name:SetTextColor(BLUE[1], BLUE[2], BLUE[3])
+        local what
+        if o.follow then what = "chain start known, then follow the quest in your log"
+        elseif #o.pre == 0 then what = "pick it up"
+        else
+            local names = {}
+            for k = 1, math.min(#o.pre, 3) do names[#names + 1] = Q.Title(o.pre[k], prep.titles) end
+            what = #o.pre .. " pre-quest" .. (#o.pre == 1 and "" or "s") .. ": " .. table.concat(names, ", ") .. (#o.pre > 3 and ", ..." or "")
+        end
+        r.what:SetText(what)
+        r.skip.qid = o.qid
+        r.skip:Show()
+        r:SetPoint("TOPLEFT", 14, -60 - (i - 1) * ROW_H)
+        r:Show()
+        view.rows[i] = { qid = o.qid, pre = #o.pre, elite = o.elite, follow = o.follow, title = t }
+    end
+    -- what is no stop
+    local info = plan.info or {}
+    local lines = {}
+    local function names(list)
+        local t = {}
+        for _, id in ipairs(list or {}) do t[#t + 1] = Q.Title(id, prep.titles) end
+        return table.concat(t, ", ")
+    end
+    if #(info.inside or {}) > 0 then lines[#lines + 1] = "Starts inside the dungeon: " .. names(info.inside) end
+    if #(info.item or {}) > 0 then lines[#lines + 1] = "Starts from an item: " .. names(info.item) end
+    if #(info.unknown or {}) > 0 then lines[#lines + 1] = "No known way yet: " .. names(info.unknown) end
+    if #(info.skipped or {}) > 0 then lines[#lines + 1] = "Skipped: " .. names(info.skipped) end
+    if (info.inLog or 0) > 0 or (info.done or 0) > 0 then
+        lines[#lines + 1] = string.format("Already in your log: %d, done before: %d", info.inLog or 0, info.done or 0)
+    end
+    if #rws > ROWS then lines[#lines + 1] = string.format("... and %d more dungeon quests", #rws - ROWS) end
+    if total > 0 then
+        table.insert(lines, 1, string.format("Way: %d yd, about %d min on foot", math.floor(math.min(plan.length, 9e5) + 0.5), fmtMin(math.min(plan.length, 9e5))))
+    end
+    view.lines = lines
+    view.total = total
+    foot:ClearAllPoints()
+    foot:SetPoint("TOPLEFT", 14, -66 - n * ROW_H)
+    foot:SetWidth(W - 28)
+    foot:SetText(table.concat(lines, "\n"))
+    foot:Show()
+    startBtn:SetText("Start"); enable(startBtn, total > 0)
+    backBtn:SetText("Close")
+    startBtn:ClearAllPoints(); startBtn:SetPoint("BOTTOMRIGHT", -14, 12); startBtn:Show()
+    backBtn:ClearAllPoints(); backBtn:SetPoint("RIGHT", startBtn, "LEFT", -8, 0); backBtn:Show()
+    return 60 + n * ROW_H + 18 + #lines * 14 + 44
+end
+
+-- the Group Check's button: the preview of the Dungeon Run for this dungeon
+function UI:OpenDungeon(key)
+    if not (D() and key) then return end
+    if not win then buildWindow() end
+    if not D():Prepare(key) then return end
+    mode = "dungeon"
+    win:Show()
+    self:Render()
+end
+
+local function askReplace(go)
+    local key = "OMQ_DUNGEON_RUN_REPLACE"
+    if StaticPopupDialogs and StaticPopup_Show then
+        StaticPopupDialogs[key] = {
+            text = "End the running Quest Run and start the Dungeon Run?", button1 = YES or "Yes", button2 = NO or "No",
+            OnAccept = go, timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+        }
+        StaticPopup_Show(key)
+        return
+    end
+    go()
+end
+
+function UI:StartDungeon()
+    local prep = D():Prep()
+    if not prep then return false end
+    local key = prep.key
+    local function go()
+        if D():Start(prep.plan) then
+            D():StartForGroup(key)
+            mode = "list"
+            UI:Close()
+        end
+    end
+    if R():Active() then askReplace(go) else go() end
+    return true
 end
 
 function UI:IsOpen() return win and win:IsShown() or false end
@@ -283,12 +416,14 @@ function UI:Choose(n)
 end
 
 function UI:Skip(qid)
-    if mode == "preview" then R():SkipPlanned(qid)
+    if mode == "dungeon" then D():SkipPlanned(qid)
+    elseif mode == "preview" then R():SkipPlanned(qid)
     elseif mode == "list" then R():Skip(qid) end
     self:Render()
 end
 
 function UI:Primary()
+    if mode == "dungeon" then UI:StartDungeon(); return end
     if mode == "preview" then
         if R():Start() then mode = "list"; self:Close() end
     else
@@ -300,7 +435,7 @@ local function askEnd()
     local key = "OMQ_QUEST_RUN_END"
     if StaticPopupDialogs and StaticPopup_Show then
         StaticPopupDialogs[key] = {
-            text = "End the Quest Run?", button1 = YES or "Yes", button2 = NO or "No",
+            text = isDungeon() and "End the Dungeon Run?" or "End the Quest Run?", button1 = YES or "Yes", button2 = NO or "No",
             OnAccept = function() R():End() end, timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
         }
         StaticPopup_Show(key)
@@ -312,7 +447,8 @@ end
 UI.AskEnd = askEnd
 
 function UI:Secondary()
-    if mode == "preview" then mode = "choose"; self:Render()
+    if mode == "dungeon" then self:Close()
+    elseif mode == "preview" then mode = "choose"; self:Render()
     elseif mode == "list" then self:Close(); askEnd() end
 end
 
@@ -358,6 +494,7 @@ local function buildBar()
     local edge = bar:CreateTexture(nil, "BACKGROUND", nil, -2)
     edge:SetPoint("TOPLEFT", -1, 1); edge:SetPoint("BOTTOMRIGHT", 1, -1)
     edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
+    barEdge = edge
     local bg = bar:CreateTexture(nil, "BACKGROUND", nil, -1)
     bg:SetAllPoints()
     bg:SetColorTexture(0.08, 0.086, 0.114, 0.92)
@@ -370,7 +507,7 @@ local function buildBar()
     bar:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Quest Run")
+        GameTooltip:SetText(isDungeon() and "Dungeon Run" or "Quest Run")
         for _, e in ipairs(R():List()) do
             if e.done then GameTooltip:AddLine("done: " .. e.title, GREEN[1], GREEN[2], GREEN[3])
             else GameTooltip:AddLine((e.current and "next: " or "") .. e.title, 1, 1, 1) end
@@ -428,7 +565,20 @@ function UI:RenderBar()
     end
     anchor()
     local done, all = Q:Counts()
-    st.text = string.format("Quest Run: %d/%d done", done, all)
+    local blue = isDungeon()
+    local col = blue and BLUE or GOLD
+    barEdge:SetColorTexture(col[1], col[2], col[3], 1)
+    barText:SetTextColor(col[1], col[2], col[3])
+    st.blue = blue
+    if blue then
+        st.text = string.format("Dungeon Run: %d/%d", done, all)
+        local fin, n = 0, 0
+        if D() then fin, n = D().GroupCounts() end
+        if n > 1 then st.text = st.text .. string.format("  -  group: %d/%d done", fin, n) end
+    else
+        st.text = string.format("Quest Run: %d/%d done", done, all)
+    end
+    bar:SetWidth(blue and 300 or 230)
     barText:SetText(st.text)
     st.shown = true
     bar:Show()
@@ -436,7 +586,12 @@ function UI:RenderBar()
     if not t then arrowFrame:Hide(); return end
     st.title = t.title
     arrowName:SetText(t.title)
-    if t.there then
+    if t.kind == "w" and not t.distance then
+        st.dist = t.what
+        arrowDist:SetText(t.what)
+        wantHeading = nil
+        arrowTex:SetVertexColor(GREY[1], GREY[2], GREY[3])
+    elseif t.there then
         st.dist = "you are there: " .. t.what
         arrowDist:SetText("|cff7fc76fyou are there:|r " .. t.what)
         wantHeading = nil
@@ -446,7 +601,7 @@ function UI:RenderBar()
         if t.flight then st.dist = string.format("%d yd - fly from %s - %s", math.floor(t.distance + 0.5), t.flight, t.what) end
         arrowDist:SetText(st.dist)
         wantHeading = t.heading
-        arrowTex:SetVertexColor(1, 0.82, 0.25)
+        if blue then arrowTex:SetVertexColor(BLUE[1], BLUE[2], BLUE[3]) else arrowTex:SetVertexColor(1, 0.82, 0.25) end
     else
         st.dist = "other continent - " .. t.what
         arrowDist:SetText(st.dist)
@@ -469,12 +624,14 @@ local function buildCard()
     local border = card:CreateTexture(nil, "BACKGROUND", nil, -2)
     border:SetPoint("TOPLEFT", -2, 2); border:SetPoint("BOTTOMRIGHT", 2, -2)
     border:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
+    card.border = border
     local bg = card:CreateTexture(nil, "BACKGROUND", nil, -1)
     bg:SetAllPoints()
     bg:SetColorTexture(0.08, 0.086, 0.114, 0.97)
     local head = card:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     head:SetPoint("TOP", 0, -10)
     head:SetText("QUEST RUN")
+    card.head = head
     head:SetTextColor(TAN[1], TAN[2], TAN[3])
     cardTitle = card:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     cardTitle:SetPoint("TOP", 0, -26)
@@ -498,12 +655,24 @@ function UI.FormatTime(secs)
     return string.format("%d:%02d", m, s)
 end
 
-function UI:ShowCard(done, secs)
+function UI:ShowCard(done, secs, r)
     if not card then buildCard() end
-    cardTitle:SetText("Quest Run done!")
+    local dungeon = r and r.kind == "dungeon"
+    local col = dungeon and BLUE or GOLD
+    card.border:SetColorTexture(col[1], col[2], col[3], 1)
+    cardTitle:SetTextColor(col[1], col[2], col[3])
+    card.head:SetText(dungeon and "DUNGEON RUN" or "QUEST RUN")
     local text = string.format("%d quest%s in %s", done, done == 1 and "" or "s", UI.FormatTime(secs))
+    if dungeon then
+        cardTitle:SetText("All dungeon quests collected!")
+        text = "Ready for " .. UI.DungeonName(r.dungeon) .. " - " .. text
+        cardMore:Hide()
+    else
+        cardTitle:SetText("Quest Run done!")
+        cardMore:Show()
+    end
     cardText:SetText(text)
-    UI._card = { text = text }
+    UI._card = { text = text, title = dungeon and "All dungeon quests collected!" or "Quest Run done!", dungeon = dungeon }
     card:Show()
     cardUntil = GetTime() + 30
     if OMQ.Unlock and OMQ.Unlock.Fanfare then pcall(OMQ.Unlock.Fanfare)
@@ -530,5 +699,5 @@ OMQ:On("QUEST_RUN_CHANGED", function()
     end
 end)
 OMQ:On("QUEST_RUN_PREP", function() if UI:IsOpen() and mode == "choose" then UI:Render() end end)
-OMQ:On("QUEST_RUN_DONE", function(done, secs) UI:Close(); UI:ShowCard(done, secs) end)
+OMQ:On("QUEST_RUN_DONE", function(done, secs, r) UI:Close(); UI:ShowCard(done, secs, r) end)
 OMQ:On("SETTINGS_CHANGED", function() applyStyle() end)

@@ -14,6 +14,8 @@ local U = {}
 OMQ.QTrackFrame = U
 
 local runEdges = {}
+local topEdge                      -- the gold line on top; blue with the rest of the frame during a Dungeon Run (476)
+local BLUE = { 0.30, 0.62, 1.00 }
 local frame, header, title, level, prevBtn, navText, nextBtn, stampFrame, stampTex, stampAnim, dim
 local texts, texs, tUsed, xUsed = {}, {}, 0, 0
 local moveMode = false
@@ -162,6 +164,7 @@ local function build()
     local edge = frame:CreateTexture(nil, "BORDER")
     edge:SetPoint("TOPLEFT"); edge:SetPoint("TOPRIGHT"); edge:SetHeight(3)
     edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
+    topEdge = edge
     -- while a Quest Run goes the card has a gold frame all around (decision 465)
     runEdges = {}
     for _, side in ipairs({ "LEFT", "RIGHT", "BOTTOM" }) do
@@ -320,6 +323,13 @@ function U:Render()
     local running = OMQ.QuestRun and OMQ.QuestRun:Active() and not moveMode
     for _, e in ipairs(runEdges) do if running then e:Show() else e:Hide() end end
     U.runFrame = running and true or false
+    -- the Dungeon Run's frame is blue instead of gold (476)
+    local r = running and OMQ.QuestRun:Run()
+    local blue = r and r.kind == "dungeon" or false
+    local col = blue and BLUE or GOLD
+    for _, e in ipairs(runEdges) do e:SetColorTexture(col[1], col[2], col[3], 1) end
+    if topEdge then topEdge:SetColorTexture(col[1], col[2], col[3], 1) end
+    U.runBlue = blue
 
     if view.stamp then
         stampFrame:Show()

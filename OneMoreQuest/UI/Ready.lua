@@ -329,6 +329,7 @@ local QNAME_W, QCOL_W, QROW_H = 280, 62, 34          -- the dungeon part has mor
 local ENT_W = 84
 local STATE_TEXT = { done = { "Done", GREEN }, log = { "In log", { 0.89, 0.71, 0.29 } }, none = { "-", GREY } }
 local frame, cells, footer, title, qhead, qcells, entrance, qbuttons, prevBtn, nextBtn
+local drunBtn                      -- the Dungeon Run button (decision 476)
 
 -- the dungeons the arrows switch between (decision 256): those of the check bar (my level), plus the open one
 function R.Relevant()
@@ -415,6 +416,23 @@ local function build()
     x:SetText("x")
     x:SetTextColor(0.7, 0.7, 0.75)
     close:SetScript("OnClick", function() frame:Hide() end)
+    -- the Dungeon Run (476): every dungeon quest of this dungeon with its pre-quests on one way
+    drunBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    drunBtn:SetSize(120, 22)
+    drunBtn:SetText("Dungeon Run")
+    drunBtn:SetScript("OnClick", function()
+        if R.dungeon and OMQ.QuestRunUI and OMQ.QuestRunUI.OpenDungeon then OMQ.QuestRunUI:OpenDungeon(R.dungeon) end
+    end)
+    drunBtn:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Dungeon Run")
+        GameTooltip:AddLine("Leads you through every pre-quest and picks up all dungeon quests of this dungeon", 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine("In a group every dad gets his own way", 0.8, 0.8, 0.8, true)
+        GameTooltip:Show()
+    end)
+    drunBtn:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    drunBtn:Hide()
     -- arrows to the previous and next dungeon of my level (decision 256)
     local function arrow(dir)
         local b = CreateFrame("Button", nil, frame)
@@ -860,8 +878,19 @@ function R:Render()
         OMQ.LootPreview:Hide()
     end
     footer:SetWidth(width - PAD * 2)
+    if drunBtn then
+        drunBtn:ClearAllPoints()
+        if d and OMQ.DungeonRun then
+            height = height + 28
+            drunBtn:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, PAD - 4)
+            drunBtn:Show()
+        else
+            drunBtn:Hide()
+        end
+    end
     frame:SetSize(width, height)
 end
+R._DungeonRunButton = function() return drunBtn end
 function R:Frame() return frame end
 R._QuestButtons = function() return qbuttons end
 

@@ -354,10 +354,24 @@ R.PathCost = pathCost
 
 -- every pick up before the objectives of its quest, a turn-in after its objectives, the pick up of a follow-up
 -- after the turn-in of its pre-quest (s.after)
+-- Dungeon Run (476): a stop with needs = { qid } comes after every stop of those quests (their whole chain step),
+-- a "w" stop (follow the quest in the log) is a pick up
 local function valid(stops)
     local seenObj, seenT = {}, {}
+    local total, seen, anyNeeds = nil, nil, false
+    for _, s in ipairs(stops) do if s.needs then anyNeeds = true; break end end
+    if anyNeeds then
+        total, seen = {}, {}
+        for _, s in ipairs(stops) do total[s.qid] = (total[s.qid] or 0) + 1 end
+    end
     for _, s in ipairs(stops) do
         local q = s.qid
+        if s.needs then
+            for _, n in ipairs(s.needs) do
+                if total[n] and (seen[n] or 0) < total[n] then return false end
+            end
+        end
+        if seen then seen[q] = (seen[q] or 0) + 1 end
         if s.kind == "o" then
             if seenT[q] then return false end
             seenObj[q] = true
@@ -373,11 +387,27 @@ end
 R._valid = valid
 
 -- better order: reverse parts and move single stops while the way gets shorter
-function R.Improve(pos, stops)
+function R.Improve(pos, stops, maxIter)
     local n = #stops
     if n < 2 then return stops end
+    -- the ways between the same two places are asked once (long Dungeon Runs, 476)
+    local memo = setmetatable({}, { __mode = "k" })
+    local function d2(p, q)
+        if not (p and q) then return 0 end
+        local m = memo[p]
+        if not m then m = {}; memo[p] = m end
+        local v = m[q]
+        if not v then v = dist(p, q); m[q] = v end
+        return v
+    end
+    local function pathCost(from, list)
+        local c, prev = 0, from
+        for _, s in ipairs(list) do c = c + d2(prev, s.place); prev = s.place end
+        return c
+    end
     local best = pathCost(pos, stops)
-    for _ = 1, 60 do
+    maxIter = maxIter or (n > 16 and 4 or 60)
+    for _ = 1, maxIter do
         local better = false
         for i = 1, n - 1 do
             for j = i + 1, n do
@@ -612,9 +642,9 @@ local function save()
     OMQ.db.questRun = OMQ.db.questRun or {}
     if not run then OMQ.db.questRun[g] = nil; return end
     local s = { id = run.id, leader = run.leader, started = run.started, total = run.total, group = run.group,
-                quests = {}, stops = {} }
-    for qid, q in pairs(run.quests) do s.quests[#s.quests + 1] = { qid, q.new and 1 or 0, q.done and 1 or 0, q.picked and 1 or 0, q.dropped and 1 or 0, q.follow or 0 } end
-    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after } end
+                quests = {}, stops = {}, kind = run.kind, dungeon = run.dungeon, info = run.info }
+    for qid, q in pairs(run.quests) do s.quests[#s.quests + 1] = { qid, q.new and 1 or 0, q.done and 1 or 0, q.picked and 1 or 0, q.dropped and 1 or 0, q.follow or 0, q.goal } end
+    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after, st.goal, st.needs } end
     OMQ.db.questRun[g] = s
 end
 
@@ -629,6 +659,7 @@ local function pin()
     OMQ.QTrack:Pin(set, run and run.stops[1] and run.stops[1].qid or nil)
 end
 local function fire() pin(); OMQ:Fire("QUEST_RUN_CHANGED"); save() end
+local closeRun
 
 -- counts for the bar: done and all quests of the run (left out ones do not count)
 function R:Counts()
@@ -653,12 +684,17 @@ local function addStop(r, s)
     r.all[s.i] = s
     r.stops[#r.stops + 1] = s
     if s.kind == "t" then                         -- a turn-in: a quest of the run, or a door that does not count (466)
-        if not r.quests[s.qid] then r.doors[s.qid] = true end
+        if s.goal then                            -- Dungeon Run (476): the pre-quest counts when turned in
+            local q = r.quests[s.qid]
+            if not q then q = { qid = s.qid, new = false, done = false }; r.quests[s.qid] = q end
+            q.goal = s.goal
+        elseif not r.quests[s.qid] then r.doors[s.qid] = true end
         return
     end
     local q = r.quests[s.qid]
     if not q then q = { qid = s.qid, new = false, done = false }; r.quests[s.qid] = q end
-    if s.kind == "p" then q.new = true; q.follow = s.after end
+    if s.goal then q.goal = s.goal end
+    if s.kind == "p" or s.kind == "w" then q.new = true; q.follow = s.after end
 end
 
 local function sendStop(s)
@@ -681,7 +717,8 @@ end
 -- starts the prepared plan (the window's Start button or the vote)
 function R:Start(plan)
     plan = plan or (prep and prep.plan)
-    if not (plan and #plan.stops > 0) then OMQ:Print("Quest Run: no quest fits here"); return false end
+    if not (plan and #plan.stops > 0) then OMQ:Print((plan and plan.kind == "dungeon") and "Dungeon Run: no quest to collect" or "Quest Run: no quest fits here"); return false end
+    if run then closeRun("replaced") end      -- one run at a time (476)
     local g = myGuid() or "?"
     run = newRun(tostring(math.random(100000, 999999)), g)
     run.pool = prep and prep.pool or {}
@@ -689,7 +726,11 @@ function R:Start(plan)
     run.skip = prep and prep.skip or {}
     run.members = prep and prep.members or {}
     run.group = #run.members > 0
-    for _, s in ipairs(plan.stops) do addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after }) end
+    if plan.kind == "dungeon" then             -- Dungeon Run (476): every dad has his own route, no leader
+        run.kind, run.dungeon, run.info = "dungeon", plan.dungeon, plan.info
+        run.members, run.group, run.pool = {}, false, {}
+    end
+    for _, s in ipairs(plan.stops) do addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs }) end
     run.total = 0
     for _ in pairs(run.quests) do run.total = run.total + 1 end
     run.startedAt = now()
@@ -713,6 +754,13 @@ function R:Skip(qid)
     end
     local q = run.quests[qid]
     if not q or q.done then return false end
+    if run.kind == "dungeon" then             -- Dungeon Run (476): the quest and what waits for it go, nothing instead
+        R.DropWithDependents(run, qid)
+        local pos = NQ().MyPos()
+        if pos then run.stops = R.Improve(pos, run.stops, 3) end
+        fire()
+        return true
+    end
     -- the quest and its follow-ups in the run go (decision 466), each one replaced
     local gone, n = { [qid] = true }, 1
     local more = true
@@ -764,12 +812,39 @@ function R:Skip(qid)
     return true
 end
 
+-- Dungeon Run (476): a quest goes, and every quest whose stops need it (and theirs)
+function R.DropWithDependents(r, qid)
+    local gone, more = { [qid] = true }, true
+    while more do
+        more = false
+        for _, st in ipairs(r.stops) do
+            if not gone[st.qid] and st.needs then
+                for _, n in ipairs(st.needs) do
+                    if gone[n] then gone[st.qid] = true; more = true; break end
+                end
+            end
+        end
+    end
+    for id in pairs(gone) do
+        local x = r.quests[id]
+        if x and not x.done then x.dropped = true end
+        if r.skip then r.skip[id] = true end
+    end
+    for k = #r.stops, 1, -1 do
+        local x = r.quests[r.stops[k].qid]
+        if gone[r.stops[k].qid] and not (x and x.done) then table.remove(r.stops, k) end
+    end
+    R.DropTurnins(r)
+    return gone
+end
+
 -- a turn-in stays only while a follow-up of the run still waits for it (decision 466)
 function R.DropTurnins(r)
     for k = #r.stops, 1, -1 do
         local st = r.stops[k]
         if st.kind == "t" then
-            local needed = false
+            local q = r.quests[st.qid]
+            local needed = q ~= nil and q.goal == "turnin" and not q.done and not q.dropped      -- a pre-quest of a Dungeon Run (476)
             for _, x in ipairs(r.stops) do if x.kind == "p" and x.after == st.qid then needed = true end end
             if not needed then table.remove(r.stops, k) end
         end
@@ -785,7 +860,7 @@ local function everDone(id)
     return false
 end
 
-local function closeRun(reason)
+function closeRun(reason)
     if not run then return end
     local wasGroupLeader = run.group and R:IsLeader()
     local r = run
@@ -892,8 +967,43 @@ function R:Tick()
         for qid in pairs(run.doors) do if turnedIn(qid) then report(qid, "t") end end
     end
     if run.group and not R:IsLeader() then return end        -- the leader decides
+    local function removeStops(qid, kinds)
+        for k = #run.stops, 1, -1 do
+            local s = run.stops[k]
+            if s.qid == qid and (not kinds or kinds[s.kind]) then table.remove(run.stops, k) end
+        end
+    end
     for qid, q in pairs(run.quests) do
-        if not q.done and not q.dropped then
+        if not q.done and not q.dropped and q.goal then
+            -- Dungeon Run (476): a dungeon quest counts when it is in the log, a pre-quest when it is turned in
+            local inLog = log[qid] and true or false
+            local ever = everDone(qid)
+            if q.goal == "pick" then
+                if inLog or complete(qid) or ever then
+                    q.done, q.picked = true, true
+                    removeStops(qid)
+                    changed = true
+                    if OMQ.Sound then OMQ.Sound:Play("update") end
+                end
+            else
+                if q.new and not q.picked and (inLog or complete(qid) or ever) then
+                    q.picked = true; removeStops(qid, { p = true }); changed = true
+                end
+                if not q.objDone and (complete(qid) or ever) then
+                    q.objDone = true; removeStops(qid, { o = true }); changed = true
+                end
+                if ever or (not inLog and q.wasComplete) then
+                    q.done = true
+                    removeStops(qid)
+                    for _, x in ipairs(run.stops) do if x.after == qid then x.after = nil end end
+                    changed = true
+                    if OMQ.Sound then OMQ.Sound:Play("update") end
+                elseif q.inLog and not inLog and not q.wasComplete then
+                    R.DropWithDependents(run, qid)            -- abandoned: it and what waits for it go
+                    changed = true
+                end
+            end
+        elseif not q.done and not q.dropped then
             if q.new and not q.picked and pickedByAll(qid) then
                 q.picked = true
                 for k = #run.stops, 1, -1 do
@@ -948,7 +1058,7 @@ function R:Tick()
     if done >= all then sendState(); finish(); return end
     if changed then
         local pos = NQ().MyPos()
-        if pos then run.stops = R.Improve(pos, run.stops) end
+        if pos then run.stops = R.Improve(pos, run.stops, run.kind == "dungeon" and 2 or nil) end
         sendState()
         fire()
     end
@@ -960,6 +1070,7 @@ function R:Target()
     local s = run.stops[1]
     if not s then return nil end
     local pos = NQ().MyPos()
+    if s.kind == "w" then return R.FollowTarget(s, pos) end
     local view = { qid = s.qid, kind = s.kind, place = s.place, title = R.Title(s.qid) }
     local near = s.kind ~= "o"
     if pos and pos.inst == s.place.inst then
@@ -988,14 +1099,40 @@ function R:Target()
     elseif s.kind == "t" then
         local nxt = R.FollowUpIn(run, s.qid)
         view.what = "turn in" .. (nxt and (", then pick up " .. R.Title(nxt)) or "")
+        if not nxt and run.kind == "dungeon" then view.what = "turn in the pre-quest" end
     else view.what = R.OpenObjective(s.qid) or "objectives" end
+    return view
+end
+
+-- Dungeon Run (476): the steps between a known chain start and the dungeon quest are not in the data. The small
+-- arrow points at the game's own map point of a quest I picked up during the run that the data does not know
+-- (the next step of the chain), else it only says to follow the quest in the log.
+function R.FollowTarget(s, pos)
+    local view = { qid = s.qid, kind = "w", title = R.Title(s.qid), what = "follow the quest in your log" }
+    if not pos then return view end
+    local known = run and run.quests or {}
+    local log = myLog()
+    local best, bd
+    for id in pairs(log) do
+        if not known[id] and not data(id) then
+            local p = mapPoint(id, pos)
+            local dd = p and math.sqrt((p.a - pos.a) ^ 2 + (p.b - pos.b) ^ 2)
+            if dd and (not bd or dd < bd) then best, bd, view.via_qid = p, dd, id end
+        end
+    end
+    if best then
+        view.place, view.straight, view.distance = best, bd, bd
+        view.what = "follow " .. R.Title(view.via_qid)
+        if OMQ.Arrow then view.heading = OMQ.Arrow.Heading(best.a - pos.a, best.b - pos.b) end
+        view.there = bd <= R.OBJ_RADIUS
+    end
     return view
 end
 
 -- left click on the small arrow: the main arrow goes to the same place (anything else replaces it again)
 function R:MainArrow()
     local t = self:Target()
-    if not (t and OMQ.Guide) then return false end
+    if not (t and OMQ.Guide and t.place) then return false end
     OMQ.Guide:StartAt("Quest Run: " .. t.title, t.place.a, t.place.b, t.place.inst, "run", nil,
         { name = t.what, radius = t.kind ~= "o" and R.PICK_RADIUS or R.OBJ_RADIUS, qid = t.qid, area = t.kind == "o" })
     return true
@@ -1012,6 +1149,21 @@ end
 function R:List()
     if not run then return {} end
     local out, seen = {}, {}
+    if run.kind == "dungeon" then             -- Dungeon Run (476): one row per quest, pre-quests and dungeon quests
+        local WHAT = { p = "pick up", o = "objectives", t = "turn in", w = "follow the quest in your log" }
+        for _, s in ipairs(run.stops) do
+            local q = run.quests[s.qid]
+            if q and not seen[s.qid] and not q.done and not q.dropped then
+                seen[s.qid] = true
+                out[#out + 1] = { qid = s.qid, title = R.Title(s.qid), what = WHAT[s.kind] or "objectives", kind = s.kind,
+                                  dungeonQuest = q.goal == "pick", current = #out == 0 }
+            end
+        end
+        for qid, q in pairs(run.quests) do
+            if not seen[qid] and q.done then out[#out + 1] = { qid = qid, done = true, title = R.Title(qid), dungeonQuest = q.goal == "pick" } end
+        end
+        return out
+    end
     for _, s in ipairs(run.stops) do
         local q = run.quests[s.qid]
         if s.kind ~= "t" and q and not seen[s.qid] then
@@ -1118,10 +1270,12 @@ local function restore()
     for _, q in ipairs(s.quests or {}) do
         run.quests[q[1]] = { qid = q[1], new = q[2] == 1, done = q[3] == 1, picked = q[4] == 1, dropped = q[5] == 1,
                              inLog = q[2] ~= 1 or q[4] == 1, wasComplete = q[3] == 1,      -- a new quest not picked up is not in the log
-                             follow = (q[6] and q[6] ~= 0) and q[6] or nil }
+                             follow = (q[6] and q[6] ~= 0) and q[6] or nil, goal = q[7] }
     end
+    run.kind, run.dungeon, run.info = s.kind, s.dungeon, s.info
     for _, st in ipairs(s.stops) do
-        addStop(run, { qid = st[1], kind = st[2], place = { a = st[3], b = st[4], inst = st[5], map = st[6] }, i = st[7], after = st[8] })
+        addStop(run, { qid = st[1], kind = st[2], place = { a = st[3], b = st[4], inst = st[5], map = st[6] }, i = st[7], after = st[8],
+                       goal = st[9], needs = st[10] })
     end
     run.members = members()
     run.pool, run.skip = {}, {}
