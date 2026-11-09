@@ -159,6 +159,9 @@ C.CLASS_BUFF = {
 C.CLASS_BUFF.e_int = C.CLASS_BUFF.s_int
 C.SCROLL_STAT = { s_int = { 4, 8, 12, 16 }, s_sta = { 4, 8, 12, 16 }, s_spi = { 3, 7, 11, 15 },
                   e_int = { 6, 25 } }                                -- Elixir of Wisdom, Elixir of Greater Intellect
+-- the pure Intellect elixirs do not help with any rank of Arcane Intellect on (fix 487, seen in game):
+-- no reminder whatever rank the mage cast, also a weaker one
+C.ANY_RANK = { e_int = true }
 local scrollOf
 local function scrollLine(id)
     if not scrollOf then
@@ -182,7 +185,7 @@ function C.BetterBuff(id, auras)
     for sid, amount in pairs(C.CLASS_BUFF[key]) do
         if ids[sid] then
             found = true
-            if amount >= need then return spellName(sid) or "a class buff" end
+            if amount >= need or C.ANY_RANK[key] then return spellName(sid) or "a class buff" end
         end
     end
     if found then return nil end                     -- only a weaker rank is on: the scroll still helps
@@ -280,7 +283,7 @@ function C.Explain()
                     and OMQ.AuctionBuy.StoneFits(id) == false then why = "does not fit your weapon (blade: sharpening stone, blunt: weightstone)"
                 elseif not s then why = "its buff spell is not known yet"
                 elseif (kind == "scroll" or kind == "elixir") and C.BetterBuff(id, auras) then
-                    why = "not needed: " .. C.BetterBuff(id, auras) .. " is on (as strong or stronger, does not stack)"
+                    why = "not needed: " .. C.BetterBuff(id, auras) .. " is on (does not stack)"
                 else
                     local a = C.Active(id, kind, auras)
                     why = (a == true and "buff is on") or (a == false and "buff missing -> reminder") or "buff cannot be read"
