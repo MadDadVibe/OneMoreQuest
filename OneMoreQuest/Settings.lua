@@ -198,6 +198,11 @@ local function allSections()
                   OMQ.db.options.selfCast = v and true or false
                   if OMQ.SelfCastProbe then OMQ.SelfCastProbe.Apply() end
               end },
+            -- decision 493: XP of a dungeon visit against XP outside
+            { type = "check", label = "Dungeon XP card",
+              tip = "When you leave a dungeon after at least 5 minutes inside: a card with the XP you got inside, its XP per hour and the XP per hour outside (your last 3 hours of play outside, AFK does not count). /omq dxp lists your last visits.",
+              get = function() return OMQ.db.options.dungeonXP ~= false end,
+              set = function(v) OMQ.db.options.dungeonXP = v and true or false end },
             -- decisions 334, 335: the threat meter
             { type = "segment", label = "Threat meter", unlock = "threat",
               tip = "A small frame with the threat of everyone in your group on your target, in percent (100 = he is the target). In group: whenever you are in a group. Dungeons: only inside a dungeon or raid. Place it in the move mode; /omq threat reset puts it back.",
