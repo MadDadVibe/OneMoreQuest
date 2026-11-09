@@ -30,6 +30,7 @@ local LABEL = {
     ammo = "Ammo below 200",
     upgrade = "Upgrade in your bags: put it on",
     buffback = "Buff back a player who buffed you",
+    soulstone = "Healer in a dungeon: ask the warlock for a Soulstone",
 }
 
 local function alertItems()

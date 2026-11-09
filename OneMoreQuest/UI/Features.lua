@@ -44,6 +44,7 @@ FE.SECTIONS = {
         "Dungeon quests you could still take, when you leave a town, a city or a flight master",
         "Missing buffs, auras, shields, armors, imbues and poisons, cast with one click",
         "A player outside the group buffed you: one click gives your class's buff back (Fortitude, Arcane Intellect, Mark of the Wild, a Blessing)",
+        "Healer in a dungeon with a warlock: a card whispers him for a Soulstone (one click, then a minute pause; rests while the Soulstone is on)",
         "Repair, also before you leave a city or take a flight",
         "Buy drinks, and a reminder to drink when your mana is low; mages conjure water with one click instead",
         "Profession training and the tool a profession needs",
