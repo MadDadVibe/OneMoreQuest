@@ -30,6 +30,7 @@ P.WAY_KEEP = 4                -- targets whose search back is kept
 P.WAY_BOUND = 40000         -- yards searched back from the arrow's target
 P.SLACK, P.SLACK_YD = 1.12, 25   -- a part of the way this close to the straight line is walked straight
 P.ISLAND, P.ISLAND_YD = 1.5, 600 -- target in ground the network does not join (an island): boat, a guess
+P.PASSED = 30               -- a way point this close counts as reached: the arrow heads for the next one
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
 local function num(v) return type(v) == "number" and not isSecret(v) end
@@ -451,7 +452,15 @@ local function coarseWay(p, q)
         end
         n = nx
     end
-    way.a, way.b = xy(pick or first)
+    -- a way point I am at or just walked past (the arrow would turn round): head for the one after it (fix 474)
+    pick = pick or first
+    local a, b = xy(pick)
+    if not way.flight and straight(p.a, p.b, a, b) < P.PASSED then
+        local nx = srch.nxt[pick]
+        if nx and nx > 0 then a, b = xy(nx)
+        elseif not nx then a, b = q.a, q.b end
+    end
+    way.a, way.b = a, b
     return way
 end
 ----------------------------------------------------------------------
@@ -470,6 +479,7 @@ P.FINE_MARGIN = 24              -- cells around me and the point the search may 
 P.FINE_GOAL = 3                 -- cells from a point that is not walkable ground that count as there
 P.FINE_KEEP = 16                -- unpacked tiles kept
 P.FINE_MOVE, P.FINE_AGE = 5, 2  -- the fine way is found again after these yards moved or seconds
+P.FINE_NEAR = 10                -- or at once this close to the point it heads for
 P.SWIM = 1.5                    -- a swum cell costs this much more
 P.FINE_SLACK_YD = 15            -- a way round this little longer (x SLACK) is not steered
 local DR = { -1, 1, 0, 0, -1, -1, 1, 1 }    -- N, S, W, E, NW, NE, SW, SE
@@ -627,6 +637,14 @@ function P.Fine(inst, pa, pb, ha, hb)
         pick = path[k]
     end
     local a, b = center(pick[1], pick[2])
+    -- right at the corner: head for the way past it, not for the cell I stand on (fix 474)
+    if straight(pa, pb, a, b) < P.FINE_NEAR then
+        for k = 2, #path do
+            local ka, kb = center(path[k][1], path[k][2])
+            a, b = ka, kb
+            if straight(pa, pb, ka, kb) >= P.FINE_NEAR then break end
+        end
+    end
     return { a = a, b = b, clear = false, yards = yards, reached = reached and d <= P.LOOK }
 end
 
@@ -639,7 +657,15 @@ local function steer(p, w)
     for _, x in ipairs(fineCache) do
         if x.inst == p.inst and math.abs(x.ha - ha) < 5 and math.abs(x.hb - hb) < 5 then c = x; break end
     end
-    if not c or t - c.t > P.FINE_AGE or t < c.t or straight(c.pa, c.pb, p.a, p.b) > P.FINE_MOVE then
+    -- found again when I walked on or waited, and at once when I reach the point it heads for or walk past it
+    -- (it would turn round, fix 474)
+    local stale = not c or t - c.t > P.FINE_AGE or t < c.t or straight(c.pa, c.pb, p.a, p.b) > P.FINE_MOVE
+    if not stale and c.f and not c.f.clear then
+        local f = c.f
+        stale = t - c.t > 0.25 and (straight(p.a, p.b, f.a, f.b) < P.FINE_NEAR
+            or (f.a - p.a) * (f.a - c.pa) + (f.b - p.b) * (f.b - c.pb) <= 0)
+    end
+    if stale then
         local ok, f = pcall(P.Fine, p.inst, p.a, p.b, ha, hb)
         if not c then
             c = { inst = p.inst, ha = ha, hb = hb }
