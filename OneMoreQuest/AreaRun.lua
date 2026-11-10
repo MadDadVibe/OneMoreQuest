@@ -5,8 +5,8 @@
 -- "Area Run: 4/23". The tracker card has a green frame.
 --   Which quests: giver in the zone (or in my log with giver, objectives or turn-in in the zone), my faction, race and
 --   class, never done, at most LEVEL_ABOVE levels above me, NOT grey (a grey pre-quest stays when a quest of the zone
---   needs it), never repeatable, from an item, a profession, reputation or in a dungeon. Elite quests stay in, also
---   alone. Quests of a higher level join the run when I level up.
+--   needs it), never repeatable, from a profession, reputation or in a dungeon; from an item only when a named mob
+--   of the zone drops it (decision 508: the pick up stop is at the mob). Elite quests stay in, also alone. Quests of a higher level join the run when I level up.
 --   Quests that start outside the zone are no stops. A quest outside whose follow-ups (or objectives) are in the zone
 --   is a hint: as soon as I am in the same zone or city as its giver, a card names it with the number of quests it
 --   opens in the run's zone; "Add" puts it (and what it opens) into the run and the main arrow to its giver.
@@ -93,6 +93,8 @@ local function inZone(spots, zone)
 end
 A.InZone = inZone
 
+-- where a quest starts: its giver, else the named mob that drops it (decision 508)
+local function starts(id, d) return (d and d[7]) or NQ().Starts(id, true) end
 -- does a quest belong to the zone? giver, objectives or turn-in there
 local function touches(d, zone) return inZone(d[7], zone) or inZone(d[9], zone) or inZone(d[8], zone) end
 
@@ -157,7 +159,11 @@ function A.ForMe(id, who, log)
     for _, p in ipairs(d[12] or {}) do if ever(p) or (log and log[p]) then return false end end
     return true
 end
-local function excluded(d) return has(d[13], 1) or has(d[13], 2) or has(d[13], 4) or not d[7] end
+local function excluded(d, id)
+    if has(d[13], 1) or has(d[13], 2) then return true end
+    if d[7] then return has(d[13], 4) end
+    return not (id and NQ().Drop(id))              -- from an item: only a named mob's drop (508)
+end
 
 -- ctx = { zone, pos, log, who, allow, quests = { [id] = entry }, order = { id }, fail = { [id] = blocker | false },
 --         later = { [id] = true } }
@@ -202,9 +208,9 @@ function resolve(ctx, id, visiting, depth)
     local inLog = ctx.log[id] and true or false
     if not d then return fail(ctx, id) end
     if not inLog then
-        if not A.ForMe(id, ctx.who, ctx.log) or excluded(d) then return fail(ctx, id) end
+        if not A.ForMe(id, ctx.who, ctx.log) or excluded(d, id) then return fail(ctx, id) end
         if (d[2] or 0) > ctx.who.level then ctx.later[id] = true; return fail(ctx, id) end
-        if not inZone(d[7], ctx.zone) and not ctx.allow[id] then return fail(ctx, id, id) end   -- starts outside the zone
+        if not inZone(starts(id, d), ctx.zone) and not ctx.allow[id] then return fail(ctx, id, id) end   -- starts outside the zone
     end
     if has(d[13], 8) and not NQ().IsComplete(id) then return fail(ctx, id) end     -- objectives in a dungeon
     local needs = {}
@@ -217,7 +223,7 @@ function resolve(ctx, id, visiting, depth)
     end
     local e = { id = id, goal = "turnin", needs = needs }
     local from = ctx.pos
-    if not inLog then e.pick = bestPlace(d[7], from, ctx.zone); from = e.pick or from end
+    if not inLog then e.pick = bestPlace(starts(id, d), from, ctx.zone); from = e.pick or from end
     if not NQ().IsComplete(id) and d[9] then e.obj = objPlace(d[9], from, ctx.zone); from = e.obj or from end
     e.turnin = bestPlace(d[8], from, ctx.zone)
     if not e.turnin then
@@ -445,12 +451,12 @@ function A.Build(zone, pos, log, who, skip, allow, members, noOrder)
     local grey = NQ().GreyBelow(who.level)
     local news = {}
     for id, d in pairs(OMQ.QuestPlaces or {}) do
-        if d[7] and inZone(d[7], zone) and not log[id] then news[#news + 1] = id end
+        if inZone(starts(id, d), zone) and not log[id] then news[#news + 1] = id end
     end
     table.sort(news)
     for _, id in ipairs(news) do
         local d = data(id)
-        if not ever(id) and not excluded(d) and not has(d[13], 8) and A.ForMe(id, who, log) then
+        if not ever(id) and not excluded(d, id) and not has(d[13], 8) and A.ForMe(id, who, log) then
             local ql = d[3] or 0
             if ql > 0 and ql < grey then info.grey = info.grey + 1
             elseif ql > who.level + A.LEVEL_ABOVE or (d[2] or 0) > who.level then info.later = info.later + 1
@@ -494,8 +500,8 @@ function A.Build(zone, pos, log, who, skip, allow, members, noOrder)
             for _, id in ipairs(ctx.order) do
                 local e = ctx.quests[id]
                 local d = data(id)
-                if e and not e.pick and not e.follow and not u.quests[id] and d and d[7] then
-                    e.pick = bestPlace(d[7], ctx.pos, zone)
+                if e and not e.pick and not e.follow and not u.quests[id] and d and starts(id, d) then
+                    e.pick = bestPlace(starts(id, d), ctx.pos, zone)
                 end
             end
         end
@@ -526,9 +532,9 @@ function A.Count(zone, who, log)
     local grey = NQ().GreyBelow(who.level)
     local n = 0
     for id, d in pairs(OMQ.QuestPlaces or {}) do
-        if d[7] and inZone(d[7], zone) then
+        if inZone(starts(id, d), zone) then
             if log[id] then n = n + 1
-            elseif not ever(id) and not excluded(d) and not has(d[13], 8) and A.ForMe(id, who, log) then
+            elseif not ever(id) and not excluded(d, id) and not has(d[13], 8) and A.ForMe(id, who, log) then
                 local ql = d[3] or 0
                 if not (ql > 0 and ql < grey) and ql <= who.level + A.LEVEL_ABOVE and (d[2] or 0) <= who.level then n = n + 1 end
             end

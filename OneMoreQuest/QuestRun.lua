@@ -5,8 +5,9 @@
 -- in is not part of the run. A small second arrow above the quest tracker leads from stop to stop.
 --   Candidates: quests of my log with open objectives and known places (Data/QuestPlaces.lua; for quests the data
 --   does not know the client's own point on my map, C_QuestLog.GetQuestsOnMap), plus new quests I can take
---   (NextQuest.CanTake, at most LEVEL_ABOVE levels above me, never from an item, a profession or reputation,
---   repeatable or in a dungeon), at most as many new ones as my quest log has room for. Elite (group) quests
+--   (NextQuest.CanTake, at most LEVEL_ABOVE levels above me, never from a profession or reputation, repeatable or
+--   in a dungeon; from an item only when a named mob drops it, decision 508: the pick up stop is the mob's place
+--   and stays until the quest is accepted), at most as many new ones as my quest log has room for. Elite (group) quests
 --   only in a group. Only places on my continent; another zone costs ZONE_PENALTY yards.
 --   Plan: start with the cheapest quest, then always add the quest that makes the way the least longer (the
 --   giver before the objectives), then improve the order (reversing parts, moving single stops) while it gets
@@ -82,6 +83,16 @@ local function objPlaces(spots)
             if p then out[#out + 1] = p end
         end
     end
+    return out
+end
+
+-- the objective places of a new quest near me; a drop quest without objective places (bring the item) is done
+-- where its mob is (decision 508)
+local function newSpots(id, d, pos, pick)
+    local out = {}
+    if d[9] then
+        for _, p in ipairs(objPlaces(d[9])) do if dist(pos, p) < R.FAR then out[#out + 1] = p end end
+    elseif pick and NQ().Drop(id) then out[1] = pick end
     return out
 end
 
@@ -195,7 +206,8 @@ function R.Pool(pos, opts)
         local level = UnitLevel and tonumber((UnitLevel("player"))) or 1
         local news = {}
         for id, d in pairs(OMQ.QuestPlaces) do
-            if not skip[id] and d[7] and d[9] and (d[3] or 0) <= level + R.LEVEL_ABOVE and NQ().CanTake(id, nil, log) then
+            local starts = not skip[id] and NQ().Starts(id, true)
+            if starts and (d[9] or not d[7]) and (d[3] or 0) <= level + R.LEVEL_ABOVE and NQ().CanTake(id, nil, log, nil, true) then
                 local ok = true
                 for _, u in ipairs(members) do
                     local set = opts.availBy and opts.availBy[u.guid]
@@ -204,7 +216,7 @@ function R.Pool(pos, opts)
                 if ok and solo and R.IsElite(id) then ok = false end
                 if ok then
                     local best, bd
-                    for _, s in ipairs(d[7]) do
+                    for _, s in ipairs(starts) do
                         local p = placeOf(s)
                         local dd = p and dist(pos, p)
                         if dd and dd < R.FAR and (not bd or dd < bd) then best, bd = p, dd end
@@ -217,8 +229,7 @@ function R.Pool(pos, opts)
         local max = solo and R.NEW_SOLO or R.NEW_GROUP
         for i = 1, math.min(#news, max) do
             local e = news[i]
-            e.spots = {}
-            for _, p in ipairs(objPlaces(data(e.id)[9])) do if dist(pos, p) < R.FAR then e.spots[#e.spots + 1] = p end end
+            e.spots = newSpots(e.id, data(e.id), pos, e.pick)
             if #e.spots > 0 then out[#out + 1] = e end
         end
     end
@@ -281,18 +292,18 @@ function R.Follows(pos, roots, log, opts, solo)
         if turnin and a.depth < R.CHAIN_DEPTH then
             for _, b in ipairs(R.FollowsOf(a.id)) do
                 local d = data(b)
-                if not seen[b] and not log[b] and not (opts.skip and opts.skip[b]) and d and d[7] and d[9]
-                   and (d[3] or 0) <= level + R.LEVEL_ABOVE and NQ().CanTake(b, nil, log, a.chain)
+                local starts = d and NQ().Starts(b, true)
+                if not seen[b] and not log[b] and not (opts.skip and opts.skip[b]) and starts and (d[9] or not d[7])
+                   and (d[3] or 0) <= level + R.LEVEL_ABOVE and NQ().CanTake(b, nil, log, a.chain, true)
                    and not (solo and R.IsElite(b)) then
                     local ok = true
                     for _, u in ipairs(opts.members or {}) do
                         local set = opts.laterBy and opts.laterBy[u.guid]
                         if not (set and set[b]) then ok = false; break end
                     end
-                    local pick = ok and nearestPlace(d[7], pos)
+                    local pick = ok and nearestPlace(starts, pos)
                     if pick then
-                        local spots = {}
-                        for _, p in ipairs(objPlaces(d[9])) do if dist(pos, p) < R.FAR then spots[#spots + 1] = p end end
+                        local spots = newSpots(b, d, pos, pick)
                         if #spots > 0 then
                             seen[b] = true
                             out[#out + 1] = { id = b, new = true, follow = true, parent = a.id, door = a.door,
@@ -325,9 +336,10 @@ function R.NewNear(pos, log, max)
     local list = {}
     local level = UnitLevel and tonumber((UnitLevel("player"))) or 1
     for id, d in pairs(OMQ.QuestPlaces or {}) do
-        if d[7] and d[9] and (d[3] or 0) <= level + R.LEVEL_ABOVE and NQ().CanTake(id, nil, log) then
+        local starts = NQ().Starts(id, true)
+        if starts and (d[9] or not d[7]) and (d[3] or 0) <= level + R.LEVEL_ABOVE and NQ().CanTake(id, nil, log, nil, true) then
             local bd
-            for _, s in ipairs(d[7]) do
+            for _, s in ipairs(starts) do
                 local p = placeOf(s)
                 local dd = p and dist(pos, p)
                 if dd and dd < R.FAR and (not bd or dd < bd) then bd = dd end
@@ -1099,6 +1111,13 @@ function R:Tick()
     end
 end
 
+-- a pick up of a quest a named mob drops (decision 508): what to do there, else nil
+function R.Hunt(qid)
+    if data(qid) and data(qid)[7] then return nil end
+    if myLog()[qid] then return nil end
+    return NQ().DropWhat(qid)
+end
+
 -- what the small arrow shows: { qid, kind, title, what, distance, heading, there, place }
 function R:Target()
     if not run then return nil end
@@ -1107,7 +1126,8 @@ function R:Target()
     local pos = NQ().MyPos()
     if s.kind == "w" then return R.FollowTarget(s, pos) end
     local view = { qid = s.qid, kind = s.kind, place = s.place, title = R.Title(s.qid) }
-    local near = s.kind ~= "o"
+    local hunt = s.kind == "p" and R.Hunt(s.qid)
+    local near = s.kind ~= "o" and not hunt              -- a named mob walks around: the wide radius (508)
     if pos and pos.inst == s.place.inst then
         view.straight = math.sqrt((s.place.a - pos.a) ^ 2 + (s.place.b - pos.b) ^ 2)
         view.distance = view.straight
@@ -1133,6 +1153,7 @@ function R:Target()
         view.what = "pick up the quest"
         local q = run.quests[s.qid]
         if q and q.follow then view.what = "pick up the follow-up of " .. R.Title(q.follow) end
+        if hunt then view.what, view.hunt = hunt, true end
     elseif s.kind == "t" then
         local nxt = R.FollowUpIn(run, s.qid)
         view.what = "turn in" .. (nxt and (", then pick up " .. R.Title(nxt)) or "")
@@ -1184,7 +1205,7 @@ function R:MainArrow()
     local t = self:Target()
     if not (t and OMQ.Guide and t.place) then return false end
     OMQ.Guide:StartAt("Quest Run: " .. t.title, t.place.a, t.place.b, t.place.inst, "run", nil,
-        { name = t.what, radius = t.kind ~= "o" and R.PICK_RADIUS or R.OBJ_RADIUS, qid = t.qid, area = t.kind == "o" })
+        { name = t.what, radius = (t.kind ~= "o" and not t.hunt) and R.PICK_RADIUS or R.OBJ_RADIUS, qid = t.qid, area = t.kind == "o" })
     return true
 end
 
@@ -1205,7 +1226,9 @@ function R:List()
             local q = run.quests[s.qid]
             if q and not seen[s.qid] and not q.done and not q.dropped then
                 seen[s.qid] = true
-                out[#out + 1] = { qid = s.qid, title = R.Title(s.qid), what = WHAT[s.kind] or "objectives", kind = s.kind,
+                local what = WHAT[s.kind] or "objectives"
+                if s.kind == "p" then what = R.Hunt(s.qid) or what end        -- named mob drop (508)
+                out[#out + 1] = { qid = s.qid, title = R.Title(s.qid), what = what, kind = s.kind,
                                   dungeonQuest = q.goal == "pick", current = #out == 0 }
             end
         end
@@ -1224,6 +1247,7 @@ function R:List()
                 for _, x in ipairs(run.stops) do if x.kind == "t" and x.qid == q.follow then waiting = true end end
                 what = waiting and ("turn in " .. R.Title(q.follow) .. " first, then pick up") or "pick up the follow-up"
             end
+            if s.kind == "p" and R.Hunt(s.qid) and not (q.follow and what ~= "pick up the follow-up") then what = R.Hunt(s.qid) end
             out[#out + 1] = { qid = s.qid, new = q.new and not q.picked, follow = q.follow, title = R.Title(s.qid),
                               what = what, current = #out == 0 }
         end

@@ -135,15 +135,60 @@ local function contains(list, v)
     for _, x in ipairs(list or {}) do if x == v then return true end end
     return false
 end
+-- Quests that start from an item a named mob drops (decision 508, Data/QuestDrops.lua): { item, npcs, mob, spots }.
+-- For the Quest Run and the Area Run the mob's places stand in for the quest giver.
+function NQ.Drop(id) return OMQ.QuestDrops and OMQ.QuestDrops[id] end
+-- where a quest starts: its giver, else the places of the named mob that drops it (hunt = true)
+function NQ.Starts(id, hunt)
+    local d = data(id)
+    if d and d[7] then return d[7] end
+    local x = hunt and NQ.Drop(id)
+    return x and x[4] or nil
+end
+-- the item that starts the quest is in my bags
+function NQ.HasDrop(id)
+    local x = NQ.Drop(id)
+    if not x then return false end
+    local n
+    if C_Item and C_Item.GetItemCount then
+        local ok, v = pcall(C_Item.GetItemCount, x[1])
+        if ok then n = v end
+    elseif GetItemCount then
+        local ok, v = pcall(GetItemCount, x[1])
+        if ok then n = v end
+    end
+    return type(n) == "number" and not (issecretvalue and issecretvalue(n)) and n > 0
+end
+-- what to do for a drop quest that is not picked up yet: kill the mob, or accept it from the item in the bags
+function NQ.DropWhat(id)
+    local x = NQ.Drop(id)
+    if not x then return nil end
+    if NQ.HasDrop(id) then
+        local name
+        if C_Item and C_Item.GetItemNameByID then
+            local ok, v = pcall(C_Item.GetItemNameByID, x[1])
+            if ok and type(v) == "string" and not (issecretvalue and issecretvalue(v)) then name = v end
+        end
+        if not name and GetItemInfo then
+            local ok, v = pcall(GetItemInfo, x[1])
+            if ok and type(v) == "string" and not (issecretvalue and issecretvalue(v)) then name = v end
+        end
+        return "right click " .. (name or "the quest item") .. " in your bags to accept the quest"
+    end
+    return "kill " .. (x[3] or "the named mob") .. " - it drops the quest"
+end
+
 -- assume (decision 466): quests treated as done already (the Quest Run plans to turn them in first)
-function NQ.CanTake(id, who, log, assume)
+-- hunt (decision 508): a quest that starts from an item a named mob drops counts as takeable
+function NQ.CanTake(id, who, log, assume, hunt)
     local function done(p) return everDone(p) or (assume ~= nil and assume[p] == true) end
     local d = data(id)
     if not d then return false end
     who = who or me()
     local flags = d[13]
-    if has(flags, 1) or has(flags, 2) or has(flags, 4) or has(flags, 8) then return false end
-    if not d[7] then return false end                                    -- no known quest giver
+    local drop = hunt and not d[7] and NQ.Drop(id)
+    if has(flags, 1) or has(flags, 2) or (has(flags, 4) and not drop) or has(flags, 8) then return false end
+    if not d[7] and not drop then return false end                       -- no known quest giver
     if (log and log[id]) or everDone(id) then return false end
     if (d[2] or 0) > who.level then return false end
     local ql = d[3] or 0
@@ -436,7 +481,7 @@ OMQ:RegisterMessage("OQ", function(f)
         table.sort(done)
         local who = me()
         local can = {}
-        for id in pairs(setOf(f[4])) do if NQ.CanTake(id, who, log) then can[#can + 1] = id end end
+        for id in pairs(setOf(f[4])) do if NQ.CanTake(id, who, log, nil, true) then can[#can + 1] = id end end
         table.sort(can)
         -- follow-up quests of the Quest Run (decision 466): could I take them once the quests of my log and the
         -- asked chain itself are turned in?
@@ -446,7 +491,7 @@ OMQ:RegisterMessage("OQ", function(f)
             local assume = {}
             for id in pairs(log) do assume[id] = true end
             for id in pairs(chain) do assume[id] = true end
-            for id in pairs(chain) do if NQ.CanTake(id, who, log, assume) then later[#later + 1] = id end end
+            for id in pairs(chain) do if NQ.CanTake(id, who, log, assume, true) then later[#later + 1] = id end end
             table.sort(later)
         end
         if mine then OMQ:Send("OQ", "r", f[2], mine.guid, idsOf(done, NQ.DONE_MAX), idsOf(can, NQ.RUN_ASK), idsOf(later, NQ.CHAIN_ASK)) end
