@@ -22,7 +22,7 @@ local GREY = { 0.6, 0.63, 0.68 }
 local W, ROWS, ROW_H = 380, 10, 30
 local HROWS = 4
 
-local win, title, sub, foot, rows, startBtn, backBtn, allBtn, hintHead, hintRows
+local win, title, sub, foot, rows, startBtn, backBtn, allBtn, hintHead, hintRows, moreBtn
 local hintCard
 local mode = "zones"                  -- zones | preview
 local showAll = false
@@ -148,6 +148,15 @@ local function buildWindow()
         r:Hide()
         hintRows[i] = r
     end
+    -- "... and N more quests": the mouse lists the rest (decision 513)
+    moreBtn = CreateFrame("Button", nil, win)
+    moreBtn:SetSize(W - 28, 16)
+    moreBtn.text = moreBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    moreBtn.text:SetPoint("LEFT", 0, 0)
+    moreBtn.text:SetJustifyH("LEFT")
+    moreBtn:SetScript("OnEnter", function(self) UI:MoreTip(self) end)
+    moreBtn:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    moreBtn:Hide()
     foot = win:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     foot:SetJustifyH("LEFT")
     foot:SetWidth(W - 28)
@@ -170,6 +179,7 @@ function UI:Render()
     UI._view = view
     for _, r in ipairs(rows) do r:Hide() end
     for _, r in ipairs(hintRows) do r:Hide(); r.hint = nil end
+    moreBtn:Hide(); moreBtn.rest = nil
     hintHead:Hide()
     startBtn:Hide(); backBtn:Hide(); allBtn:Hide(); foot:Hide()
     local height
@@ -221,7 +231,6 @@ function UI:Render()
         local info = plan.info or {}
         local lines = {}
         if #rws > 0 then lines[#lines + 1] = string.format("Way: about %d min on foot", minutes(plan.length)) end
-        if #rws > ROWS then lines[#lines + 1] = string.format("... and %d more quests", #rws - ROWS) end
         if info.logFull then
             lines[#lines + 1] = string.format("|cffffd040Your quest log has room for %d new quest%s - the next pick-up waits for a turn-in.|r",
                 info.free or 0, info.free == 1 and "" or "s")
@@ -238,6 +247,18 @@ function UI:Render()
         view.lines = lines
         view.hints = {}
         local y = -66 - n * ROW_H
+        view.more = nil
+        if #rws > ROWS then
+            local rest = {}
+            for i = ROWS + 1, #rws do rest[#rest + 1] = rws[i] end
+            moreBtn.rest = rest
+            moreBtn.text:SetText(string.format("... and %d more quests |cff9a9a9a(mouse over: the list)|r", #rest))
+            moreBtn:ClearAllPoints()
+            moreBtn:SetPoint("TOPLEFT", 14, y)
+            moreBtn:Show()
+            view.more = #rest
+            y = y - 18
+        end
         if hn > 0 then
             hintHead:ClearAllPoints()
             hintHead:SetPoint("TOPLEFT", 14, y)
@@ -267,7 +288,7 @@ function UI:Render()
         backBtn:SetText("Back")
         startBtn:ClearAllPoints(); startBtn:SetPoint("BOTTOMRIGHT", -14, 12); startBtn:Show()
         backBtn:ClearAllPoints(); backBtn:SetPoint("RIGHT", startBtn, "LEFT", -8, 0); backBtn:Show()
-        height = 60 + n * ROW_H + (hn > 0 and (18 + hn * ROW_H + 6) or 0) + 18 + #lines * 14 + 44
+        height = 60 + n * ROW_H + (view.more and 18 or 0) + (hn > 0 and (18 + hn * ROW_H + 6) or 0) + 18 + #lines * 14 + 44
     end
     win:SetSize(W, height)
 end
@@ -300,6 +321,28 @@ function UI:HintTip(r)
     end
     GameTooltip:Show()
     UI._tip = { qid = h.id, list = h.list }
+end
+
+-- the quests after the first ten, in the order of the way (numbers go on from 11)
+function UI:MoreTip(f)
+    local rest = f and f.rest
+    if not (rest and GameTooltip) then return end
+    local prep = A():Prep()
+    GameTooltip:SetOwner(f, "ANCHOR_RIGHT")
+    GameTooltip:SetText(string.format("%d more quests", #rest))
+    local shown, lines = {}, {}
+    for i, o in ipairs(rest) do
+        if i > 30 then
+            GameTooltip:AddLine(string.format("... and %d more", #rest - 30), 0.6, 0.6, 0.6)
+            break
+        end
+        local line = (ROWS + i) .. ". " .. R().Title(o.qid, prep and prep.titles) .. (o.elite and "  |cffff8040Elite|r" or "")
+        GameTooltip:AddDoubleLine(line, o.what, AREA[1], AREA[2], AREA[3], 0.8, 0.8, 0.8)
+        shown[#shown + 1] = o.qid
+        lines[#lines + 1] = line
+    end
+    GameTooltip:Show()
+    UI._moreTip, UI._moreLines = shown, lines
 end
 
 function UI:Plan(zone)
