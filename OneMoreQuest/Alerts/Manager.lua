@@ -663,6 +663,8 @@ function M:Render()
                     -- a click uses an item from the bags, e.g. the best drink (decision 219)
                     card:SetAttribute("type1", "item")
                     card:SetAttribute("item1", a.useItem)
+                    -- always on me, also with a friendly target selected (a scroll would go to the target)
+                    card:SetAttribute("unit1", "player")
                 else
                     card:SetAttribute("type1", nil)
                 end
