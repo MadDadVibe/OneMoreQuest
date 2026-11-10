@@ -489,6 +489,15 @@ T._Backfill = backfill
 -- above what the book knows adds the missing kills (no visit is known for them). The boss of a
 -- counter comes from its kill criterion (creature id), else from a known boss name in its title.
 local KILL_CREATURE = 0
+-- statistic id -> npc id (ids read on a Forever client; the criteria give no creature there).
+-- Counters without a known npc (new Forever dungeons, Scarlet Halls) are kept in b.bossStats only.
+local STAT_BOSS = {
+    [15027] = 11519, [63570] = 639, [15028] = 3654, [1092] = 4275, [15029] = 1716, [6137] = 4829,
+    [6139] = 4421, [6140] = 7800, [6141] = 7358, [1093] = 3977, [6142] = 2748, [1094] = 7267,
+    [6143] = 12201, [6144] = 5709, [1095] = 9019, [6146] = 11501, [6145] = 9568, [1096] = 10363,
+    [15030] = 1853, [15031] = 10440, [1098] = 10184,
+}
+T.STAT_BOSS = STAT_BOSS
 local function statNumber(v)
     if num(v) then return v end
     if not str(v) then return nil end
@@ -519,6 +528,7 @@ local function bossStats()
 end
 
 local function statBoss(b, s)
+    if STAT_BOSS[s.id] then return STAT_BOSS[s.id] end
     if s.ctype == KILL_CREATURE and s.asset and s.asset > 0 then return s.asset end
     local names = {}
     for _, e in ipairs(OMQ.Ledger and OMQ.Ledger.BOSSES or {}) do names[#names + 1] = { e[3], e[4] } end
@@ -537,6 +547,10 @@ local function statSync()
     if not list then note("stat.none"); return end
     local k = b.kills
     for _, s in ipairs(list) do
+        if s.v and s.v > 0 then
+            b.bossStats = b.bossStats or {}
+            b.bossStats[s.id] = { n = s.v, nm = s.name }
+        end
         local npc = statBoss(b, s)
         if not npc then
             note("stat.unknown")

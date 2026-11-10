@@ -277,10 +277,11 @@ one(T5, "strangers", "Strange Friends", "Group with 10 players who are not dads"
     return n
 end, 10)
 
--- Dungeons: one entry per final boss (wings count on their own)
+-- Dungeons: one entry per final boss (wings count on their own); the boss of the game's own statistics,
+-- e[6] = an older final boss that counts too (Ragefire: Taragaman before Forever named Bazzalan)
 local T6 = "dungeons"
 L.BOSSES = {
-    { 389, "Ragefire Chasm", 11520, "Taragaman the Hungerer", 16 }, { 36, "The Deadmines", 639, "Edwin VanCleef", 21 },
+    { 389, "Ragefire Chasm", 11519, "Bazzalan", 16, 11520 }, { 36, "The Deadmines", 639, "Edwin VanCleef", 21 },
     { 43, "Wailing Caverns", 3654, "Mutanus the Devourer", 22 }, { 33, "Shadowfang Keep", 4275, "Archmage Arugal", 26 },
     { 48, "Blackfathom Deeps", 4829, "Aku'mai", 28 }, { 34, "The Stockade", 1716, "Bazil Thredd", 28 },
     { 90, "Gnomeregan", 7800, "Mekgineer Thermaplugg", 33 }, { 47, "Razorfen Kraul", 4421, "Charlga Razorflank", 30 },
@@ -316,7 +317,7 @@ end, 3)
 for i, e in ipairs(L.BOSSES) do
     local npc = e[3]
     local c = one(T6, "dg" .. i, e[2], "Defeat " .. e[4], "INV_Misc_Bone_HumanSkull_01", e[5] <= 30 and 3 or 4, function(b)
-        return yes(b.kills.npc[npc])
+        return yes(b.kills.npc[npc] or (e[6] and b.kills.npc[e[6]]))
     end)
     c.npc = npc
 end
