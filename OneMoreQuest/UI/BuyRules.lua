@@ -5,6 +5,8 @@
 --     in hand): at most 2s per use - an oil has 5 uses, so 10s per oil.
 --   Scrolls: per category that fits the class, only the highest one under 3s.
 --   Elixirs: per stat that makes sense for the class, the highest one under 3s, its rank does not matter.
+--     WoW Forever's Elixir of Minor Force (+1 physical damage) for every class with physical damage (also hunters,
+--     feral druids and tanks) up to level 30.
 --   Health and mana potions: at most 5s; a weaker one when needed, but none that needs 20 levels less than mine.
 --   Buff food: the cheapest food with Well Fed (+5% XP on WoW Forever), and a food for the class under 3s.
 --     When the class food costs at most 50% more than the cheapest one, only the class food is shown.
@@ -21,6 +23,7 @@ R.CAP = { oil = 200, stone = 200, scroll = 300, elixir = 300, potion = 500, food
 R.USES = { oil = 5 }                  -- uses per item; everything else 1
 R.POTION_LEVELS = 20                  -- a potion that needs this many levels less than mine is not shown
 R.FOOD_CLOSE = 1.5                    -- the class food costs at most this times the cheapest food: only the class food
+R.LINE_MAX_LEVEL = { e_phys = 30 }    -- lines only worth buying up to this level (Elixir of Minor Force: +1 damage)
 
 -- what a class and role is: caster (spell damage), healer, melee (weapon stones), tank, strength, agility, mana
 function R.Profile(class, role)
@@ -30,6 +33,7 @@ function R.Profile(class, role)
     p.tank = role == "tank"
     p.melee = not p.healer and not p.caster and (class == "WARRIOR" or class == "ROGUE" or class == "PALADIN" or class == "SHAMAN")
     p.str = not p.healer and not p.caster and (class == "WARRIOR" or class == "PALADIN" or class == "SHAMAN" or (class == "DRUID" and p.tank))
+    p.phys = not p.healer and not p.caster and class ~= "MAGE" and class ~= "WARLOCK" and class ~= "PRIEST"
     p.agi = not p.healer and not p.caster and (class == "ROGUE" or class == "HUNTER" or class == "WARRIOR" or class == "DRUID" or class == "SHAMAN")
     p.mana = class ~= "WARRIOR" and class ~= "ROGUE"
     return p
@@ -51,6 +55,7 @@ function R.Groups(class, role, ctx)
     if p.mana then add("mana", "potion", 5) end
     if p.str then add("e_str", "elixir", 10) end
     if p.agi then add("e_agi", "elixir", 10) end
+    if p.phys then add("e_phys", "elixir", 10) end
     if p.caster or p.healer then add("e_int", "elixir", 10); add("e_spell", "elixir", 10) end
     if p.tank then add("e_def", "elixir", 10); add("e_fort", "elixir", 10) end
     add("s_sta", "scroll", 5); add("s_prot", "scroll", 5)
@@ -94,6 +99,8 @@ end
 function R.Candidates(g, lvl)
     local L = OMQ.BuyLines and OMQ.BuyLines[g.line]
     local out = {}
+    local max = R.LINE_MAX_LEVEL[g.line]
+    if max and lvl > max then return out end
     for i = #(L and L[2] or {}), 1, -1 do
         local it = L[2][i]
         local need = R.Need(g.line, it)
