@@ -321,6 +321,23 @@ for i, e in ipairs(L.BOSSES) do
     end)
     c.npc = npc
 end
+-- new Forever dungeons: no creature id is known, the game's boss statistics count (b.bossStats by statistic id)
+L.NEW_BOSSES = {
+    { "rol", "Ruins of Lordaeron", "Defeat Rath'mael", 24, { 63571 } },
+    { "hot", "Hall of Thanes", "Defeat Durgen Dirgehammer", 19, { 63573 } },
+    { "dal", "City of Dalaran", "Defeat the final boss of Dalaran", 34, { 63572, 63589 } },
+    { "alc", "Alcaz Island Prison", "Defeat Blazeroar", 53, { 63575 } },
+    { "shp", "Shaper's Terrace", "Defeat Nanaya", 60, { 63574 } },
+}
+for _, e in ipairs(L.NEW_BOSSES) do
+    one(T6, "dg" .. e[1], e[2], e[3], "INV_Misc_Bone_HumanSkull_01", e[4] <= 30 and 3 or 4, function(b)
+        for _, id in ipairs(e[5]) do
+            local st = b.bossStats and b.bossStats[id]
+            if st and (st.n or 0) > 0 then return 1 end
+        end
+        return 0
+    end)
+end
 
 -- PvP
 local T7 = "pvp"
