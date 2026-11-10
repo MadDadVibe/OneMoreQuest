@@ -243,7 +243,7 @@ function UI:Render()
         height = 60 + n * ROW_H + 64
     else
         local list = Q:List()
-        local done, all = Q:Counts()
+        local done, all = Q:ShownCounts()
         title:SetText(blue and ("Dungeon Run: " .. UI.DungeonName(Q:Run().dungeon))
             or area and ("Area Run: " .. (OMQ.AreaRun and OMQ.AreaRun.ZoneName(Q:Run().zone) or "?")) or "Quest Run")
         sub:SetText(string.format("%d of %d quests done", done, all))
@@ -599,7 +599,7 @@ function UI:RenderBar()
         return
     end
     anchor()
-    local done, all = Q:Counts()
+    local done, all = Q:ShownCounts()             -- Area Run: fulfilled counts already (516)
     local blue = isDungeon()
     local area = isArea()
     local col = blue and BLUE or area and AREA or GOLD

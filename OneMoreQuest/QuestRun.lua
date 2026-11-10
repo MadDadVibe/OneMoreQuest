@@ -683,6 +683,21 @@ function R:Counts()
     return done, all
 end
 
+-- what the bar shows (decision 516): an Area Run counts a quest already when its objectives are fulfilled, the run
+-- itself still ends with the turn-ins (R:Counts)
+function R:ShownCounts()
+    if not (run and run.kind == "area") then return R:Counts() end
+    local done, all = 0, 0
+    local nq = OMQ.NextQuest
+    for _, q in pairs(run.quests) do
+        if not q.dropped then
+            all = all + 1
+            if q.done or (nq and nq.IsComplete and nq.IsComplete(q.qid)) then done = done + 1 end
+        end
+    end
+    return done, all
+end
+
 function R:Current() return run and run.stops[1] or nil end
 
 local function newRun(id, leader)
