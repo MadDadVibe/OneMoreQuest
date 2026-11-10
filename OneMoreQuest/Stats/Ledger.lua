@@ -328,6 +328,7 @@ L.NEW_BOSSES = {
     { "dal", "City of Dalaran", "Defeat the final boss of Dalaran", 34, { 63572, 63589 } },
     { "alc", "Alcaz Island Prison", "Defeat Blazeroar", 53, { 63575 } },
     { "shp", "Shaper's Terrace", "Defeat Nanaya", 60, { 63574 } },
+    { "hyj", "Hyjal Summit", "Defeat the final boss of Hyjal Summit", 60, { 63580 } },
 }
 for _, e in ipairs(L.NEW_BOSSES) do
     one(T6, "dg" .. e[1], e[2], e[3], "INV_Misc_Bone_HumanSkull_01", e[4] <= 30 and 3 or 4, function(b)
