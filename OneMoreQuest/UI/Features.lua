@@ -52,6 +52,7 @@ FE.SECTIONS = {
         "Buy drinks, and a reminder to drink when your mana is low; mages conjure water with one click instead",
         "Profession training and the tool a profession needs",
         "Find Minerals and Find Herbs switched on with one click",
+        "The bag key (B) opens the reagent bag together with your bags, like Shift-B (/omq qol bags)",
         "Pet basics: hunters call, revive and feed their pet, warlocks summon one of their last three demons",
         "Unspent talent points, opens the talent tree",
         "Low ammo",

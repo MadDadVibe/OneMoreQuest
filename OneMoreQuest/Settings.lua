@@ -219,6 +219,11 @@ local function allSections()
             { type = "check", label = "Follow group members on flights",
               tip = "If a member flies somewhere, your flight master picks the same destination. Hold Shift when you talk to the flight master to not follow this time.",
               get = qolGet("flight"), set = qolSet("flight") },
+            -- decision 515
+            { type = "check", label = "Bag key opens the reagent bag too",
+              tip = "The bag key (B) opens all bags together with the reagent bag, like Shift-B. Switched off, B opens only the normal bags again.",
+              get = function() return OMQ.db.options.qol.reagentBag ~= false end,
+              set = function(v) OMQ.db.options.qol.reagentBag = v and true or false; if OMQ.BagKey then OMQ.BagKey.Apply() end end },
             -- decision 203: the role for the item score, as spec icons
             { type = "choice", label = "Preferred Role", names = true,
               tip = "Your role for the item score the other dads see on Alt. The stats of an item are weighted for your class and this role. Damage is the default.",

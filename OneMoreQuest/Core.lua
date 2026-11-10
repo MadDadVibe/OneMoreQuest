@@ -5,7 +5,7 @@ OMQ = OMQ or {}
 _G.OneMoreQuest = OMQ
 
 OMQ.name = "One More Quest"
-OMQ.version = "1.3.124"
+OMQ.version = "1.3.125"
 
 -- the last bag to look into for what I carry: the reagent bag too, if the client has one (decision 272)
 function OMQ.LastBag()
@@ -33,7 +33,7 @@ local DEFAULTS = {
         sound = false,               -- soft sounds, off by default (decision 185)
         master = { alerts = true, group = true, guidance = true, vendor = true, chat = true },
         chatWords = "",
-        qol = { repair = true, junk = true, water = true, ammo = true, flight = true, openmail = true, closemail = false },
+        qol = { repair = true, junk = true, water = true, ammo = true, flight = true, openmail = true, closemail = false, reagentBag = true },
     },
     alerts = { enabled = {}, lenientRank = false },
     arrow = { threshold = 120, enabled = true, style = 1 },     -- style: decision 192

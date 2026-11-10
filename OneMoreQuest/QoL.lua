@@ -435,8 +435,14 @@ OMQ:RegisterCommand("qol", function(arg)
         OMQ:Print("qol " .. part .. ": " .. (o[part] and "on" or "off"))
         return
     end
-    OMQ:Print(string.format("repair %s, sell grey items %s, buy water %s, buy ammo %s, follow group flights %s",
+    if part == "bags" then
+        o.reagentBag = not (o.reagentBag ~= false)
+        if OMQ.BagKey then OMQ.BagKey.Apply() end
+        OMQ:Print("qol bags (bag key opens the reagent bag too): " .. (o.reagentBag and "on" or "off"))
+        return
+    end
+    OMQ:Print(string.format("repair %s, sell grey items %s, buy water %s, buy ammo %s, follow group flights %s, bag key opens the reagent bag %s",
         on("repair") and "on" or "off", on("junk") and "on" or "off", on("water") and "on" or "off", on("ammo") and "on" or "off",
-        on("flight") and "on" or "off"))
-    print("  /omq qol repair | junk | water | ammo | flight  (toggle)")
-end, "vendor helpers: auto repair, sell grey items, buy water, buy ammo, follow group flights")
+        on("flight") and "on" or "off", o.reagentBag ~= false and "on" or "off"))
+    print("  /omq qol repair | junk | water | ammo | flight | bags  (toggle)")
+end, "vendor helpers: auto repair, sell grey items, buy water, buy ammo, follow group flights, reagent bag with the bag key")

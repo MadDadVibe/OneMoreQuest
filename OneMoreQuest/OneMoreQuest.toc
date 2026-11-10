@@ -2,7 +2,7 @@
 ## Title: One More Quest
 ## Notes: Group stats, distance arrow, alerts and quest sync for a leveling party. Type /omq
 ## Author: MadDadVibe
-## Version: 1.3.124
+## Version: 1.3.125
 ## SavedVariables: OMQDB
 
 Core.lua
@@ -96,6 +96,7 @@ UI\Options.lua
 Vote.lua
 Titles.lua
 QoL.lua
+BagKey.lua
 QuestAuto.lua
 Flight.lua
 Score.lua
