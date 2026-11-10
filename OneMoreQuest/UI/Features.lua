@@ -39,6 +39,7 @@ FE.SECTIONS = {
         "Arrow to the nearest dad from the icon bar, when you fell behind",
         "Arrows to class and profession trainers, vendors, repair, flight masters, mailboxes, inns, banks, auction houses, map pins, the meeting point and your corpse",
         "Places the dads visit are learned and shared, also in the new Forever zones",
+        "Ore veins and herbs light up when you come near them, for miners and herbalists: a glow, sparkles or a beam of light",
     } },
     { "Alert cards", {
         "Train new skills, with what is new and what it costs, also right after a level up",

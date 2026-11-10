@@ -267,6 +267,12 @@ local function allSections()
               set = function(v) if OMQ.Arrow then OMQ.Arrow:SetStyle(v) end end },
             { type = "button", label = "Recalibrate arrow", done = "Run in a few directions",
               click = function() OMQ:RunCommand("arrow", "recalibrate") end },
+            -- decision 495: the light on the nearest ore vein or herb
+            { type = "segment", label = "Ore and herb glow",
+              tip = "Miners and herbalists: the nearest ore vein or herb (up to 15 yards) lights up - orange for ore, green for herbs, gray when your skill is too low. Glow: a pulsing ring on the ground. Sparkle: rising stars. Beam: a column of light. Off: the game's own settings stay untouched. /omq glow test shows a sample.",
+              options = (OMQ.NodeGlow and OMQ.NodeGlow.LABELS) or { "Glow", "Sparkle", "Beam", "Off" },
+              get = function() return OMQ.NodeGlow and OMQ.NodeGlow.StyleIndex() or 1 end,
+              set = function(i) if OMQ.NodeGlow then OMQ.NodeGlow.SetStyle(i) end end },
         } },
         { title = "AUTOMATIONS", master = "vendor", col = 2, items = {
             { type = "check", label = "Repair gear automatically", get = qolGet("repair"), set = qolSet("repair") },
