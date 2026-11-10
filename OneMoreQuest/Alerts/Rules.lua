@@ -321,6 +321,45 @@ function M.NewAtTrainer(level, class)
     return out, total
 end
 
+-- What the trainer already offered me (fix 504): every spell on the list when I opened my class trainer
+-- is remembered per character, and a later card leaves it out (you do not always learn everything).
+-- A character without a record yet counts everything from before his current level band as offered.
+local function trainSeen(level)
+    local guid = UnitGUID("player")
+    if not guid then return nil end
+    local db = OMQ.db.alerts
+    db.trainSeen = db.trainSeen or {}
+    local seen = db.trainSeen[guid]
+    if not seen then
+        local list = M.NewAtTrainer(level)
+        if not list then return nil end
+        seen = {}
+        local b = band(level)
+        for _, c in ipairs(list) do if c.level < b then seen[c.id] = true end end
+        db.trainSeen[guid] = seen
+    end
+    return seen
+end
+function M.MarkTrainerSeen()
+    local level = UnitLevel("player") or 1
+    local seen = trainSeen(level)
+    local list = seen and M.NewAtTrainer(level)
+    for _, c in ipairs(list or {}) do seen[c.id] = true end
+end
+-- the trainer list without what an earlier visit already offered: list and total cost
+function M.NewSinceTrainer(level)
+    level = level or UnitLevel("player") or 1
+    local list, total = M.NewAtTrainer(level)
+    if not list then return nil end
+    local seen = trainSeen(level)
+    if not seen then return list, total end
+    local out, sum = {}, 0
+    for _, c in ipairs(list) do
+        if not seen[c.id] then out[#out + 1] = c; sum = sum + c.cost end
+    end
+    return out, sum
+end
+
 local function money(c)
     c = math.floor(c or 0)
     local g, s_, k = math.floor(c / 10000), math.floor(c / 100) % 100, c % 100
@@ -382,7 +421,7 @@ M:Register({
         local even = band(level)
         local guid = UnitGUID("player")
         if even < 2 or trainDone(guid, even) then return nil end
-        local list, total = M.NewAtTrainer(level)
+        local list, total = M.NewSinceTrainer(level)
         if list and #list == 0 then return nil end          -- nothing new at the trainer
         local txt, tip
         if list then txt, tip = M.TrainerText(list, total) end
@@ -483,6 +522,7 @@ trainerFrame:SetScript("OnEvent", function()
         if d and d > 30 then return end      -- a weapon master or another trainer, not my class trainer
     end
     markTrained(band(UnitLevel("player")))
+    M.MarkTrainerSeen()
     if OMQ.Alerts then OMQ.Alerts:Evaluate() end
 end)
 
