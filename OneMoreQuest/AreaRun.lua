@@ -262,6 +262,10 @@ end
 -- free = room in the log now; a pick up takes a place, a turn-in gives one back
 function A.Valid(stops, free)
     if not R()._valid(stops) then return false end
+    local rest = false                   -- the pick ups outside the zone I chose come first (decision 510)
+    for _, s in ipairs(stops) do
+        if s.early then if rest then return false end else rest = true end
+    end
     if not free then return true end
     local n = free
     for _, s in ipairs(stops) do
@@ -273,7 +277,16 @@ end
 
 local function clock() return debugprofilestop and debugprofilestop() or nil end
 
--- the first order: the nearest stop that may come now (turn-ins outside the zone last), then the improvement
+-- a pick up outside the zone of a quest I chose to add ("Pick up first", the hint card) comes before the zone
+function A.MarkEarly(stops, zone, allow)
+    for _, s in ipairs(stops or {}) do
+        s.early = (s.kind == "p" and allow and allow[s.qid] and s.place and s.place.map and s.place.map ~= zone) and true or nil
+    end
+    return stops
+end
+
+-- the first order: the pick ups I chose outside the zone first, then the nearest stop that may come now (turn-ins
+-- outside the zone last), then the improvement
 function A.Order(pos, stops, free)
     local left, out = {}, {}
     for _, s in ipairs(stops) do left[#left + 1] = s end
@@ -304,16 +317,18 @@ function A.Order(pos, stops, free)
         return v
     end
     while #left > 0 do
-        local bi, bd, li, ld
+        local bi, bd, li, ld, ei, ed
         for i, s in ipairs(left) do
             if may(s) then
                 local dd = d(cur, s.place)
-                if s.late then
+                if s.early then
+                    if not ed or dd < ed then ei, ed = i, dd end
+                elseif s.late then
                     if not ld or dd < ld then li, ld = i, dd end
                 elseif not bd or dd < bd then bi, bd = i, dd end
             end
         end
-        bi = bi or li
+        bi = ei or bi or li
         if not bi then for i = 1, #left do out[#out + 1] = left[i] end break end   -- a loop in the data: keep the rest
         local s = table.remove(left, bi)
         out[#out + 1] = s
@@ -392,6 +407,8 @@ end
 -- the open stops of a running Area Run sorted again (QuestRun's clock calls it)
 function A.Resort(pos, stops)
     local free = R().FreeSlots((R().MyLog()))
+    local r = R():Run()
+    if r and r.kind == "area" then A.MarkEarly(stops, r.zone, r.allow) end
     return A.Improve(pos, stops, free, 1)
 end
 
@@ -415,9 +432,72 @@ local function takeable(ctx, id, depth)
     return nil
 end
 
+-- the same quest at several givers (exclusive, e.g. The Ashenvale Hunt in Orgrimmar, Thunder Bluff and the Crossroads):
+-- one hint, at the giver nearest to me; none when one of them is in the run, in my log or done (decision 510)
+local function sameQuest(id)
+    local d = data(id)
+    local out = { id }
+    for _, x in ipairs(d and d[12] or {}) do
+        local dx = data(x)
+        if dx and dx[1] == d[1] then out[#out + 1] = x end
+    end
+    return out
+end
+-- opens = { [outside quest] = { [zone quest] = true } } -> hints sorted: most quests opened, then the nearest giver
+function A.Hints(opens, ctx, pos)
+    local taken = {}
+    for id in pairs(ctx.quests) do taken[id] = true end
+    for id in pairs(ctx.log) do taken[id] = true end
+    for id in pairs(ctx.allow or {}) do taken[id] = true end
+    local groups, seen = {}, {}
+    local ids = {}
+    for id in pairs(opens) do ids[#ids + 1] = id end
+    table.sort(ids)
+    for _, id in ipairs(ids) do
+        if not seen[id] then
+            local same = sameQuest(id)
+            local blocked, set, best, bd, bmap = false, {}, nil, nil, nil
+            for _, x in ipairs(same) do
+                seen[x] = true
+                if taken[x] or ever(x) then blocked = true end
+                for q in pairs(opens[x] or {}) do set[q] = true end
+            end
+            for _, x in ipairs(same) do
+                if (opens[x] or x == id) and not blocked then
+                    local dx = data(x)
+                    for _, g in ipairs(dx and dx[7] or {}) do
+                        local p = placeOf(g)
+                        if p then
+                            local dd = pos and R().Dist(pos, p) or 0
+                            if not bd or dd < bd then best, bd, bmap = { id = x, place = p }, dd, g[1] end
+                        end
+                    end
+                end
+            end
+            if best then
+                local itself = false
+                for _, x in ipairs(same) do if set[x] then set[x] = nil; itself = true end end
+                if itself then set[best.id] = true end
+                local list = {}
+                for q in pairs(set) do list[#list + 1] = q end
+                table.sort(list)
+                local n = #list
+                groups[#groups + 1] = { id = best.id, map = bmap, place = best.place, opens = n, list = list,
+                                        title = data(best.id)[1], dist = bd or 0 }
+            end
+        end
+    end
+    table.sort(groups, function(x, y)
+        if x.opens ~= y.opens then return x.opens > y.opens end
+        if math.abs(x.dist - y.dist) > 1 then return x.dist < y.dist end
+        return x.id < y.id
+    end)
+    return groups
+end
+
 -- { stops, quests = { entry }, length, info, hints, kind = "area", zone, n }
 -- info = { grey, later, unknown, inLog, new, free, logFull, skipped = { id } }
--- hint = { id, map, place, opens = number of quests of the zone it opens, title }
+-- hint = { id, map, place, opens = number of quests of the zone it opens, list = { those quests }, title, dist }
 function A.Build(zone, pos, log, who, skip, allow, members, noOrder)
     who = who or NQ().Me()
     skip, allow, log = skip or {}, allow or {}, log or {}
@@ -469,30 +549,22 @@ function A.Build(zone, pos, log, who, skip, allow, members, noOrder)
     table.sort(allowed)
     for _, id in ipairs(allowed) do if not log[id] then want(id) end end
     -- hints: quests outside the zone that open quests of the zone, or whose objectives are in the zone
-    local opens = {}
-    local function hint(outside, n)
+    local opens = {}             -- outside quest -> { zone quest = true }
+    local function hint(outside, set)
         local id = takeable(ctx, outside)
-        if id and not skip[id] and not allow[id] then opens[id] = (opens[id] or 0) + n end
+        if id and not skip[id] and not allow[id] then
+            opens[id] = opens[id] or {}
+            for q in pairs(set) do opens[id][q] = true end
+        end
     end
-    for b, set in pairs(blocked) do
-        local n = 0
-        for _ in pairs(set) do n = n + 1 end
-        hint(b, n)
-    end
+    for b, set in pairs(blocked) do hint(b, set) end
     for id, d in pairs(OMQ.QuestPlaces or {}) do
         if d[7] and not inZone(d[7], zone) and (inZone(d[9], zone) or inZone(d[8], zone)) and not log[id] and not ctx.quests[id] then
             local ql = d[3] or 0
-            if not (ql > 0 and ql < grey) and NQ().CanTake(id, who, log) then hint(id, 1) end   -- the quest itself counts
+            if not (ql > 0 and ql < grey) and NQ().CanTake(id, who, log) then hint(id, { [id] = true }) end   -- the quest itself counts
         end
     end
-    local hints = {}
-    for id, n in pairs(opens) do
-        local d = data(id)
-        local g = d and d[7] and d[7][1]
-        local p = g and placeOf(g)
-        if p then hints[#hints + 1] = { id = id, map = g[1], place = p, opens = n, title = d[1] } end
-    end
-    table.sort(hints, function(x, y) if x.opens ~= y.opens then return x.opens > y.opens end return x.id < y.id end)
+    local hints = A.Hints(opens, ctx, pos)
     for id in pairs(ctx.later) do if not ctx.quests[id] then info.later = info.later + 1 end end
     -- in a group: a quest of my log some dad does not carry gets a pick up stop at its giver
     for _, u in ipairs(members or {}) do
@@ -514,6 +586,7 @@ function A.Build(zone, pos, log, who, skip, allow, members, noOrder)
     local free = R().FreeSlots(log)
     info.free = free
     info.logFull = info.new > free
+    A.MarkEarly(ctx.stops, zone, allow)
     local stops = noOrder and ctx.stops or A.Order(pos, ctx.stops, free)   -- a refresh sorts in the run
     local list = {}
     for _, id in ipairs(ctx.order) do list[#list + 1] = ctx.quests[id] end
@@ -597,6 +670,15 @@ function A:SkipPlanned(qid)
     return prep.plan
 end
 
+-- the preview's "Pick up first": a quest outside the zone joins the plan, its pick up comes first (decision 510)
+function A:AllowPlanned(qid)
+    if not prep then return nil end
+    prep.allow[qid] = true
+    prep.skip[qid] = nil
+    prep.plan = A.Build(prep.zone, prep.pos, prep.log, nil, prep.skip, prep.allow, prep.members)
+    return prep.plan
+end
+
 -- the preview rows: one per quest, in the order of the way
 function A.Rows(plan)
     local rows, first = {}, {}
@@ -604,6 +686,8 @@ function A.Rows(plan)
     for _, e in ipairs(plan and plan.quests or {}) do
         local what
         if e.follow then what = "in your log - the game's map point"
+        elseif e.pick and plan.zone and e.pick.map and e.pick.map ~= plan.zone then
+            what = "pick it up first in " .. A.ZoneName(e.pick.map)
         elseif e.pick and #e.needs > 0 then what = "follow-up of " .. R().Title(e.needs[#e.needs])
         elseif e.pick then what = "pick it up"
         elseif e.obj then what = "in your log"

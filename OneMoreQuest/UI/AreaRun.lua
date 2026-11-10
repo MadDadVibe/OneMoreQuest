@@ -3,6 +3,9 @@
 --   many quests they have for me ("All zones" shows the rest). A click on a zone plans it: the preview lists the
 --   quests in the order of the way with Skip, the way in minutes, what is left out (grey, higher level, quests
 --   that start outside the zone) and whether the quest log is too small; Start and Back.
+--   "Pick up first" (decision 510): up to 4 quests outside the zone that open quests of the zone (most first, the same
+--   quest at several givers once, at the nearest), with the place and how many they open; the mouse shows which.
+--   "Add" puts it into the plan, its pick up comes first.
 --   While an Area Run goes the icon opens the run's list (the Quest Run window, green).
 --   The hint card: in the zone or city of a quest giver whose quest opens quests of the run's zone: the quest, how
 --   many quests it opens, "Add" (joins the run, the main arrow to the giver) and "No".
@@ -17,8 +20,9 @@ local AREA = { 0.33, 0.84, 0.40 }
 local TAN = { 0.72, 0.63, 0.42 }
 local GREY = { 0.6, 0.63, 0.68 }
 local W, ROWS, ROW_H = 380, 10, 30
+local HROWS = 4
 
-local win, title, sub, foot, rows, startBtn, backBtn, allBtn
+local win, title, sub, foot, rows, startBtn, backBtn, allBtn, hintHead, hintRows
 local hintCard
 local mode = "zones"                  -- zones | preview
 local showAll = false
@@ -112,6 +116,38 @@ local function buildWindow()
         r:Hide()
         rows[i] = r
     end
+    hintHead = win:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    hintHead:SetJustifyH("LEFT")
+    hintHead:SetWidth(W - 28)
+    hintHead:SetTextColor(TAN[1], TAN[2], TAN[3])
+    hintHead:SetText("Pick up first (outside the zone):")
+    hintHead:Hide()
+    hintRows = {}
+    for i = 1, HROWS do
+        local r = CreateFrame("Button", nil, win)
+        r:SetSize(W - 28, ROW_H)
+        r.hl = r:CreateTexture(nil, "BACKGROUND")
+        r.hl:SetAllPoints()
+        r.hl:SetColorTexture(TAN[1], TAN[2], TAN[3], 0.12)
+        r.hl:Hide()
+        r.name = r:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        r.name:SetPoint("TOPLEFT", 0, -2)
+        r.name:SetWidth(W - 110)
+        r.name:SetJustifyH("LEFT")
+        if r.name.SetWordWrap then r.name:SetWordWrap(false) end
+        r.what = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.what:SetPoint("TOPLEFT", 14, -16)
+        r.what:SetWidth(W - 124)
+        r.what:SetJustifyH("LEFT")
+        if r.what.SetWordWrap then r.what:SetWordWrap(false) end
+        r.btn = button(r, "Add", 64, 20)
+        r.btn:SetPoint("RIGHT", 0, 0)
+        r.btn:SetScript("OnClick", function(self) UI:HintAdd(self:GetParent()) end)
+        r:SetScript("OnEnter", function(self) self.hl:Show(); UI:HintTip(self) end)
+        r:SetScript("OnLeave", function(self) self.hl:Hide(); if GameTooltip then GameTooltip:Hide() end end)
+        r:Hide()
+        hintRows[i] = r
+    end
     foot = win:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     foot:SetJustifyH("LEFT")
     foot:SetWidth(W - 28)
@@ -133,6 +169,8 @@ function UI:Render()
     local view = { mode = mode, rows = {} }
     UI._view = view
     for _, r in ipairs(rows) do r:Hide() end
+    for _, r in ipairs(hintRows) do r:Hide(); r.hint = nil end
+    hintHead:Hide()
     startBtn:Hide(); backBtn:Hide(); allBtn:Hide(); foot:Hide()
     local height
     if mode == "zones" then
@@ -190,20 +228,46 @@ function UI:Render()
         end
         if (info.later or 0) > 0 then lines[#lines + 1] = string.format("Higher level: %d quest%s, they join when you level up", info.later, info.later == 1 and "" or "s") end
         if (info.grey or 0) > 0 then lines[#lines + 1] = string.format("Grey, left out: %d", info.grey) end
-        if #(plan.hints or {}) > 0 then
-            lines[#lines + 1] = string.format("Start outside the zone: %d - a card tells you when you are there", #plan.hints)
+        local hints = plan.hints or {}
+        local hn = math.min(#hints, HROWS)
+        if #hints > HROWS then
+            local more = #hints - HROWS
+            lines[#lines + 1] = string.format("%d more quest%s outside the zone - a card tells you when you are there", more, more == 1 and "" or "s")
         end
         if #(info.skipped or {}) > 0 then lines[#lines + 1] = string.format("Skipped: %d", #info.skipped) end
         view.lines = lines
+        view.hints = {}
+        local y = -66 - n * ROW_H
+        if hn > 0 then
+            hintHead:ClearAllPoints()
+            hintHead:SetPoint("TOPLEFT", 14, y)
+            hintHead:Show()
+            y = y - 18
+            for i = 1, hn do
+                local h, r = hints[i], hintRows[i]
+                r.hint = h
+                r:ClearAllPoints()
+                r:SetPoint("TOPLEFT", 14, y - (i - 1) * ROW_H)
+                r.name:SetText(R().Title(h.id, prep.titles))
+                r.name:SetTextColor(TAN[1], TAN[2], TAN[3])
+                local what = string.format("in %s - opens %d quest%s here", A().ZoneName(h.map), h.opens, h.opens == 1 and "" or "s")
+                r.what:SetText(what)
+                enable(r.btn, true)
+                r.btn:Show()
+                r:Show()
+                view.hints[i] = { qid = h.id, what = what, opens = h.opens, map = h.map }
+            end
+            y = y - hn * ROW_H - 6
+        end
         foot:ClearAllPoints()
-        foot:SetPoint("TOPLEFT", 14, -66 - n * ROW_H)
+        foot:SetPoint("TOPLEFT", 14, y)
         foot:SetText(table.concat(lines, "\n"))
         foot:Show()
         startBtn:SetText("Start"); enable(startBtn, #rws > 0)
         backBtn:SetText("Back")
         startBtn:ClearAllPoints(); startBtn:SetPoint("BOTTOMRIGHT", -14, 12); startBtn:Show()
         backBtn:ClearAllPoints(); backBtn:SetPoint("RIGHT", startBtn, "LEFT", -8, 0); backBtn:Show()
-        height = 60 + n * ROW_H + 18 + #lines * 14 + 44
+        height = 60 + n * ROW_H + (hn > 0 and (18 + hn * ROW_H + 6) or 0) + 18 + #lines * 14 + 44
     end
     win:SetSize(W, height)
 end
@@ -215,6 +279,27 @@ function UI:RowClick(r)
         A():SkipPlanned(r.qid)
         self:Render()
     end
+end
+
+-- "Pick up first": Add puts the quest into the plan (its pick up first); the mouse lists what it opens
+function UI:HintAdd(r)
+    if mode ~= "preview" or not (r and r.hint) then return end
+    A():AllowPlanned(r.hint.id)
+    self:Render()
+end
+function UI:HintTip(r)
+    local h = r and r.hint
+    if not (h and GameTooltip) then return end
+    local prep = A():Prep()
+    GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+    GameTooltip:SetText(R().Title(h.id, prep and prep.titles))
+    GameTooltip:AddLine(string.format("Giver in %s. Opens in %s:", A().ZoneName(h.map), prep and A().ZoneName(prep.zone) or "the zone"), 0.8, 0.8, 0.8)
+    for i, q in ipairs(h.list or {}) do
+        if i > 10 then GameTooltip:AddLine(string.format("... and %d more", #h.list - 10), 0.6, 0.6, 0.6); break end
+        GameTooltip:AddLine("- " .. R().Title(q, prep and prep.titles), 1, 1, 1)
+    end
+    GameTooltip:Show()
+    UI._tip = { qid = h.id, list = h.list }
 end
 
 function UI:Plan(zone)
