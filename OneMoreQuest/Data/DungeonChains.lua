@@ -576,7 +576,7 @@ local EXTRA = {
     { id = 4121, level = 58, name = "Precarious Predicament", faction = "H" },
   },
   dm = {
-    { id = 1806, level = 22, name = "The Test of Righteousness", faction = "A", class = 2 },
+    { id = 1654, level = 22, name = "The Test of Righteousness", faction = "A", class = 2 },
     { id = 95140, level = 14, faction = "H", class = 2 },
   },
   dme = {
@@ -716,7 +716,7 @@ local EXTRA = {
     { id = 8996, level = 60, name = "Return to Bodley" },
   },
   sfk = {
-    { id = 1806, level = 22, name = "The Test of Righteousness", faction = "A", class = 2 },
+    { id = 1654, level = 22, name = "The Test of Righteousness", faction = "A", class = 2 },
     { id = 95140, level = 18, faction = "H", class = 2 },
     { id = 1740, level = 25, name = "The Orb of Soran'ruk", class = 9 },
     { id = 78307, level = 18, class = 4 },
@@ -828,11 +828,13 @@ local EXTRA = {
     { id = 4764, level = 60, name = "Doomrigger's Clasp", faction = "A" },
     { id = 4765, level = 60, name = "Delivery to Ridgewell", faction = "A" },
     { id = 6502, level = 60, name = "Drakefire Amulet", faction = "A" },
+    { id = 4981, level = 59, name = "Operative Bijou", faction = "H" },
     { id = 4983, level = 59, name = "Bijou's Reconnaissance Report", faction = "H" },
     { id = 4974, level = 60, name = "For The Horde!", faction = "H" },
     { id = 6569, level = 60, name = "Oculus Illusions", faction = "H" },
     { id = 6602, level = 60, name = "Blood of the Black Dragon Champion", faction = "H" },
     { id = 4769, level = 60, name = "Vivian Lagrave and the Darkstone Tablet", faction = "H" },
+    { id = 4768, level = 60, name = "The Darkstone Tablet", faction = "H" },
     { id = 8970, level = 60, name = "I See Alcaz Island In Your Future..." },
     { id = 8996, level = 60, name = "Return to Bodley" },
   },
