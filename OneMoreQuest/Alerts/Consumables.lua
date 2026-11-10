@@ -197,6 +197,45 @@ function C.BetterBuff(id, auras)
     return nil
 end
 
+-- elixirs of one buy line do not stack (Minor, Lesser, Arcane and Greater Arcane Elixir, seen in game, fix 503):
+-- one card for the strongest one I can use, none while the buff of any of them is on
+C.ONE_PER_LINE = { e_spell = true }
+local lineOf
+local function bagSet()
+    local have, Ct = {}, C_Container
+    for bag = 0, OMQ.LastBag() do
+        for slot = 1, (Ct and Ct.GetContainerNumSlots and Ct.GetContainerNumSlots(bag)) or 0 do
+            local it = Ct.GetContainerItemInfo(bag, slot)
+            if it and it.itemID then have[it.itemID] = true end
+        end
+    end
+    return have
+end
+-- why this item gets no card because of another one of its line, or nil
+function C.SameLine(id, auras, have, level)
+    if not lineOf then
+        lineOf = {}
+        for key in pairs(C.ONE_PER_LINE) do
+            local L = OMQ.BuyLines and OMQ.BuyLines[key]
+            for i, it in ipairs(L and L[2] or {}) do lineOf[it[1]] = { key, i } end
+        end
+    end
+    local me = lineOf[id]
+    if not me then return nil end
+    local L = OMQ.BuyLines[me[1]]
+    for j, it in ipairs(L[2]) do
+        local other = it[1]
+        if other ~= id then
+            local name = info(other) or "a stronger elixir"
+            if j > me[2] and have and have[other] and (it[2] or 0) <= (level or 1) then
+                return name .. " is stronger (does not stack)"
+            end
+            if C.Active(other, L[1], auras) == true then return name .. " is on (does not stack)" end
+        end
+    end
+    return nil
+end
+
 function C.Check()
     local mode = C.Mode()
     if mode == "never" or not OMQ.BuyKnown then return nil end
@@ -213,6 +252,7 @@ function C.Check()
     local auras = auraNames()
     local level = UnitLevel and tonumber((UnitLevel("player"))) or 1
     local out, seen, spells = {}, {}, {}
+    local have = bagSet()
     local prefix = dungeon and "consd:" or "cons:"
     for bag = 0, OMQ.LastBag() do
         for slot = 1, Ct.GetContainerNumSlots(bag) or 0 do
@@ -226,7 +266,8 @@ function C.Check()
                 local fits = kind ~= "stone" or not OMQ.AuctionBuy or not OMQ.AuctionBuy.StoneFits
                     or OMQ.AuctionBuy.StoneFits(id) ~= false                      -- weightstone not on a blade (decision 426)
                 if name and fits and (minLevel or 0) <= level and s and not spells[s] and C.Active(id, kind, auras) == false
-                    and not ((kind == "scroll" or kind == "elixir") and C.BetterBuff(id, auras)) then
+                    and not ((kind == "scroll" or kind == "elixir") and C.BetterBuff(id, auras))
+                    and not C.SameLine(id, auras, have, level) then
                     spells[s] = true
                     local wpn = (kind == "stone" or kind == "oil") and C.WeaponNeed(id, kind) or nil
                     local how = "left click uses it"
@@ -266,6 +307,7 @@ function C.Explain()
     local level = UnitLevel and tonumber((UnitLevel("player"))) or 1
     local kindOf = OMQ.BuyKind or function(i) return OMQ.BuyKnown and OMQ.BuyKnown[i] end
     local seen = {}
+    local have = bagSet()
     for bag = 0, OMQ.LastBag() do
         for slot = 1, (Ct and Ct.GetContainerNumSlots and Ct.GetContainerNumSlots(bag)) or 0 do
             local it = Ct.GetContainerItemInfo(bag, slot)
@@ -284,6 +326,8 @@ function C.Explain()
                 elseif not s then why = "its buff spell is not known yet"
                 elseif (kind == "scroll" or kind == "elixir") and C.BetterBuff(id, auras) then
                     why = "not needed: " .. C.BetterBuff(id, auras) .. " is on (does not stack)"
+                elseif C.SameLine(id, auras, have, level) then
+                    why = "not needed: " .. C.SameLine(id, auras, have, level)
                 else
                     local a = C.Active(id, kind, auras)
                     why = (a == true and "buff is on") or (a == false and "buff missing -> reminder") or "buff cannot be read"
