@@ -281,6 +281,8 @@ local function record(victim, mine, killerIsMe)
         return
     end
 
+    local done = dungeon and id and dungeon.boss and dungeon.boss[id]
+    if done and done.by then note("kill.bossdup"); return end
     local k = b.kills
     k.total = k.total + 1
     if mine then k.mine = k.mine + 1 end
@@ -347,6 +349,141 @@ local function record(victim, mine, killerIsMe)
     note("kill")
 end
 T._Record = record
+
+----------------------------------------------------------------------
+-- Boss kills inside dungeons
+-- Inside an instance PARTY_KILL carries secret GUIDs (unit identity is restricted), so no kill in a
+-- dungeon reaches record(). A boss counts from the game's encounter end (creature ids of the boss
+-- units), else from opening its corpse. Older dungeon visits are filled once from looted boss items
+-- and from quests that need the final boss.
+----------------------------------------------------------------------
+local function dadsIn(guids)
+    local dads = 1
+    for g in pairs(guids or {}) do if OMQ.users and OMQ.users[g] then dads = dads + 1 end end
+    return dads
+end
+
+-- count one boss kill; visit = the dungeon visit it belongs to (nil: only when the boss is still unknown)
+local function bossKill(b, id, name, at, visit, dads, how)
+    if not (b and num(id) and id > 0) then return false end
+    local k = b.kills
+    if visit then
+        visit.boss = visit.boss or {}
+        if visit.boss[id] then return false end
+        visit.boss[id] = { t = at, dads = dads, by = how }
+    elseif k.npc[id] then
+        return false
+    end
+    k.total = k.total + 1
+    incPair(k.rank, "boss", false)
+    local n = k.npc[id]
+    if not n then
+        n = { n = 0, m = 0, g = 0, dy = 0, t = at, l = myLevel() }
+        k.npc[id] = n
+    end
+    n.n = n.n + 1
+    n.lt = math.max(n.lt or 0, at)
+    n.rk = "boss"
+    if name and not n.nm then n.nm = name end
+    local key = dateFn and dateFn("%Y-%m-%d", at) or "?"
+    if n.ld ~= key then n.dy = (n.dy or 0) + 1; n.ld = key end
+    if (dads or 1) > 1 then n.g = (n.g or 0) + 1 end
+    if not b.firsts.boss then b.firsts.boss = { t = at, l = myLevel(), x = id } end
+    note("boss." .. how)
+    return true
+end
+T._BossKill = bossKill
+
+local function onEncounterEnd(encounterID, _, _, _, success, units)
+    if not (num(success) and success == 1) then note("boss.wipe"); return end
+    local b = book()
+    if not b then return end
+    if not dungeon then note("boss.outside"); return end
+    if num(encounterID) then
+        dungeon.enc = dungeon.enc or {}
+        dungeon.enc[encounterID] = time()
+    end
+    local dads, seen = dadsIn(mates()), 0
+    if type(units) == "table" then
+        for _, u in ipairs(units) do
+            local id = type(u) == "table" and u.creatureID
+            local nm = type(u) == "table" and u.creatureName
+            if num(id) then
+                seen = seen + 1
+                bossKill(b, id, str(nm) and nm or nil, time(), dungeon, dads, "enc")
+            end
+        end
+    end
+    if seen == 0 then note("boss.encnone") end
+end
+T._EncounterEnd = onEncounterEnd
+
+-- the corpse of a boss was opened in a dungeon: it is dead
+local function bossFromLoot(b)
+    if not (dungeon and GetLootSourceInfo and GetNumLootItems) then return end
+    local n = call(GetNumLootItems)
+    if not num(n) then return end
+    for i = 1, n do
+        local kind, id = parseGuid(call(GetLootSourceInfo, i))
+        if kind == "Creature" and isBoss(id) then
+            bossKill(b, id, nil, time(), dungeon, dadsIn(mates()), "loot")
+        end
+    end
+end
+
+-- quests that need the final boss: [quest] = { instance, npc, npc, ... }
+local QUEST_BOSS = {
+    [5761] = { 389, 11520 },              -- Slaying the Beast: Taragaman
+    [166] = { 36, 639 },                  -- The Defias Brotherhood: VanCleef
+    [1014] = { 33, 4275 },                -- Arugal Must Die
+    [3341] = { 129, 7358 },               -- Bring the End: Amnennar
+    [1053] = { 189, 3977, 3975, 6487 },   -- In the Name of the Light: Whitemane, Herod, Doan
+}
+T.QUEST_BOSS = QUEST_BOSS
+
+-- once per book: bosses of earlier visits from what was recorded anyway
+local function backfill(b)
+    if b.bossFill then return end
+    b.bossFill = 1
+    local visits = b.dungeons or {}
+    local function dadsOf(v)
+        local dads = 1
+        for g in pairs(v and v.g or {}) do if b.people[g] and b.people[g].dad then dads = dads + 1 end end
+        return dads
+    end
+    -- the visit during which something happened
+    local function during(inst, t)
+        for i = #visits, 1, -1 do
+            local v = visits[i]
+            if (not inst or v.id == inst) and num(v.t) and v.t <= t + 60 and t <= (v.seen or v.t) + 600 then return v end
+        end
+    end
+    -- the last visit of that dungeon before a quest turn-in
+    local function before(inst, t)
+        for i = #visits, 1, -1 do
+            local v = visits[i]
+            if v.id == inst and num(v.t) and v.t <= t then return v end
+        end
+    end
+    local found = 0
+    for _, e in pairs(b.gear or {}) do
+        if type(e) == "table" and (e.src == "boss" or e.src == "drop") and num(e.from) and num(e.t) and isBoss(e.from) then
+            local v = during(e.iid, e.t)
+            if bossKill(b, e.from, nil, e.t, v, dadsOf(v), "fill") then found = found + 1 end
+        end
+    end
+    for qid, list in pairs(QUEST_BOSS) do
+        local q = b.quests[qid]
+        if type(q) == "table" and num(q.t) then
+            local v = before(list[1], q.t)
+            for i = 2, #list do
+                if bossKill(b, list[i], nil, v and ((v.seen or v.t)) or q.t, v, dadsOf(v), "fill") then found = found + 1 end
+            end
+        end
+    end
+    b.bossFill = 1 + found
+end
+T._Backfill = backfill
 
 -- a kill by a group member counts when I was in XP range: an XP gain right before or after
 -- the kill, else (gray mobs, max level) the distance to the killer
@@ -887,6 +1024,7 @@ T._LootMsg = onLootMsg
 local function onLootOpened()
     local b = book()
     if not b then return end
+    bossFromLoot(b)
     if IsFishingLoot and call(IsFishingLoot) then b.gather.fish = b.gather.fish + 1; note("gather.fish"); return end
     if GetTime() - lastGatherAt > 5 or not (GetLootSourceInfo and GetNumLootItems) then return end
     local n = call(GetNumLootItems)
@@ -1051,10 +1189,13 @@ local function login()
     day(b)
     rosterUpdate()
     enterMap()
+    backfill(b)
 end
 
 local EVENTS = {
     PARTY_KILL = onPartyKill,
+    ENCOUNTER_END = onEncounterEnd,
+    BOSS_KILL = function() note("boss.event") end,
     PLAYER_XP_UPDATE = function() lastXp = GetTime() end,
     CHAT_MSG_COMBAT_XP_GAIN = function() lastXp = GetTime() end,
     PLAYER_TARGET_CHANGED = function() scan("target") end,
