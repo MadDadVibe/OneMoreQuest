@@ -85,6 +85,11 @@ local function newText(font)
     fs:SetFontObject(font)
     shade(fs)
     fs:ClearAllPoints()
+    -- a recycled string keeps the width and alignment of its last use (a 150 px left-aligned
+    -- objective label reused as a number cell drew the number half a column to the left):
+    -- every string starts unbounded and centred again
+    fs:SetWidth(0)
+    fs:SetJustifyH("CENTER")
     fs:Show()
     return fs
 end
