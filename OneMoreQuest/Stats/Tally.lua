@@ -485,6 +485,90 @@ local function backfill(b)
 end
 T._Backfill = backfill
 
+-- the game's own statistics have a "Boss Kills" category with one counter per boss. A boss counter
+-- above what the book knows adds the missing kills (no visit is known for them). The boss of a
+-- counter comes from its kill criterion (creature id), else from a known boss name in its title.
+local KILL_CREATURE = 0
+local function statNumber(v)
+    if num(v) then return v end
+    if not str(v) then return nil end
+    local digits = v:gsub("[%s,%.]", "")
+    return digits:match("^%d+$") and tonumber(digits) or nil
+end
+
+local function bossStats()
+    if not (GetStatisticsCategoryList and GetCategoryInfo and GetCategoryNumAchievements and GetAchievementInfo and GetStatistic) then return nil end
+    local cats = call(GetStatisticsCategoryList)
+    if type(cats) ~= "table" then return nil end
+    local list = {}
+    for _, cat in ipairs(cats) do
+        local title = call(GetCategoryInfo, cat)
+        if str(title) and title:lower():find("boss", 1, true) then
+            local n = call(GetCategoryNumAchievements, cat)
+            for i = 1, num(n) and n or 0 do
+                local id, name = call(GetAchievementInfo, cat, i)
+                if num(id) and str(name) then
+                    local _, ctype, _, _, _, _, _, asset = call(GetAchievementCriteriaInfo, id, 1)
+                    list[#list + 1] = { id = id, name = name, v = statNumber(call(GetStatistic, id)),
+                                        ctype = num(ctype) and ctype or nil, asset = num(asset) and asset or nil }
+                end
+            end
+        end
+    end
+    return list
+end
+
+local function statBoss(b, s)
+    if s.ctype == KILL_CREATURE and s.asset and s.asset > 0 then return s.asset end
+    local names = {}
+    for _, e in ipairs(OMQ.Ledger and OMQ.Ledger.BOSSES or {}) do names[#names + 1] = { e[3], e[4] } end
+    for id, n in pairs(b.kills.npc) do
+        if type(n) == "table" and n.rk == "boss" and str(n.nm) then names[#names + 1] = { id, n.nm } end
+    end
+    for _, c in ipairs(names) do
+        if str(c[2]) and s.name:find(c[2], 1, true) then return c[1] end
+    end
+end
+
+local function statSync()
+    local b = book()
+    if not b then return end
+    local list = bossStats()
+    if not list then note("stat.none"); return end
+    local k = b.kills
+    for _, s in ipairs(list) do
+        local npc = statBoss(b, s)
+        if not npc then
+            note("stat.unknown")
+        elseif s.v and s.v > 0 then
+            if not k.npc[npc] then bossKill(b, npc, nil, time(), nil, 1, "stat") end
+            local n = k.npc[npc]
+            local more = s.v - (n.n or 0)
+            if more > 0 then
+                n.n = n.n + more
+                k.total = k.total + more
+                k.rank.boss = k.rank.boss or pair()
+                k.rank.boss.n = k.rank.boss.n + more
+                note("stat.more", more)
+            end
+        end
+    end
+end
+T._StatSync = statSync
+T._BossStats = bossStats
+
+function T:BossReport()
+    local b = book()
+    local list = bossStats()
+    if not (b and list) then OMQ:Print("no boss statistics"); return end
+    OMQ:Print("boss statistics: " .. #list)
+    for _, s in ipairs(list) do
+        local npc = statBoss(b, s)
+        print(string.format("  %d %s = %s  type %s asset %s -> %s (book %s)", s.id, s.name, tostring(s.v),
+            tostring(s.ctype), tostring(s.asset), tostring(npc), tostring(npc and b.kills.npc[npc] and b.kills.npc[npc].n)))
+    end
+end
+
 -- a kill by a group member counts when I was in XP range: an XP gain right before or after
 -- the kill, else (gray mobs, max level) the distance to the killer
 local function inRange(killer)
@@ -586,6 +670,7 @@ local function enterMap()
     elseif dungeon then
         dungeon.seen = time()
         dungeon = nil
+        if C_Timer then C_Timer.After(5, function() pcall(statSync) end) end
     end
 end
 T._EnterMap = enterMap
@@ -1247,6 +1332,7 @@ OMQ:On("READY", function()
     T.ready = true
     pcall(login)
     C_Timer.After(10, function() pcall(envSnapshot) end)
+    C_Timer.After(20, function() pcall(statSync) end)
     C_Timer.NewTicker(1, function()
         local fine, err = pcall(tick)
         if not fine then note("err.tick"); OMQ:Error("tally tick", err) end
@@ -1310,6 +1396,7 @@ function T:Report(part)
         return
     end
     if part == "gear" and OMQ.Haul then OMQ.Haul:Report(); return end
+    if part == "bosses" then T:BossReport(); return end
     local k = b.kills
     OMQ:Print("tally since level " .. b.since.lvl .. ", active " .. math.floor(b.secs / 60) .. " min, afk " .. math.floor(b.afk / 60) .. " min")
     if part == "" or part == "kills" then
