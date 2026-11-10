@@ -12,6 +12,7 @@
 -- Fine steering (decision 472): near me the arrow's heading is checked on the 8-yard raster of Data/PathRaster.lua
 -- and steered around walls, cliffs and water the coarse network does not see.
 -- /omq path [on|off|fine on|fine off|diag|probe|log]
+-- Middle click on an arrow: way over the land <-> straight line (decision 505)
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -44,6 +45,22 @@ local function straight(a1, b1, a2, b2) return math.sqrt((a1 - a2) ^ 2 + (b1 - b
 function P.Enabled()
     if not OMQ.PathGraph then return false end
     return not (OMQDB and OMQDB.pathOff)
+end
+
+-- the arrows (decision 505): a middle click on an arrow switches them between the way over the land and the
+-- straight line; Quest Run's order of stops keeps using the ways
+function P.ArrowStraight() return (OMQDB and OMQDB.pathArrowStraight) and true or false end
+function P.ArrowWays() return P.Enabled() and not P.ArrowStraight() end
+function P.ToggleArrow()
+    if not OMQDB then return P.ArrowWays() end
+    if P.ArrowWays() then
+        OMQDB.pathArrowStraight = true
+    else
+        OMQDB.pathArrowStraight = nil
+        OMQDB.pathOff = nil
+    end
+    P._ResetWay()
+    return P.ArrowWays()
 end
 
 ----------------------------------------------------------------------
@@ -892,6 +909,7 @@ local function myPos() return OMQ.NextQuest and OMQ.NextQuest.MyPos and OMQ.Next
 function P.Diag()
     local out = { "Ways over the land - diagnostics" }
     out[#out + 1] = "ways: " .. (P.Enabled() and "on" or "off (straight lines)")
+    out[#out + 1] = "arrows: " .. (P.ArrowWays() and "way over the land" or "straight line") .. " (middle click on an arrow switches)"
     local pos = myPos()
     if not pos then out[#out + 1] = "position: none"; return out end
     local g = P.Graph(pos.inst)

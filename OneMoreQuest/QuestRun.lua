@@ -1113,7 +1113,7 @@ function R:Target()
         view.distance = view.straight
         local ha, hb = s.place.a, s.place.b
         -- the way over the land (469): the arrow heads for the next point of the way, the yards are the way's
-        local way = OMQ.Path and OMQ.Path.Enabled() and OMQ.Path.Way(pos, s.place)
+        local way = OMQ.Path and OMQ.Path.ArrowWays() and OMQ.Path.Way(pos, s.place)
         if way and way.via then
             view.distance, view.via, view.flight = way.cost, true, way.flight
             ha, hb = way.a, way.b

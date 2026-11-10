@@ -552,7 +552,7 @@ local function buildBar()
     arrowFrame:SetPoint("BOTTOMLEFT", bar, "TOPLEFT", 0, 2)
     arrowFrame:SetFrameStrata("MEDIUM")
     arrowFrame:EnableMouse(true)
-    arrowFrame:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    arrowFrame:RegisterForClicks("LeftButtonUp", "RightButtonUp", "MiddleButtonUp")
     arrowTex = arrowFrame:CreateTexture(nil, "ARTWORK")
     arrowTex:SetSize(ARROW, ARROW)
     arrowTex:SetPoint("CENTER")
@@ -567,7 +567,11 @@ local function buildBar()
     arrowDist:SetJustifyH("LEFT")
     for _, fs in ipairs({ arrowName, arrowDist, barText }) do shadow(fs) end
     arrowFrame:SetScript("OnClick", function(_, button)
-        if button == "RightButton" then askEnd() else R():MainArrow() end
+        if button == "MiddleButton" then
+            if OMQ.Arrow and OMQ.Arrow.ToggleWays then OMQ.Arrow.ToggleWays() end
+            smoothHeading = nil
+            UI:RenderBar()
+        elseif button == "RightButton" then askEnd() else R():MainArrow() end
     end)
     arrowFrame:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
@@ -575,6 +579,7 @@ local function buildBar()
         GameTooltip:SetText(runName())
         GameTooltip:AddLine("Click: the big arrow to this place too", 0.8, 0.8, 0.8)
         GameTooltip:AddLine("Right click: end the run", 0.8, 0.8, 0.8)
+        GameTooltip:AddLine("Middle click: way over the land / straight line", 0.8, 0.8, 0.8)
         GameTooltip:Show()
     end)
     arrowFrame:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -634,6 +639,7 @@ function UI:RenderBar()
         st.dist = string.format("%d yd - %s", math.floor(t.distance + 0.5), t.what)
         if t.flight then st.dist = string.format("%d yd - fly from %s - %s", math.floor(t.distance + 0.5), t.flight, t.what) end
         if t.near then st.dist = string.format("nearby - %d yd - %s", math.floor(t.distance + 0.5), t.what) end
+        if not t.near and OMQ.Arrow and OMQ.Arrow.StraightTag then st.dist = st.dist .. OMQ.Arrow.StraightTag() end
         arrowDist:SetText(st.dist)
         wantHeading = t.heading
         if blue then arrowTex:SetVertexColor(BLUE[1], BLUE[2], BLUE[3])

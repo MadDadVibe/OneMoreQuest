@@ -383,7 +383,7 @@ function G:Current()
     local ha, hb = c.a, c.b
     -- the way over the land (471): head for the next point of the way, the yards are the way's
     local P = OMQ.Path
-    if c.d and P and P.Enabled() then
+    if c.d and P and P.ArrowWays() then
         local way = P.Way({ a = mine.a, b = mine.b, inst = mine.inst }, c)
         if way and way.via then
             st.distance, st.via, st.flight = way.cost, true, way.flight

@@ -306,6 +306,18 @@ function A.NearAlpha(d)
     return math.max(0.35, math.min(1, 0.35 + 0.65 * (d - 5) / (A.CALM - 5)))
 end
 
+-- decision 505: middle click on an arrow, way over the land <-> straight line; the yards say "straight" meanwhile
+function A.StraightTag()
+    local P = OMQ.Path
+    return (P and P.ArrowStraight and P.Enabled() and P.ArrowStraight()) and " |cffaaaaaa(straight)|r" or ""
+end
+function A.ToggleWays()
+    local P = OMQ.Path
+    if not (P and P.ToggleArrow) then return end
+    P.ToggleArrow()
+    smoothHeading = nil
+end
+
 local function build()
     arrowFrame = CreateFrame("Button", "OneMoreQuestArrow", UIParent)
     arrowFrame:SetSize(115, 120)
@@ -313,7 +325,7 @@ local function build()
     arrowFrame:SetClampedToScreen(true)
     arrowFrame:SetMovable(true)
     arrowFrame:EnableMouse(true)
-    arrowFrame:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    arrowFrame:RegisterForClicks("LeftButtonUp", "RightButtonUp", "MiddleButtonUp")
     arrowFrame:RegisterForDrag("LeftButton")
 
     -- no background: only the arrow and an outlined text
@@ -340,6 +352,7 @@ local function build()
 
     arrowFrame:SetScript("OnClick", function(_, button)
         if moveMode then return end
+        if button == "MiddleButton" then A.ToggleWays(); return end
         if OMQ.Guide and OMQ.Guide:IsActive() then
             local back = IsShiftKeyDown and IsShiftKeyDown()
             if button == "LeftButton" then OMQ.Guide:Cycle(back and -1 or 1)
@@ -385,7 +398,8 @@ local function render()
             alpha = A.NearAlpha(g.straight or g.distance)
             if g.heading then point(g.heading) end
         else
-            distText:SetText(string.format("%d yd", math.floor(g.distance + 0.5)) .. (g.flight and (" - fly from " .. g.flight) or ""))
+            distText:SetText(string.format("%d yd", math.floor(g.distance + 0.5)) .. (g.flight and (" - fly from " .. g.flight) or "")
+                .. A.StraightTag())
             texture:SetVertexColor(0.45, 0.8, 1)
             if g.heading then point(g.heading) end
         end
