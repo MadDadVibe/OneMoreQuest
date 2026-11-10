@@ -19,6 +19,7 @@ local MAX_VICTIMS = 200
 local MAX_DEATHS = 500
 local TALK_AGAIN = 60          -- one talk per NPC per minute
 local MAX_STEP = 40            -- yards per second; larger jumps are teleports
+local AUTO_AFK = 300           -- seconds without input before the game sets AFK on its own
 
 ----------------------------------------------------------------------
 -- Helpers
@@ -126,6 +127,44 @@ local function day(b)
     end
     return d
 end
+
+----------------------------------------------------------------------
+-- Idle seconds: the game sets AFK on its own only after AUTO_AFK seconds without input. Those seconds
+-- were counted as active; when the flag comes without a chat command (/afk), they move to AFK.
+-- Any input we can see (moving, casting, jumping, emotes, chat) empties the list.
+----------------------------------------------------------------------
+local idle, wasAfk = {}, false
+local function active() if #idle > 0 then idle = {} end end
+T.Active = active
+
+-- one active second: where it was counted, so it can be taken back
+local function idleAdd(key, map, mates)
+    idle[#idle + 1] = { key, map, mates }
+    if #idle > AUTO_AFK then table.remove(idle, 1) end
+end
+
+local function idleToAfk(b)
+    local n = #idle
+    for i = n, 1, -1 do
+        local e = idle[i]
+        if b.secs <= 0 then break end
+        b.secs = b.secs - 1
+        b.afk = b.afk + 1
+        local d = b.days[e[1]]
+        if d and d.s > 0 then d.s = d.s - 1; d.afk = (d.afk or 0) + 1 end
+        local m = e[2] and b.maps[e[2]]
+        if m and (m.s or 0) > 0 then m.s = m.s - 1 end
+        for _, g in ipairs(e[3]) do
+            local p = b.people[g]
+            if p and (p.s or 0) > 0 then p.s = p.s - 1 end
+        end
+    end
+    if (b.levelSecs or 0) > b.secs then b.levelSecs = b.secs end
+    if (b.lastDeathSecs or 0) > b.secs then b.lastDeathSecs = b.secs end
+    idle = {}
+    if n > 0 then note("afk.auto"); note("afk.moved", n) end
+end
+T._Idle = function() return #idle end
 
 local function first(b, key, extra)
     if b.firsts[key] then return end
@@ -1000,7 +1039,9 @@ local sentItem = {}            -- castGUID -> item id when the cast came from an
 local lastGather, lastGatherAt = nil, -100
 
 local function onSent(unit, target, castGUID, spellID)
-    if unit ~= "player" or not str(castGUID) then return end
+    if unit ~= "player" then return end
+    active()
+    if not str(castGUID) then return end
     sentTarget[castGUID] = str(target) and target or nil
     if num(spellID) and knownSpell(spellID) == false then sentItem[castGUID] = itemSpells()[spellID] end
 end
@@ -1176,21 +1217,27 @@ local function tick()
     local d = day(b)
     local afk = UnitIsAFK and call(UnitIsAFK, "player")
     if ok(afk) and afk then
+        -- AFK set by the game (no /afk typed): the idle time before it was not active either
+        if not wasAfk then idleToAfk(b) end
+        wasAfk = true
         b.afk = b.afk + 1
         d.afk = d.afk + 1
         lastX = nil
         return
     end
+    if wasAfk then wasAfk = false; active() end
     b.secs = b.secs + 1
     d.s = d.s + 1
     d.l1 = myLevel()
     local m = T.map and b.maps[T.map]
     if m then m.s = m.s + 1 end
+    local here = {}
     for g in pairs(mates()) do
         local p = b.people[g]
-        if p then p.s = (p.s or 0) + 1 end
+        if p then p.s = (p.s or 0) + 1; here[#here + 1] = g end
         d.g[g] = true
     end
+    idleAdd(today(), T.map, here)
     -- movement
     local taxi = UnitOnTaxi and call(UnitOnTaxi, "player")
     taxi = ok(taxi) and taxi and true or false
@@ -1204,6 +1251,7 @@ local function tick()
     if lastX and inst == lastInst then
         local dist = math.sqrt((x - lastX) ^ 2 + (y - lastY) ^ 2)
         if dist <= MAX_STEP and dist > 0 then
+            active()
             local swim = IsSwimming and call(IsSwimming)
             local key = (ok(swim) and swim) and "swim" or ((ok(mounted) and mounted) and "mount" or "foot")
             b.move[key] = b.move[key] + dist
@@ -1261,11 +1309,13 @@ end
 -- Jumps and emotes
 ----------------------------------------------------------------------
 local function onJump()
+    active()
     if IsFalling and call(IsFalling) then return end
     local b = book()
     if b then b.move.jumps = b.move.jumps + 1 end
 end
 local function onEmote(token)
+    active()
     if not str(token) then return end
     local b = book()
     if not b then return end
@@ -1354,6 +1404,9 @@ OMQ:On("READY", function()
     if hooksecurefunc then
         if JumpOrAscendStart then pcall(hooksecurefunc, "JumpOrAscendStart", function() pcall(onJump) end) end
         if DoEmote then pcall(hooksecurefunc, "DoEmote", function(token) pcall(onEmote, token) end) end
+        -- typing in chat is input; /afk sends an AFK chat message, so a typed AFK moves nothing
+        if SendChatMessage then pcall(hooksecurefunc, "SendChatMessage", active) end
+        if C_ChatInfo and C_ChatInfo.SendChatMessage then pcall(hooksecurefunc, C_ChatInfo, "SendChatMessage", active) end
     end
 end)
 
