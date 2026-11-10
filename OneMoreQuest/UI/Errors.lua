@@ -97,7 +97,12 @@ local function grab(msg, stack)
     if busy then return end
     busy = true
     pcall(function()
-        if E.Ours(msg, stack) then E.Record("lua", msg, stack) end
+        if E.Ours(msg, stack) then E.Record("lua", msg, stack)
+        elseif OMQ.TaintWatch and OMQ.TaintWatch.IsBarError(msg) then
+            -- the game's own bar error names no addon (decision 507): kept as kind "game", then the bar watch looks
+            E.Record("game", msg, stack)
+            OMQ.TaintWatch.Soon("bar error")
+        end
     end)
     busy = false
 end

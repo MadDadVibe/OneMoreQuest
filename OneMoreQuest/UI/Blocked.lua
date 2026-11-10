@@ -95,7 +95,8 @@ OMQ:RegisterCommand("blocked", function(arg)
         OMQ:Print("blocked actions: log cleared")
     elseif cmd == "taintlog" then
         local level = (value == "off" or value == "0") and "0" or "1"
-        if SetCVar then pcall(SetCVar, "taintLog", level) end
+        if OMQ.TaintWatch then OMQ.TaintWatch.SetLog(level == "1")      -- kept as option taintLog (decision 507)
+        elseif SetCVar then pcall(SetCVar, "taintLog", level) end
         OMQ:Print("game taint log " .. (level == "1" and "on: /reload, play until the message comes, then see Logs\\taint.log"
             or "off"))
     else
