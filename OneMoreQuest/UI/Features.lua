@@ -59,7 +59,7 @@ FE.SECTIONS = {
         "Low ammo",
         "Use your elixirs, scrolls, buff food, stones and oils - never, always or in dungeons; a stone or oil goes on the weapon you click",
         "Priests: the target's nameplate glows purple when Shadow Word: Death would kill it",
-        "Players of the other faction nearby: a warning card with name, level and class (red when much stronger), a counter on the minimap icon, shared with the group",
+        "Players of the other faction nearby: a warning card with name, level and class (red when much stronger) - a click targets him and puts the skull on him -, a counter on the minimap icon, shared with the group",
     } },
     { "Crafting", {
         { "Crafting profit in the profession window: what the materials cost against what the product brings on the auction house, for every recipe", unlock = "profession" },

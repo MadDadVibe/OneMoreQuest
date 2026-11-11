@@ -19,7 +19,7 @@ OMQ.EnemyNear = E
 E.REPEAT = 300          -- seconds: the same player warns again after this
 E.SIGHT = 10            -- seconds: an enemy counts as nearby this long after he was last seen
 E.SHARED_SIGHT = 30     -- seconds: the same for a sighting of a group member
-E.SHOW = 6              -- seconds a warning row stays, then it fades
+E.SHOW = 10             -- seconds a warning row stays (longer while the mouse is on it), then it fades
 E.FADE = 1
 E.ROWS = 3
 E.DANGER = 5            -- levels above mine: red with a skull
@@ -128,9 +128,58 @@ function E.Text(e)
 end
 
 ----------------------------------------------------------------------
--- the warning card (plain frames, no secure parts: it may show in combat)
+-- the warning card (decision 524: a left click targets the enemy and puts the skull on him)
+-- The visible rows are plain frames: they may come and go in combat. Over each row lies a secure button whose macro
+-- ("/targetexact Name" + "/tm 8") can only be set out of combat. A card that appears in combat is not clickable
+-- (hint "click after combat"); after the fight its button is armed. A plain shield over a row eats the clicks of a
+-- button whose macro does not belong to the card shown there. Cards keep their row (no shifting), so an armed
+-- button never ends up under another enemy.
 ----------------------------------------------------------------------
 local holder, rows
+local buttons, shields, armed = {}, {}, {}   -- per row: secure button, plain shield, full name of the macro
+E.slots = {}                                   -- per row: { text, faction, danger, at, key, full } or nil
+
+local function locked() return InCombatLockdown and InCombatLockdown() and true or false end
+
+function E.Macro(full)
+    return "/cleartarget\n/targetexact " .. full .. "\n/tm [exists] 8"
+end
+
+local function makeButton(i)
+    local b = CreateFrame("Button", "OneMoreQuestEnemyNearClick" .. i, UIParent, "SecureActionButtonTemplate")
+    -- the secure template fires on mouse down or up depending on the game setting (ActionButtonUseKeyDown)
+    b:RegisterForClicks("AnyUp", "AnyDown")
+    b:SetAttribute("type1", "macro")
+    b:SetAllPoints(rows[i])
+    b:SetFrameStrata("HIGH")
+    b:SetFrameLevel(20)
+    b.row = i
+    b:SetScript("PostClick", function(self, button, down)
+        if down then return end
+        if button == "RightButton" then E.Dismiss(self.row) end
+    end)
+    b:SetScript("OnEnter", function(self)
+        local c = E.slots[self.row]
+        if not (c and GameTooltip) then return end
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:SetText(c.full or "?")
+        GameTooltip:AddLine("Left click: target him and mark him with the skull.", 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine("Right click: close the card.", 0.8, 0.8, 0.8, true)
+        GameTooltip:Show()
+    end)
+    b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    b:Hide()
+    buttons[i] = b
+    local sh = CreateFrame("Frame", nil, UIParent)
+    sh:SetFrameStrata("DIALOG")
+    sh:SetAllPoints(rows[i])
+    sh:EnableMouse(true)
+    sh.row = i
+    sh:SetScript("OnMouseUp", function(self, button) if button == "RightButton" then E.Dismiss(self.row) end end)
+    sh:Hide()
+    shields[i] = sh
+end
+
 local function build()
     if holder then return end
     holder = CreateFrame("Frame", "OneMoreQuestEnemyNear", UIParent)
@@ -169,19 +218,46 @@ local function build()
         r:Hide()
         rows[i] = r
     end
+    E._rows = rows
+    if not locked() then for i = 1, E.ROWS do makeButton(i) end end
 end
 
-E.cards = {}            -- { e, at } newest first
+-- can the card in row i be clicked right now?
+function E.Clickable(i)
+    local c = E.slots[i]
+    return c ~= nil and c.full ~= nil and armed[i] == c.full and buttons[i] ~= nil and buttons[i]:IsShown() and true or false
+end
+
+-- out of combat: every row's button gets the macro of its card, rows without a card lose theirs
+function E.Arm()
+    if locked() or not holder then return end
+    for i = 1, E.ROWS do
+        if not buttons[i] then makeButton(i) end
+        local c, b = E.slots[i], buttons[i]
+        if c and c.full then
+            b:SetAttribute("macrotext1", E.Macro(c.full))
+            armed[i] = c.full
+            b:Show()
+        else
+            b:SetAttribute("macrotext1", "")
+            armed[i] = nil
+            b:Hide()
+        end
+        shields[i]:Hide()
+    end
+end
 
 local function paint()
     if not holder then return end
     local t = now()
     for i = 1, E.ROWS do
-        local r, c = rows[i], E.cards[i]
+        local r, c = rows[i], E.slots[i]
         if c then
             local age = t - c.at
             local danger = c.danger
-            r.text:SetText(c.text)
+            local text = c.text
+            if c.full and not E.Clickable(i) and locked() then text = text .. " |cff888888(click after combat)|r" end
+            r.text:SetText(text)
             if danger then r.text:SetTextColor(1, 0.25, 0.2) else r.text:SetTextColor(1, 0.82, 0) end
             if danger then r.edge:SetVertexColor(1, 0.1, 0.1) else r.edge:SetVertexColor(1, 0.6, 0.1) end
             r.icon:SetTexture(E.ICONS[c.faction] or E.SKULL)
@@ -191,22 +267,68 @@ local function paint()
         else
             r:Hide()
         end
+        -- a shown button whose macro is not the card's: the shield takes its clicks (plain frame, fine in combat)
+        if shields[i] then
+            local b = buttons[i]
+            shields[i]:SetShown(b ~= nil and b:IsShown() and not E.Clickable(i))
+        end
     end
+end
+
+-- the row for a new card: a free one, else the oldest card whose button does not hold it
+local function freeRow()
+    for i = 1, E.ROWS do if not E.slots[i] then return i end end
+    local best
+    for i = 1, E.ROWS do
+        if not (locked() and E.Clickable(i)) and (not best or E.slots[i].at < E.slots[best].at) then best = i end
+    end
+    if best then return best end
+    for i = 1, E.ROWS do
+        if not best or E.slots[i].at < E.slots[best].at then best = i end
+    end
+    return best
 end
 
 function E.ShowCard(e)
     build()
-    table.insert(E.cards, 1, { text = E.Text(e), faction = e.faction, danger = E.Danger(e.level), at = now(), key = e.key })
-    while #E.cards > E.ROWS do table.remove(E.cards) end
+    local i = freeRow()
+    E.slots[i] = { text = E.Text(e), faction = e.faction, danger = E.Danger(e.level), at = now(), key = e.key,
+        full = e.full or e.key }
     holder:Show()
+    E.Arm()
+    paint()
+    return i
+end
+
+function E.Dismiss(i)
+    E.slots[i] = nil
+    E.Arm()
     paint()
 end
 
 function E.Expire()
     local t = now()
-    for i = #E.cards, 1, -1 do
-        if t - E.cards[i].at > E.SHOW + E.FADE then table.remove(E.cards, i) end
+    local changed = false
+    for i = 1, E.ROWS do
+        local c = E.slots[i]
+        if c then
+            -- the mouse on a card holds it
+            if rows[i]:IsMouseOver() or (buttons[i] and buttons[i]:IsMouseOver()) then c.at = t end
+            if t - c.at > E.SHOW + E.FADE then E.slots[i] = nil; changed = true end
+        end
     end
+    if changed then E.Arm() end
+    paint()
+end
+
+function E.HasCards()
+    for i = 1, E.ROWS do if E.slots[i] then return true end end
+    return false
+end
+
+function E.ClearCards()
+    for i = 1, E.ROWS do E.slots[i] = nil end
+    E.Arm()
     paint()
 end
 
@@ -386,7 +508,7 @@ end
 
 function E.SetEnabled(on)
     OMQ.db.options.enemyWarn = on and true or false
-    if not on then E.cards = {}; paint() end
+    if not on then E.ClearCards() end
     E.ApplyCVar()
     E.UpdateBadge()
 end
@@ -398,7 +520,7 @@ local driver = CreateFrame("Frame")
 local sinceScan = 0
 driver:SetScript("OnUpdate", function(_, dt)
     if not OMQ.db then return end
-    if #E.cards > 0 then E.Expire() end
+    if E.HasCards() then E.Expire() end
     sinceScan = sinceScan + (dt or 0)
     if sinceScan < E.SCAN then return end
     sinceScan = 0
@@ -419,6 +541,7 @@ driver:SetScript("OnEvent", function(_, event, unit)
         E.Look("mouseover")
     else
         E.ApplyCVar()
+        if E.HasCards() then E.Arm(); paint() end
     end
 end)
 
