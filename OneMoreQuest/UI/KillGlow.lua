@@ -1,5 +1,5 @@
 -- One More Quest: Shadow Word: Death kill glow (decision 520)
--- A priest who knows Shadow Word: Death sees the target's nameplate glow purple, with the spell's icon right of it,
+-- A priest who knows Shadow Word: Death sees the target's nameplate glow purple, with the spell's icon left of it,
 -- when the spell would kill the target. Nothing else on screen changes (no target frame, no chat line).
 --
 -- How it works without reading the target's life: on WoW Forever UnitHealth("target") is a secret value in combat,
@@ -222,21 +222,21 @@ local function build()
     glow:SetTexture(MEDIA .. "Glow_Soft.tga")
     glow:SetBlendMode("ADD")
     glow:SetVertexColor(r, g, b, 0.9)
-    glow:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
-    glow:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -K.ICON_SIZE, 0)
+    glow:SetPoint("TOPLEFT", content, "TOPLEFT", K.ICON_SIZE, 0)
+    glow:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 0, 0)
 
     halo = content:CreateTexture(nil, "BORDER")
     halo:SetTexture(MEDIA .. "Glow_Soft.tga")
     halo:SetBlendMode("ADD")
     halo:SetVertexColor(r, g, b, 1)
     halo:SetSize(K.ICON_SIZE * 1.9, K.ICON_SIZE * 1.9)
-    halo:SetPoint("CENTER", content, "RIGHT", -K.ICON_SIZE / 2, 0)
+    halo:SetPoint("CENTER", content, "LEFT", K.ICON_SIZE / 2, 0)
 
     icon = content:CreateTexture(nil, "ARTWORK")
     icon:SetTexture(K.ICON)
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     icon:SetSize(K.ICON_SIZE - 4, K.ICON_SIZE - 4)
-    icon:SetPoint("CENTER", content, "RIGHT", -K.ICON_SIZE / 2, 0)
+    icon:SetPoint("CENTER", content, "LEFT", K.ICON_SIZE / 2, 0)
 
     window:SetScript("OnSizeChanged", function()
         local w = plain(window.GetWidth, window)
@@ -263,9 +263,9 @@ local function anchor(plate)
     local ok = pcall(function()
         window:SetParent(plate)
         window:ClearAllPoints()
-        -- the icon sits right of the health bar (above it are the debuffs)
-        window:SetPoint("TOPLEFT", hb, "TOPLEFT", -K.PAD, K.PAD)
-        window:SetPoint("BOTTOMRIGHT", hb, "BOTTOMRIGHT", K.PAD + K.ICON_SIZE, -K.PAD)
+        -- the icon sits left of the health bar (above it are the debuffs, right of it the level)
+        window:SetPoint("TOPLEFT", hb, "TOPLEFT", -K.PAD - K.ICON_SIZE, K.PAD)
+        window:SetPoint("BOTTOMRIGHT", hb, "BOTTOMRIGHT", K.PAD, -K.PAD)
     end)
     if not ok then return false end
     if window.SetIgnoreParentAlpha then pcall(window.SetIgnoreParentAlpha, window, true) end
