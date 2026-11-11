@@ -110,15 +110,59 @@ function F.Add(tt, kind)
     return true
 end
 
+-- fix 529: once the buff is hovered in combat, the game keeps handing out its spell id as a secret value, also
+-- out of combat, until a reload. Then the buff is told by the hovered buff button: its aura asked again by
+-- instance id, or else its icon compared with the icons of the finding spells.
+local function plain(v) return v ~= nil and not secret(v) end
+local function spellIcon(id)
+    local ok, ic
+    if C_Spell and C_Spell.GetSpellTexture then ok, ic = pcall(C_Spell.GetSpellTexture, id)
+    elseif GetSpellTexture then ok, ic = pcall(GetSpellTexture, id) end
+    if ok and plain(ic) then return ic end
+end
+F.icons = {}
+function F.LearnIcons()
+    for id, kind in pairs(F.SPELLS) do
+        local ic = spellIcon(id)
+        if ic then F.icons[ic] = kind end
+    end
+end
+
+function F.FromButton(tt)
+    local owner = tt and tt.GetOwner and select(2, pcall(tt.GetOwner, tt))
+    local info = type(owner) == "table" and owner.buttonInfo
+    if type(info) ~= "table" then return nil end
+    local iid = info.auraInstanceID
+    if plain(iid) and C_UnitAuras and C_UnitAuras.GetAuraDataByAuraInstanceID then
+        local ok, aura = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, "player", iid)
+        local sid = ok and type(aura) == "table" and aura.spellId
+        if plain(sid) and F.SPELLS[sid] then return F.SPELLS[sid] end
+    end
+    local ic = info.texture
+    if not plain(ic) and owner.Icon and owner.Icon.GetTexture then
+        local ok, t = pcall(owner.Icon.GetTexture, owner.Icon)
+        if ok then ic = t end
+    end
+    if plain(ic) then
+        if not next(F.icons) then F.LearnIcons() end
+        return F.icons[ic]
+    end
+end
+
 function F.OnAura(tt, data)
     if type(data) ~= "table" then return end
     local id = data.id
-    if id == nil or secret(id) then return end
-    local kind = F.SPELLS[id]
+    local kind
+    if plain(id) then
+        kind = F.SPELLS[id]
+    else
+        kind = F.FromButton(tt)
+    end
     if kind then F.Add(tt, kind) end
 end
 
 OMQ:On("READY", function()
+    F.LearnIcons()
     if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType
         and Enum.TooltipDataType.UnitAura then
         TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.UnitAura, function(tt, data)
