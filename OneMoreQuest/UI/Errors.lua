@@ -18,6 +18,7 @@ local MAX_LOG = 50          -- my own errors
 local MAX_PER_DAD = 100     -- errors kept per dad at the collector
 local MAX_MSG = 400         -- characters of the error text
 local MAX_STACK = 1000      -- characters of the call stack
+local MAX_TRAIL = 2500      -- characters of the stack of a game bar error / bar finding (the trail, decision 527)
 local PART = 190            -- characters per message part (the game allows 255 per message)
 local PER_PUSH = 5          -- errors sent per round; the next round follows the confirmation
 local RESEND_AFTER = 120    -- an unconfirmed error goes out again after this
@@ -64,7 +65,8 @@ end
 -- keep one error; returns the entry
 function E.Record(kind, msg, stack)
     msg = tostring(msg or "?"):sub(1, MAX_MSG)
-    stack = stack and tostring(stack):sub(1, MAX_STACK) or nil
+    local cap = (kind == "game" or kind == "taint") and MAX_TRAIL or MAX_STACK
+    stack = stack and tostring(stack):sub(1, cap) or nil
     local id = E.Id(kind, msg)
     local t = stamp()
     for _, e in ipairs(log) do
@@ -100,7 +102,12 @@ local function grab(msg, stack)
         if E.Ours(msg, stack) then E.Record("lua", msg, stack)
         elseif OMQ.TaintWatch and OMQ.TaintWatch.IsBarError(msg) then
             -- the game's own bar error names no addon (decision 507): kept as kind "game", then the bar watch looks
-            E.Record("game", msg, stack)
+            local st = stack
+            if OMQ.TaintWatch.ErrorStack then
+                local ok, s = pcall(OMQ.TaintWatch.ErrorStack, stack)
+                if ok and s then st = s end
+            end
+            E.Record("game", msg, st)
             OMQ.TaintWatch.Soon("bar error")
         end
     end)

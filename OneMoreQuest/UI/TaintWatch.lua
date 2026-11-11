@@ -17,8 +17,9 @@ OMQ = _G.OneMoreQuest
 local W = {}
 OMQ.TaintWatch = W
 
-W.TRAIL = 25            -- calls kept in the trail
+W.TRAIL = 40            -- calls kept in the trail
 W.SHOW_TRAIL = 12       -- calls sent with a finding
+W.ERROR_TRAIL = 25      -- calls kept with every game bar error (decision 527)
 W.EVERY = 5             -- seconds between two scans
 W.MAX_FIELDS = 8        -- tainted fields named in a finding
 W.MAX_FINDINGS = 10     -- findings kept in OMQDB.taintWatch
@@ -79,6 +80,11 @@ W.APIS = {
     { nil, "CreateMacro" }, { nil, "EditMacro" }, { nil, "DeleteMacro" },
     { nil, "SetCVar" }, { "C_CVar", "SetCVar" }, { nil, "BuyTrainerService" },
     { "C_ClickBindings", "SetProfileByInfo" }, { nil, "ChangeActionBarPage" }, { nil, "SetActionBarToggles" },
+    -- decision 527: bindings and item uses, they can run bar code too
+    { nil, "SetOverrideBinding" }, { nil, "SetOverrideBindingClick" }, { nil, "SetOverrideBindingSpell" },
+    { nil, "SetOverrideBindingItem" }, { nil, "SetOverrideBindingMacro" }, { nil, "ClearOverrideBindings" },
+    { nil, "SetBinding" }, { nil, "SetBindingClick" }, { nil, "SaveBindings" },
+    { nil, "UseInventoryItem" }, { nil, "UseItemByName" }, { "C_Item", "UseItemByName" },
 }
 
 function W.HookAll()
@@ -236,6 +242,21 @@ local function soon(reason)
 end
 W.Soon = soon
 
+-- decision 527: the stack kept with the game's bar error: when the session began, the fight state and the trail
+-- (addon calls of OMQ and of other addons, bar events, logins), newest last; the game's own stack only shortly
+-- (it is always the same Blizzard bar code)
+function W.ErrorStack(stack)
+    local at = now()
+    local lines = {}
+    lines[#lines + 1] = string.format("session %ds, %s", math.floor(at - (W.loginAt or 0) + 0.5),
+        locked() and "in combat" or "out of combat")
+    lines[#lines + 1] = "trail:"
+    for _, l in ipairs(W.TrailLines(W.ERROR_TRAIL, at)) do lines[#lines + 1] = l end
+    local first = tostring(stack or ""):match("[^\n]*\n?[^\n]*\n?[^\n]*") or ""
+    if first ~= "" then lines[#lines + 1] = "game:"; lines[#lines + 1] = first end
+    return table.concat(lines, "\n")
+end
+
 -- the game's own bar error (it names no addon, so the normal error log leaves it out)
 function W.IsBarError(msg)
     local m = tostring(msg or "")
@@ -272,14 +293,23 @@ W.HookAll()
 
 local ev = CreateFrame("Frame")
 for _, e in ipairs({ "ACTIONBAR_SHOWGRID", "ACTIONBAR_HIDEGRID", "ACTIONBAR_SLOT_CHANGED", "ADDON_ACTION_BLOCKED",
-                     "ADDON_ACTION_FORBIDDEN", "PLAYER_LOGIN" }) do
+                     "ADDON_ACTION_FORBIDDEN", "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_DISABLED",
+                     "PLAYER_REGEN_ENABLED", "UPDATE_BINDINGS", "UPDATE_MACROS" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 ev:SetScript("OnEvent", function(_, event, arg1)
     if event == "PLAYER_LOGIN" then
+        W.loginAt = now()
+        W.Add("login")
         pcall(W.ApplyLog)
         if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(W.EVERY, function() pcall(W.Check, "scan") end) end
         return
+    end
+    -- decision 527: markers only (no scan): loading screens, fights, bindings and macros in the trail
+    if event == "PLAYER_ENTERING_WORLD" or event == "UPDATE_BINDINGS" or event == "UPDATE_MACROS" then
+        W.Add(event); return
+    elseif event == "PLAYER_REGEN_DISABLED" then W.Add("fight start"); return
+    elseif event == "PLAYER_REGEN_ENABLED" then W.Add("fight end"); return
     end
     if event == "ACTIONBAR_SLOT_CHANGED" then W.Add("ACTIONBAR_SLOT_CHANGED " .. tostring(arg1))
     elseif event == "ACTIONBAR_SHOWGRID" or event == "ACTIONBAR_HIDEGRID" then W.Add(event)
