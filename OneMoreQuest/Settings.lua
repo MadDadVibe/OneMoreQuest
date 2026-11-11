@@ -283,6 +283,18 @@ local function allSections()
               tip = "Priests: the target's nameplate glows purple with the Shadow Word: Death icon when the spell would kill it (low end of its damage, Shadowform counted). Enemy nameplates must be switched on. /omq swd test shows a sample.",
               get = function() return OMQ.db.options.killGlow ~= false end,
               set = function(v) if OMQ.KillGlow then OMQ.KillGlow.SetEnabled(v) else OMQ.db.options.killGlow = v and true or false end end },
+            -- decision 523: players of the other faction nearby
+            { type = "check", label = "Warn about enemy players nearby",
+              tip = "A card at the top of the screen when a player of the other faction shows up (his nameplate, your target, the mouse or a group member's target): name, level and class, red with a skull when he is 5 or more levels above you. The same player warns again after 5 minutes at the earliest. A red number on the minimap icon counts the enemies nearby, its tooltip names them. Quiet in major cities, sanctuaries, dungeons and battlegrounds. Turns the game's enemy nameplates on. /omq enemy test shows a sample.",
+              get = function() return OMQ.db.options.enemyWarn ~= false end,
+              set = function(v) if OMQ.EnemyNear then OMQ.EnemyNear.SetEnabled(v) else OMQ.db.options.enemyWarn = v and true or false end end },
+            { type = "check", label = "Sound for the enemy warning",
+              get = function() return OMQ.db.options.enemySound ~= false end,
+              set = function(v) OMQ.db.options.enemySound = v and true or false end },
+            { type = "check", label = "Share enemy sightings with the group",
+              tip = "Enemy players you see are sent to group members with the addon, and theirs warn you too (only on the same map).",
+              get = function() return OMQ.db.options.enemyShare ~= false end,
+              set = function(v) OMQ.db.options.enemyShare = v and true or false end },
         } },
         { title = "AUTOMATIONS", master = "vendor", col = 2, items = {
             { type = "check", label = "Repair gear automatically", get = qolGet("repair"), set = qolSet("repair") },
