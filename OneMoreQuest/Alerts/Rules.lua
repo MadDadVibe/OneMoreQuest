@@ -1468,7 +1468,15 @@ M:Register({
                                 local covered = false
                                 for n in pairs(lookNames) do if names[n] then covered = true; break end end
                                 if not covered then
-                                    local who = unit == "player" and "You are" or ((UnitName(unit) or "?") .. " is")
+                                    -- Forever names have two parts ("Vorname Nachname"); with the first name alone
+                                    -- three players called the same could not be told apart (fix row 517)
+                                    local who = "You are"
+                                    if unit ~= "player" then
+                                        local n, n2 = UnitName(unit)
+                                        if type(n) ~= "string" or isSecret(n) then n = "?" end
+                                        if type(n2) == "string" and not isSecret(n2) and n2 ~= "" then n = n .. " " .. n2 end
+                                        who = n .. " is"
+                                    end
                                     result[#result + 1] = {
                                         key = "buff:" .. (UnitGUID(unit) or unit) .. ":" .. g.id,
                                         text = who .. " missing " .. g.label,
