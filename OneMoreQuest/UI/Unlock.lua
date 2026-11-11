@@ -26,6 +26,8 @@ U.LIST = {
       desc = "Pick a zone: one way through all its quests, follow-ups included." },
     { id = "journey", level = 10, title = "Forever Journey", icon = I .. "INV_Misc_Book_09", where = "Minimap quick options",
       desc = "Every step of your character becomes a card. Collect them and flex them to the dads." },
+    { id = "grind", level = 10, title = "Grind Run", icon = I .. "Ability_DualWield", where = "Check bar",
+      desc = "The arrow leads you to a spot full of mobs. 30 or 60 minutes, then XP, gold and the spot's leaderboard." },
     { id = "dungeon", level = 13, title = "Dungeon Check", icon = I .. "INV_Misc_Key_03", where = "Check bar",
       desc = "A check for every dungeon of your level: quests, best boss loot and the way to the entrance." },
     { id = "duel", level = 15, title = "Dad Duel", icon = I .. "Ability_Warrior_Challange", where = "Check bar",

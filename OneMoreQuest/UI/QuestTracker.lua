@@ -155,7 +155,10 @@ local function build()
     frame:SetScript("OnDragStart", function(self) if moveMode then self:StartMoving() end end)
     frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing(); savePosition() end)
     frame:SetScript("OnMouseUp", function(_, button)
-        if button == "RightButton" and not moveMode then OMQ.QTrack:Close() end
+        if moveMode then return end
+        -- the Grind Run in the tracker's place: left click pauses, right click ends (decision 518)
+        if OMQ.GrindUI and OMQ.Grind and OMQ.Grind:Active() then OMQ.GrindUI:TrackerClick(button); return end
+        if button == "RightButton" then OMQ.QTrack:Close() end
     end)
     local border = frame:CreateTexture(nil, "BACKGROUND", nil, -2)
     borderTex = border
@@ -265,10 +268,13 @@ end
 function U:Render()
     if not frame then return end
     local Q = OMQ.QTrack
-    local view = moveMode and DEMO or (Q:Shown() and Q:View()) or U.RunView()
+    -- a Grind Run takes the whole card (decision 518): the quest tracker is not needed while it goes
+    local grind = not moveMode and OMQ.GrindUI and OMQ.GrindUI.TrackerView() or nil
+    local view = moveMode and DEMO or grind or (Q:Shown() and Q:View()) or U.RunView()
     if not view then
         frame:Hide()
         lastStamp = nil
+        U.runGrind = false
         Q:SetHover(false)                -- a hidden card cannot hold the mouse
         return
     end
@@ -340,14 +346,15 @@ function U:Render()
         y = y - ROW_H
     end
     frame:SetSize(width, -y + 10)
-    local running = OMQ.QuestRun and OMQ.QuestRun:Active() and not moveMode
+    local running = (grind ~= nil) or (OMQ.QuestRun and OMQ.QuestRun:Active() and not moveMode)
     for _, e in ipairs(runEdges) do if running then e:Show() else e:Hide() end end
     U.runFrame = running and true or false
     -- the Dungeon Run's frame is blue instead of gold (476)
-    local r = running and OMQ.QuestRun:Run()
+    local r = running and not grind and OMQ.QuestRun:Run()
     local blue = r and r.kind == "dungeon" or false
     local area = r and r.kind == "area" or false          -- the Area Run's frame is green (491)
-    local col = blue and BLUE or area and (OMQ.QuestRunUI and OMQ.QuestRunUI.AREA or { 0.33, 0.84, 0.40 }) or GOLD
+    local col = grind and OMQ.GrindUI.RED or blue and BLUE or area and (OMQ.QuestRunUI and OMQ.QuestRunUI.AREA or { 0.33, 0.84, 0.40 }) or GOLD
+    U.runGrind = grind ~= nil
     for _, e in ipairs(runEdges) do e:SetColorTexture(col[1], col[2], col[3], 1) end
     if topEdge then topEdge:SetColorTexture(col[1], col[2], col[3], 1) end
     U.runBlue = blue
@@ -377,6 +384,7 @@ OMQ:On("READY", function() build(); U:Render() end)
 OMQ:On("QTRACK_CHANGED", function() U:Render() end)
 OMQ:On("SETTINGS_CHANGED", function() U:Render() end)
 OMQ:On("QUEST_RUN_CHANGED", function() U:Render() end)
+OMQ:On("GRIND_CHANGED", function() U:Render() end)
 OMQ:On("MOVE_MODE", function(on)
     moveMode = on and true or false
     if not frame then return end

@@ -22,6 +22,7 @@ FE.SECTIONS = {
         "Follow the flights of the group",
         "Follow key for the nearest dad",
         { "Area Run: pick a zone, OMQ plans one way through all its quests and their follow-ups; quests that start outside the zone are named when you are near their giver", unlock = "area" },
+        { "Grind Run: pick a zone or grind right here; the arrow leads you to a spot full of mobs of your level, 30 or 60 minutes, then XP per hour, level percent, loot worth and gold; every spot has a leaderboard of the dads", unlock = "grind" },
         "Mana break note when a dad drinks",
     } },
     { "Dungeons", {
