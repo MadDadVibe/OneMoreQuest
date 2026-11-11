@@ -58,6 +58,7 @@ FE.SECTIONS = {
         "Unspent talent points, opens the talent tree",
         "Low ammo",
         "Use your elixirs, scrolls, buff food, stones and oils - never, always or in dungeons; a stone or oil goes on the weapon you click",
+        "Priests: the target's nameplate glows purple when Shadow Word: Death would kill it",
     } },
     { "Crafting", {
         { "Crafting profit in the profession window: what the materials cost against what the product brings on the auction house, for every recipe", unlock = "profession" },

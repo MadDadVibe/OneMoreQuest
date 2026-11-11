@@ -278,6 +278,11 @@ local function allSections()
               options = (OMQ.NodeGlow and OMQ.NodeGlow.LABELS) or { "Glow", "Sparkle", "Beam", "Off" },
               get = function() return OMQ.NodeGlow and OMQ.NodeGlow.StyleIndex() or 1 end,
               set = function(i) if OMQ.NodeGlow then OMQ.NodeGlow.SetStyle(i) end end },
+            -- decision 520: the target's nameplate glows when Shadow Word: Death would kill it
+            { type = "check", label = "Shadow Word: Death kill glow",
+              tip = "Priests: the target's nameplate glows purple with the Shadow Word: Death icon when the spell would kill it (low end of its damage, Shadowform counted). Enemy nameplates must be switched on. /omq swd test shows a sample.",
+              get = function() return OMQ.db.options.killGlow ~= false end,
+              set = function(v) if OMQ.KillGlow then OMQ.KillGlow.SetEnabled(v) else OMQ.db.options.killGlow = v and true or false end end },
         } },
         { title = "AUTOMATIONS", master = "vendor", col = 2, items = {
             { type = "check", label = "Repair gear automatically", get = qolGet("repair"), set = qolSet("repair") },
