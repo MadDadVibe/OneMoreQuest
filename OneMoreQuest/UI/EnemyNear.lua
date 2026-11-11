@@ -128,9 +128,9 @@ function E.Text(e)
 end
 
 ----------------------------------------------------------------------
--- the warning card (decision 524: a left click targets the enemy and puts the skull on him)
+-- the warning card (decision 524, 526: a left click targets the enemy; players cannot get raid markers)
 -- The visible rows are plain frames: they may come and go in combat. Over each row lies a secure button whose macro
--- ("/targetexact Name" + "/tm 8") can only be set out of combat. A card that appears in combat is not clickable
+-- ("/targetexact Name") can only be set out of combat. A card that appears in combat is not clickable
 -- (hint "click after combat"); after the fight its button is armed. A plain shield over a row eats the clicks of a
 -- button whose macro does not belong to the card shown there. Cards keep their row (no shifting), so an armed
 -- button never ends up under another enemy.
@@ -142,7 +142,7 @@ E.slots = {}                                   -- per row: { text, faction, dang
 local function locked() return InCombatLockdown and InCombatLockdown() and true or false end
 
 function E.Macro(full)
-    return "/cleartarget\n/targetexact " .. full .. "\n/tm [exists] 8"
+    return "/cleartarget\n/targetexact " .. full
 end
 
 local function makeButton(i)
@@ -163,7 +163,7 @@ local function makeButton(i)
         if not (c and GameTooltip) then return end
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
         GameTooltip:SetText(c.full or "?")
-        GameTooltip:AddLine("Left click: target him and mark him with the skull.", 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine("Left click: target him.", 0.8, 0.8, 0.8, true)
         GameTooltip:AddLine("Right click: close the card.", 0.8, 0.8, 0.8, true)
         GameTooltip:Show()
     end)
