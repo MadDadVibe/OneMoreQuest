@@ -18,7 +18,9 @@ local K = {}
 OMQ.KillGlow = K
 
 K.IDS = { 32379, 32996, 48157, 48158 }  -- Shadow Word: Death ranks; the name lookup adds what Forever uses
+K.NAMES = { ["shadow word: death"] = true, ["schattenwort: tod"] = true }
 K.NAME = "Shadow Word: Death"
+K.ICON_ID = 136149                       -- spell_shadow_demonicfortitude, the spell's icon in every language
 K.ICON = "Interface\\Icons\\Spell_Shadow_DemonicFortitude"
 K.SHADOWFORM = 15473
 K.SHADOWFORM_FORM = 28                   -- GetShapeshiftFormID() in Shadowform
@@ -51,12 +53,14 @@ end
 ----------------------------------------------------------------------
 local spell = {}       -- id, lo, hi, desc
 local formSeen = false -- last readable Shadowform state
+local bookKnown = {}    -- spell ids found in the spell book
 
 function K.ParseDamage(desc)
     if type(desc) ~= "string" then return nil end
     desc = desc:gsub("(%d),(%d)", "%1%2")
     local lo, hi = desc:match("(%d+) to (%d+)[%a ]-[Ss]hadow damage")
     if not lo then lo = desc:match("(%d+)[%a ]-[Ss]hadow damage"); hi = lo end
+    if not lo then lo, hi = desc:match("(%d+) bis (%d+)") end
     if not lo then lo, hi = desc:match("(%d+)%s*%-%s*(%d+)") end
     lo, hi = tonumber(lo), tonumber(hi)
     if not lo then return nil end
@@ -80,7 +84,47 @@ local function description(id)
 end
 
 local function known(id)
-    return plain(IsPlayerSpell, id) == true or plain(IsSpellKnown, id) == true
+    return bookKnown[id] == true or plain(IsPlayerSpell, id) == true or plain(IsSpellKnown, id) == true
+end
+
+-- WoW Forever has its own spell ids: the spell book is searched by name (English, German) or by the icon
+local function bookMatch(name, icon)
+    if type(name) == "string" and not secret(name) and K.NAMES[name:lower()] then return true end
+    if icon == K.ICON_ID then return true end
+    return type(icon) == "string" and not secret(icon) and icon:lower():find("demonicfortitude", 1, true) ~= nil
+end
+function K.BookIds()
+    local out = {}
+    local SB = C_SpellBook
+    if SB and SB.GetNumSpellBookSkillLines and SB.GetSpellBookSkillLineInfo and SB.GetSpellBookItemInfo then
+        local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+        local ok = pcall(function()
+            for line = 1, SB.GetNumSpellBookSkillLines() do
+                local info = SB.GetSpellBookSkillLineInfo(line)
+                for i = 1, (info and info.numSpellBookItems) or 0 do
+                    local item = SB.GetSpellBookItemInfo((info.itemIndexOffset or 0) + i, bank)
+                    if item and item.spellID and not item.isPassive and not item.isOffSpec
+                        and bookMatch(item.name or spellName(item.spellID), item.iconID) then
+                        out[#out + 1] = item.spellID
+                    end
+                end
+            end
+        end)
+        if not ok then out = {} end
+    elseif GetSpellBookItemName and GetNumSpellTabs and GetSpellTabInfo then
+        pcall(function()
+            local _, _, offset, num = GetSpellTabInfo(GetNumSpellTabs())
+            for i = 1, (offset or 0) + (num or 0) do
+                local name = GetSpellBookItemName(i, BOOKTYPE_SPELL or "spell")
+                local _, id = GetSpellBookItemInfo(i, BOOKTYPE_SPELL or "spell")
+                local icon = GetSpellBookItemTexture and GetSpellBookItemTexture(i, BOOKTYPE_SPELL or "spell")
+                if type(id) == "number" and bookMatch(name, icon) then out[#out + 1] = id end
+            end
+        end)
+    end
+    bookKnown = {}
+    for _, id in ipairs(out) do bookKnown[id] = true end
+    return out
 end
 
 local function candidates()
@@ -89,6 +133,7 @@ local function candidates()
         if type(id) == "number" and not secret(id) and not seen[id] then seen[id] = true; ids[#ids + 1] = id end
     end
     for _, id in ipairs(K.IDS) do add(id) end
+    for _, id in ipairs(K.BookIds()) do add(id) end
     local name = spellName(K.IDS[1]) or K.NAME
     if C_Spell and C_Spell.GetSpellInfo then
         local info = plain(C_Spell.GetSpellInfo, name)
@@ -358,7 +403,9 @@ OMQ:RegisterCommand("swd", function(arg)
         OMQ:Print(("spell %s, damage %s-%s, shadowform %s, used %s, option %s, active %s"):format(tostring(spell.id),
             tostring(spell.lo), tostring(spell.hi), tostring(K.Shadowform()), tostring(K.Estimate()),
             K.Enabled() and "on" or "off", tostring(active)))
-        OMQ:Print("tooltip: " .. tostring(spell.desc))
+        local found = {}
+        for _, id in ipairs(candidates()) do if known(id) then found[#found + 1] = id .. " (" .. tostring(spellName(id)) .. ")" end end
+        OMQ:Print("known ranks: " .. (#found > 0 and table.concat(found, ", ") or "none") .. "; tooltip: " .. tostring(spell.desc or (#found > 0 and description(tonumber(found[1]:match("%d+"))))))
         OMQ:Print(("target nameplate %s (enemy nameplates must be switched on), window width %s"):format(
             plate and "yes" or "no", tostring(width)))
     else
