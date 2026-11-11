@@ -23,6 +23,7 @@ E.SHOW = 10             -- seconds a warning row stays (longer while the mouse i
 E.FADE = 1
 E.ROWS = 3
 E.DANGER = 5            -- levels above mine: red with a skull
+E.W, E.ROW_H, E.ROW_GAP, E.TOP = 420, 28, 30, -200   -- card size and place (rows and click buttons alike)
 E.SCAN = 1              -- seconds between nameplate scans
 E.CVAR = "nameplateShowEnemies"
 E.SOUND = { kit = "RAID_WARNING", id = 8959 }
@@ -150,7 +151,10 @@ local function makeButton(i)
     -- the secure template fires on mouse down or up depending on the game setting (ActionButtonUseKeyDown)
     b:RegisterForClicks("AnyUp", "AnyDown")
     b:SetAttribute("type1", "macro")
-    b:SetAllPoints(rows[i])
+    -- anchored to UIParent, never to the plain rows: a plain frame a secure one hangs on becomes protected too, and
+    -- showing or hiding the rows in combat then failed ("Interface action failed", decision 528)
+    b:SetSize(E.W, E.ROW_H)
+    b:SetPoint("TOP", UIParent, "TOP", 0, E.TOP - (i - 1) * E.ROW_GAP)
     b:SetFrameStrata("HIGH")
     b:SetFrameLevel(20)
     b.row = i
@@ -172,7 +176,7 @@ local function makeButton(i)
     buttons[i] = b
     local sh = CreateFrame("Frame", nil, UIParent)
     sh:SetFrameStrata("DIALOG")
-    sh:SetAllPoints(rows[i])
+    sh:SetAllPoints(b)
     sh:EnableMouse(true)
     sh.row = i
     sh:SetScript("OnMouseUp", function(self, button) if button == "RightButton" then E.Dismiss(self.row) end end)
@@ -183,14 +187,14 @@ end
 local function build()
     if holder then return end
     holder = CreateFrame("Frame", "OneMoreQuestEnemyNear", UIParent)
-    holder:SetSize(420, E.ROWS * 30)
-    holder:SetPoint("TOP", UIParent, "TOP", 0, -200)
+    holder:SetSize(E.W, E.ROWS * E.ROW_GAP)
+    holder:SetPoint("TOP", UIParent, "TOP", 0, E.TOP)
     holder:SetFrameStrata("HIGH")
     rows = {}
     for i = 1, E.ROWS do
         local r = CreateFrame("Frame", nil, holder)
-        r:SetSize(420, 28)
-        r:SetPoint("TOP", holder, "TOP", 0, -(i - 1) * 30)
+        r:SetSize(E.W, E.ROW_H)
+        r:SetPoint("TOP", holder, "TOP", 0, -(i - 1) * E.ROW_GAP)
         local bg = r:CreateTexture(nil, "BACKGROUND")
         bg:SetAllPoints()
         bg:SetTexture("Interface\\Buttons\\WHITE8X8")
