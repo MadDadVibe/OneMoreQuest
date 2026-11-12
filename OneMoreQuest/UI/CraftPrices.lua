@@ -176,13 +176,15 @@ P.PAGE, P.EMPTY_WAIT = 500, 1.5      -- EMPTY_WAIT 0 (tests only): an empty list
 -- ANSWER_WAIT seconds, and only when after EMPTY_TRIES asks nothing but empty lists came is the category empty. A category that came
 -- empty, did not answer, or brought less than CAT_SHRINK of its lines of the last complete scan loses nothing: its items
 -- keep their old prices when the scan replaces the list.
-P.EMPTY_TRIES = 2
+P.EMPTY_TRIES = 1   -- fix 577: no new ask after an empty list - a new search cancels the answer still on its way
 P.CHECK_LINES = 30   -- fix 557: this many lines of an answer are checked for their category
 P.CAT_SHRINK, P.CAT_MIN = 0.5, 20   -- short: under half the lines of a category that had at least 20
 -- fix 575: on Forever a search for the whole consumables or trade goods category (no subcategory) brings only a small
 -- part of them (41 and 393 lines). These two are searched subcategory by subcategory, the way the game's own window
 -- does it from the Burning Crusade on: the subcategories the game names (C_AuctionHouse.GetAuctionItemSubClasses)
--- and these known ones. An empty subcategory is asked once more after EMPTY_WAIT seconds, then it counts as empty.
+-- or, when the game names fewer than two, these known ones. Fix 577: an empty subcategory is NOT asked again after
+-- 1.5 s (every new search cancelled the slow answer of the last one, so every category came empty); it counts as
+-- empty when ANSWER_WAIT seconds after the search nothing but empty lists came.
 P.BY_SUBCLASS = { [0] = { 0, 1, 2, 3, 4, 5, 6, 7, 8 }, [7] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 } }
 
 local function helper() return OMQ.AuctionHelper end
@@ -427,12 +429,6 @@ function P.Step()
         if not throttleReady() then return end
         q.waiting = nil
         send()
-    elseif not q.answered and q.emptyAt and now() - q.emptyAt >= P.EMPTY_WAIT then
-        -- an empty list: asked once more a moment later; empty again = nothing of this category on sale (fix 575)
-        if q.tries >= P.EMPTY_TRIES then q.items, q.results = {}, 0; searchDone(false, "empty"); return end
-        if not throttleReady() then return end
-        q.tries = q.tries + 1
-        send()
     elseif not q.answered and now() - q.lastAt > P.ANSWER_WAIT then
         -- an empty answer to EMPTY_TRIES asks in a row: nothing of this category on sale (fix 549)
         if q.sawEmpty and q.tries >= P.EMPTY_TRIES then
@@ -466,7 +462,7 @@ function P.SubclassesOf(c)
         local ok, t = pcall(api.GetAuctionItemSubClasses, c)
         if ok and type(t) == "table" then for _, s in ipairs(t) do add(s) end end
     end
-    for _, s in ipairs(known) do add(s) end
+    if #list < 2 then for _, s in ipairs(known) do add(s) end end   -- fix 577: the game's own list when it has one
     table.sort(list)
     return list
 end
