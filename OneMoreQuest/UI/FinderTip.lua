@@ -128,15 +128,61 @@ function F.LearnIcons()
     end
 end
 
+-- fix 556: after a hover in combat the whole buff entry stays secret (spell id, aura data and icon) until a reload,
+-- because the tracking buff is never applied again. So the buff's aura instance id is remembered while it is
+-- still plain (login, buffs changing out of combat, a plain hover) and a hover only compares that number.
+F.known = {}
+F.log = {}
+F.LOG_MAX = 20
+
+local function auraBySpell(id)
+    if not (C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID) then return nil end
+    local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, id)
+    if ok and type(aura) == "table" then return aura end
+end
+
+-- note the instance ids of the finding buffs I have right now (only plain values)
+function F.Remember()
+    local found = {}
+    for id, kind in pairs(F.SPELLS) do
+        local aura = auraBySpell(id)
+        local iid = aura and aura.auraInstanceID
+        if plain(iid) then found[iid] = kind end
+    end
+    if next(found) then F.known = found end
+end
+
+function F.Note(how)
+    table.insert(F.log, 1, { t = date and date("%H:%M:%S") or "", how = how,
+        combat = InCombatLockdown and InCombatLockdown() and true or false })
+    while #F.log > F.LOG_MAX do table.remove(F.log) end
+end
+
+local function ownerInfo(tt)
+    local ok, owner = false, nil
+    if tt and tt.GetOwner then ok, owner = pcall(tt.GetOwner, tt) end
+    if not ok or type(owner) ~= "table" then return nil, nil end
+    local info = owner.buttonInfo
+    if type(info) ~= "table" then return owner, nil end
+    return owner, info
+end
+
+-- the kind of the hovered buff button, and which way told it (or why none did)
 function F.FromButton(tt)
-    local owner = tt and tt.GetOwner and select(2, pcall(tt.GetOwner, tt))
-    local info = type(owner) == "table" and owner.buttonInfo
-    if type(info) ~= "table" then return nil end
+    local owner, info = ownerInfo(tt)
+    if not owner then return nil, "no owner" end
+    if not info then return nil, "owner is no buff button" end
     local iid = info.auraInstanceID
-    if plain(iid) and C_UnitAuras and C_UnitAuras.GetAuraDataByAuraInstanceID then
-        local ok, aura = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, "player", iid)
-        local sid = ok and type(aura) == "table" and aura.spellId
-        if plain(sid) and F.SPELLS[sid] then return F.SPELLS[sid] end
+    if plain(iid) then
+        if F.known[iid] then return F.known[iid], "remembered" end
+        if C_UnitAuras and C_UnitAuras.GetAuraDataByAuraInstanceID then
+            local ok, aura = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, "player", iid)
+            local sid = ok and type(aura) == "table" and aura.spellId or nil
+            if plain(sid) then
+                if F.SPELLS[sid] then return F.SPELLS[sid], "aura" end
+                return nil, "other buff"
+            end
+        end
     end
     local ic = info.texture
     if not plain(ic) and owner.Icon and owner.Icon.GetTexture then
@@ -145,24 +191,51 @@ function F.FromButton(tt)
     end
     if plain(ic) then
         if not next(F.icons) then F.LearnIcons() end
-        return F.icons[ic]
+        if F.icons[ic] then return F.icons[ic], "icon" end
+        return nil, "other buff"
     end
+    return nil, plain(iid) and "all secret (instance " .. tostring(iid) .. " unknown)" or "all secret, no instance id"
 end
 
 function F.OnAura(tt, data)
     if type(data) ~= "table" then return end
     local id = data.id
-    local kind
+    local kind, how
     if plain(id) then
         kind = F.SPELLS[id]
+        if not kind then return end
+        how = "spell id"
+        local _, info = ownerInfo(tt)
+        local iid = info and info.auraInstanceID
+        if plain(iid) then F.known[iid] = kind end
     else
-        kind = F.FromButton(tt)
+        kind, how = F.FromButton(tt)
+        if how == "other buff" or how == "owner is no buff button" then return end
     end
+    F.Note((kind and (kind .. " via ") or "missing: ") .. how)
     if kind then F.Add(tt, kind) end
 end
 
+local ev = CreateFrame("Frame")
+for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED", "UNIT_AURA" }) do pcall(ev.RegisterEvent, ev, e) end
+ev:SetScript("OnEvent", function(_, event, unit)
+    if event == "UNIT_AURA" and unit ~= "player" then return end
+    if InCombatLockdown and InCombatLockdown() then return end
+    local ok, err = pcall(F.Remember)
+    if not ok then OMQ:Error("finder tooltip", err) end
+end)
+
+OMQ:RegisterCommand("findertip", function()
+    local n = 0
+    for iid, kind in pairs(F.known) do OMQ:Print(("remembered buff: %s = instance %s"):format(kind, tostring(iid))); n = n + 1 end
+    if n == 0 then OMQ:Print("remembered buff: none (Find Herbs / Find Minerals not on, or not seen out of combat yet)") end
+    if #F.log == 0 then OMQ:Print("no hover over a finding buff yet") end
+    for _, e in ipairs(F.log) do OMQ:Print(("%s%s %s"):format(e.t, e.combat and " (combat)" or "", e.how)) end
+end, "findertip - why the herb/ore list in the Find Herbs tooltip came or not", true)
+
 OMQ:On("READY", function()
     F.LearnIcons()
+    pcall(F.Remember)
     if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType
         and Enum.TooltipDataType.UnitAura then
         TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.UnitAura, function(tt, data)
