@@ -246,11 +246,18 @@ local function buildPanel()
     panel:Hide()
 end
 
+-- right of the profession window, or right of the skill route while that is open (decision 558)
+local function place()
+    panel:ClearAllPoints()
+    local SR = OMQ.SkillRoute
+    local pf = (SR and SR.RightOf and SR.RightOf()) or professionsFrame()
+    if pf then panel:SetPoint("TOPLEFT", pf, "TOPRIGHT", 4, 0) else panel:SetPoint("CENTER", UIParent, "CENTER", 300, 0) end
+end
+function A:Reanchor() if panel then place() end end
+
 local function showPanel()
     buildPanel()
-    panel:ClearAllPoints()
-    local pf = professionsFrame()
-    if pf then panel:SetPoint("TOPLEFT", pf, "TOPRIGHT", 4, 0) else panel:SetPoint("CENTER", UIParent, "CENTER", 300, 0) end
+    place()
     panel:Show()
     refresh()
     if C_Timer and C_Timer.After then C_Timer.After(WAIT_SECONDS + 0.2, refresh) end

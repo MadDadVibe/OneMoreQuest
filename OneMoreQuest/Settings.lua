@@ -330,6 +330,11 @@ local function allSections()
               tip = "Shows next to every recipe what it earns on the auction house (product price minus 5% cut minus the materials, from the scanned prices and the vendor prices you have seen) and a block with the numbers under the materials of the selected recipe.",
               get = function() return OMQ.db.options.craftProfit ~= false end,
               set = function(v) OMQ.db.options.craftProfit = v and true or false end },
+            -- decision 558
+            { type = "check", label = "Skill route next to the profession window",
+              tip = "A tab on the right edge of the profession window folds out the route of the Profession Check: which recipe to make how often, your current step with the crafts and materials still needed. A click on a step selects its recipe.",
+              get = function() return OMQ.db.options.skillRoute ~= false end,
+              set = function(v) OMQ.db.options.skillRoute = v and true or false; if OMQ.SkillRoute then pcall(OMQ.SkillRoute.Update) end end },
             -- decision 292
             { type = "check", label = "Vendor helper at the vendor",
               tip = "A window next to the vendor lists what you should sell there: grey items, gear not worth the auction house or unsold twice, white items worth no more there than here, and bound gear worse than what you wear. A click sells one item, a button sells all.",
