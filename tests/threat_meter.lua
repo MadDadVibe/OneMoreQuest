@@ -144,6 +144,9 @@ units.pet, reads = nil, {}
 state, rows = M.Compute()
 equal(#rows, 1, "solo without pet shows only the player")
 equal(reads.pet, nil, "no threat API call for absent pet")
+threat.target = {}
+equal(M.Compute(), "hidden", "a dismissed pet cannot keep the combat hint visible")
+threat.target = { player = { true, 3, 100 }, party1 = { false, 1, 72 } }
 combat.player = true
 attackable, reads = false, {}
 equal(M.Compute(), "notarget", "friendly target is rejected in combat")

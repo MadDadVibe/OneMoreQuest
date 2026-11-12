@@ -98,9 +98,13 @@ function M.Compute()
         if (mode == "group" and not grouped) or (mode == "dungeon" and not inDungeon()) then return "hidden" end
     end
     local solo = not grouped and mode == "always"
-    local petDead = solo and UnitIsDead and UnitIsDead("pet")
-    petDead = not isSecret(petDead) and petDead == true
-    local fighting = inCombat("player") or (solo and not petDead and inCombat("pet"))
+    local petExists = solo and UnitExists and UnitExists("pet")
+    local activePet = not isSecret(petExists) and petExists == true
+    if activePet and UnitIsDead then
+        local dead = UnitIsDead("pet")
+        activePet = not isSecret(dead) and dead ~= true
+    end
+    local fighting = inCombat("player") or (activePet and inCombat("pet"))
     -- the rows show whenever somebody has threat on the target, also when I have none yet (decision 335)
     local T = OMQ.ThreatProbe
     if not (T and UnitExists and UnitExists("target")) then return quiet(fighting, false) end
@@ -113,7 +117,7 @@ function M.Compute()
     local unavailable = false
     for _, unit in ipairs(solo and SOLO_UNITS or T.UNITS) do
         local r
-        if unit ~= "pet" or not petDead then r = T.Read(unit, "target") end
+        if not solo or unit ~= "pet" or activePet then r = T.Read(unit, "target") end
         if r then
             local pct
             if not r.err then
