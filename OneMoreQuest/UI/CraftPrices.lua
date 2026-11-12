@@ -258,7 +258,12 @@ end
 -- what one search brought: lines, and how it ended (ok, empty, failed, capped, split)
 local function noteCat(q, how)
     local n = q.results or 0
-    scan.cats[#scan.cats + 1] = { c = q.classID, s = q.subClassID, n = n, how = how }
+    -- fix 579: what the auction house did for this search, kept in the saved variables (priceScanLast.cats) to find
+    -- out why a category comes empty: events, empty lists, foreign lists (and the class of one), asks, throttle
+    -- waits, seconds until the first list with lines
+    scan.cats[#scan.cats + 1] = { c = q.classID, s = q.subClassID, n = n, how = how, ev = q.ev, emp = q.emp, rej = q.rej,
+                                  rc = q.rejC, asks = q.tries, thr = q.thr,
+                                  secs = q.gotAt and math.floor(q.gotAt * 10 + 0.5) / 10 or nil }
     local key = P.CatKey(q.classID, q.subClassID)
     local lastN = (store().catN or {})[key]
     if how == "empty" or how == "failed" or (how == "ok" and lastN and lastN >= P.CAT_MIN and n < lastN * P.CAT_SHRINK) then
@@ -297,7 +302,14 @@ local function readList()
     end
     -- fix 557: a list with items of other categories is not ours (the game's favorites list when the window opens
     -- came as the answer to the consumables: 41 lines, and every other consumable lost its price)
-    if foreign >= 2 or (foreign >= 1 and checked < 10) then return #list, false end
+    if foreign >= 2 or (foreign >= 1 and checked < 10) then
+        q.rej = (q.rej or 0) + 1
+        if not q.rejC then
+            local k = list[1] and list[1].itemKey
+            q.rejC = k and k.itemID and not isSecret(k.itemID) and classOf(k.itemID) or -1
+        end
+        return #list, false
+    end
     q.items, q.results = items, #list
     return #list, true
 end
@@ -346,6 +358,7 @@ end
 local function send()
     local api, q = A(), scan.q
     q.lastAt, q.answered, q.emptyAt, q.more, q.results = now(), false, nil, false, 0
+    q.sentAt = q.sentAt or now()
     local ok, err = pcall(own, api.SendBrowseQuery, P.QUERY(q))
     if not ok then finish(false, "SendBrowseQuery failed: " .. tostring(err)) end
 end
@@ -397,9 +410,11 @@ end
 local function onAnswer()
     if not scan or scan.state ~= "browsing" or not scan.q or scan.q.waiting then return end
     local q = scan.q
+    q.ev = (q.ev or 0) + 1
     local n, mine = readList()
     if not mine then return end                            -- the answer to another search
-    if n == 0 then                                         -- empty: maybe the list comes a moment later (decision 326)
+    if n == 0 then
+        q.emp = (q.emp or 0) + 1                                         -- empty: maybe the list comes a moment later (decision 326)
         q.emptyAt = q.emptyAt or now()                     -- no answer yet: asked again after ANSWER_WAIT (fix 549)
         q.sawEmpty = true
         if P.EMPTY_WAIT <= 0 and full() then q.items, q.results = {}, 0; searchDone(false, "empty") end   -- tests only
@@ -407,6 +422,7 @@ local function onAnswer()
     end
     q.lastAt = now()
     q.answered, q.emptyAt = true, nil
+    q.gotAt = q.gotAt or (now() - (q.sentAt or now()))
     if full() then searchDone(n > 0 and n % P.PAGE == 0)
     elseif q.pages >= P.PAGES then searchDone(true)
     else q.more = true; P.Step() end
@@ -428,7 +444,7 @@ function P.Step()
     local q = scan.q
     if not q then return end
     if q.waiting then
-        if not throttleReady() then return end
+        if not throttleReady() then q.thr = (q.thr or 0) + 1; return end
         q.waiting = nil
         send()
     elseif not q.answered and now() - q.lastAt > P.ANSWER_WAIT then
@@ -456,7 +472,9 @@ end
 -- the subcategories one class is searched by (fix 575), nil = the whole class in one search
 function P.SubclassesOf(c)
     local known = P.BY_SUBCLASS[c]
-    if not known then return nil end
+    -- fix 579: off unless switched on with /omq prices sub - on Forever every subcategory search after the first few
+    -- came back empty (cause unknown, the scan log in priceScanLast.cats is to tell)
+    if not known or not (OMQDB and OMQDB.priceScanSub) then return nil end
     local list, seen = {}, {}
     local function add(s) if type(s) == "number" and not seen[s] then seen[s] = true; list[#list + 1] = s end end
     local api = A()
@@ -695,6 +713,11 @@ OMQ:RegisterCommand("prices", function(arg)
         return
     end
     if arg == "cancel" then P.Cancel(); OMQ:Print("prices: scan stopped"); return end
+    if arg == "sub" then                                     -- fix 579: test switch for the subcategory searches
+        OMQDB.priceScanSub = not OMQDB.priceScanSub or nil
+        OMQ:Print("prices: consumables and trade goods by subcategory " .. (OMQDB.priceScanSub and "ON (test)" or "off"))
+        return
+    end
     if arg == "check" then                                   -- the dump against live prices of this visit (decision 431)
         local r = P.CheckReport()
         local L = P.last or (OMQDB and OMQDB.priceScanLast)
