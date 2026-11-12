@@ -35,7 +35,7 @@ end
 
 -- names and spell IDs of my buffs; a secret entry is skipped, not the whole list (decision 282)
 local function auraNames()
-    local names, ids, any, readable = {}, {}, false, 0
+    local names, ids, any, readable, camp = {}, {}, false, 0, nil
     local get = (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex)
     if get then
         for i = 1, 40 do
@@ -45,6 +45,7 @@ local function auraNames()
             any = true
             if type(a.name) == "string" and not isSecret(a.name) then names[a.name] = true; readable = readable + 1 end
             if type(a.spellId) == "number" and not isSecret(a.spellId) then ids[a.spellId] = true end
+            if C.IsCamp(a) then camp = a; pcall(function() a.omqIndex = i end) end
         end
     elseif UnitBuff then
         for i = 1, 40 do
@@ -60,8 +61,107 @@ local function auraNames()
     end
     if any and readable == 0 then return nil end           -- nothing readable: cannot tell
     names.__ids = ids
+    names.__camp = camp and C.CampStats(camp) or nil
     return names
 end
+
+-- Forever camp buff "Camp Benefits" (German "Lagervorteile", fix 547): ONE aura that holds the perks of the camp
+-- objects at the fire (Incense Candle Intellect, First Aid Kit Stamina, Faction Banner Spirit, Sharpening Wheel
+-- Strength, ...). They do not stack with the class buff of the same stat, so a scroll or an Intellect elixir of that
+-- stat is not needed either. Which perks it holds is only in its tooltip: read once out of combat, kept while the
+-- same aura is on. Stat names come from the client (SPELL_STAT1-5_NAME), so German and English both work.
+C.CAMP_SPELL = 1229741
+C.CAMP_NAMES = { ["Camp Benefits"] = true, ["Lagervorteile"] = true }
+C.STAT_OF = { s_str = 1, s_sta = 3, s_int = 4, e_int = 4, s_spi = 5 }
+C.STAT_EN = { "Strength", "Agility", "Stamina", "Intellect", "Spirit" }
+local campCache = nil                 -- { id = auraInstanceID, stats = { [stat] = amount }, lines = {...} }
+function C.IsCamp(a)
+    if type(a) ~= "table" then return false end
+    local sid, name = a.spellId, a.name
+    if type(sid) == "number" and not isSecret(sid) and sid == C.CAMP_SPELL then return true end
+    if type(name) == "string" and not isSecret(name) then
+        if C.CAMP_NAMES[name] then return true end
+        local n = C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(C.CAMP_SPELL)
+        if type(n) == "string" and not isSecret(n) and n == name then return true end
+    end
+    return false
+end
+-- the text lines of a buff's tooltip, nil when they cannot be read (secret, no API)
+function C.AuraLines(a)
+    local T = C_TooltipInfo
+    if not T then return nil end
+    local ok, data
+    local inst = a and a.auraInstanceID
+    if type(inst) == "number" and not isSecret(inst) and T.GetUnitBuffByAuraInstanceID then
+        ok, data = pcall(T.GetUnitBuffByAuraInstanceID, "player", inst, "HELPFUL")
+    end
+    if not (ok and type(data) == "table") and a and a.omqIndex and T.GetUnitAura then
+        ok, data = pcall(T.GetUnitAura, "player", a.omqIndex, "HELPFUL")
+    end
+    if not (ok and type(data) == "table" and type(data.lines) == "table") then return nil end
+    local out = {}
+    for _, line in ipairs(data.lines) do
+        for _, k in ipairs({ "leftText", "rightText" }) do
+            local t = line and line[k]
+            if type(t) == "string" and not isSecret(t) and t ~= "" then out[#out + 1] = t end
+        end
+    end
+    return #out > 0 and out or nil
+end
+local function statNames(i)
+    local out = { C.STAT_EN[i] }
+    local g = _G["SPELL_STAT" .. i .. "_NAME"]
+    if type(g) == "string" and g ~= "" then out[#out + 1] = g end
+    return out
+end
+-- { [stat index] = amount } from tooltip lines: the number nearest to the stat name in its line (no percent values)
+function C.ParseCamp(lines)
+    local stats = {}
+    for _, line in ipairs(lines or {}) do
+        local low = line:lower()
+        local nums = {}
+        local pos = 1
+        while true do
+            local a, b = low:find("%d+", pos)
+            if not a then break end
+            if low:sub(b + 1, b + 1) ~= "%" and low:sub(b + 1, b + 2) ~= " %" then
+                nums[#nums + 1] = { a = a, b = b, v = tonumber(low:sub(a, b)) }
+            end
+            pos = b + 1
+        end
+        if #nums > 0 then
+            for i = 1, 5 do
+                for _, nm in ipairs(statNames(i)) do
+                    local a, b = low:find(nm:lower(), 1, true)
+                    if a then
+                        local best, dist
+                        for _, n in ipairs(nums) do
+                            local d = (n.b < a) and (a - n.b) or (n.a > b and n.a - b) or 0
+                            if not dist or d < dist then best, dist = n.v, d end
+                        end
+                        if best and best > (stats[i] or 0) then stats[i] = best end
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return stats
+end
+-- the perks of the camp buff: { [stat index] = amount }; the last reading while the same aura is still on
+function C.CampStats(a)
+    local inst = a and a.auraInstanceID
+    if type(inst) == "number" and isSecret(inst) then inst = nil end
+    if campCache and inst and campCache.id == inst and next(campCache.stats) then return campCache.stats end
+    local lines = C.AuraLines(a)
+    if lines then
+        campCache = { id = inst, stats = C.ParseCamp(lines), lines = lines }
+        return campCache.stats
+    end
+    if campCache and (not inst or campCache.id == inst) then return campCache.stats end
+    return {}
+end
+function C.CampCache() return campCache end
 
 local function spellOf(id)
     local f = (C_Item and C_Item.GetItemSpell) or GetItemSpell
@@ -158,6 +258,7 @@ C.CLASS_BUFF = {
 }
 C.CLASS_BUFF.e_int = C.CLASS_BUFF.s_int
 C.SCROLL_STAT = { s_int = { 4, 8, 12, 16 }, s_sta = { 4, 8, 12, 16 }, s_spi = { 3, 7, 11, 15 },
+                  s_str = { 5, 9, 13, 17 },                        -- only against the camp buff (no class buff here)
                   e_int = { 6, 25 } }                                -- Elixir of Wisdom, Elixir of Greater Intellect
 -- the pure Intellect elixirs do not help with any rank of Arcane Intellect on (fix 487, seen in game):
 -- no reminder whatever rank the mage cast, also a weaker one
@@ -182,15 +283,22 @@ function C.BetterBuff(id, auras)
     if not need then return nil end                  -- no amount known (Elixir of the Sages): keep the reminder
     local ids = auras.__ids or {}
     local found = false
-    for sid, amount in pairs(C.CLASS_BUFF[key]) do
+    local class = C.CLASS_BUFF[key] or {}
+    for sid, amount in pairs(class) do
         if ids[sid] then
             found = true
             if amount >= need or C.ANY_RANK[key] then return spellName(sid) or "a class buff" end
         end
     end
+    -- the camp buff with a perk of the same stat (fix 547): same rule as a class buff rank
+    local camp = auras.__camp and C.STAT_OF[key] and auras.__camp[C.STAT_OF[key]]
+    if camp and (camp >= need or C.ANY_RANK[key]) then
+        local n = C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(C.CAMP_SPELL)
+        return (type(n) == "string" and not isSecret(n)) and n or "Camp Benefits"
+    end
     if found then return nil end                     -- only a weaker rank is on: the scroll still helps
     -- by name, when the buff's spell ID cannot be read: the rank is unknown, it counts as strong enough
-    for sid in pairs(C.CLASS_BUFF[key]) do
+    for sid in pairs(class) do
         local n = spellName(sid)
         if type(n) == "string" and not isSecret(n) and auras[n] then return n end
     end
@@ -344,6 +452,47 @@ end
 OMQ:RegisterCommand("consumables", function()
     for _, l in ipairs(C.Explain()) do print(l) end
 end, "why a buff item in your bags gets a reminder or not")
+
+-- /omq camp: what OMQ reads from the camp buff (fix 547)
+function C.CampExplain()
+    local out = {}
+    if OMQ.AurasHidden and OMQ.AurasHidden() then
+        out[#out + 1] = "camp buff: buffs cannot be read right now (dungeon fight), try again out of combat"
+        return out
+    end
+    local found
+    for i = 1, 40 do
+        local a, hidden = OMQ.ReadAura("player", i, "HELPFUL")
+        if hidden or not a then break end
+        if C.IsCamp(a) then found = a; pcall(function() a.omqIndex = i end); break end
+    end
+    if not found then
+        out[#out + 1] = "camp buff: not on (rest at a campfire for a minute)"
+        return out
+    end
+    local sid = found.spellId
+    out[#out + 1] = string.format("camp buff: %s (spell %s)", (type(found.name) == "string" and not isSecret(found.name)) and found.name or "?",
+        (type(sid) == "number" and not isSecret(sid)) and tostring(sid) or "secret")
+    if type(found.points) == "table" then
+        local p = {}
+        for _, v in ipairs(found.points) do p[#p + 1] = isSecret(v) and "secret" or tostring(v) end
+        out[#out + 1] = "  aura values: " .. (#p > 0 and table.concat(p, ", ") or "none")
+    end
+    local lines = C.AuraLines(found)
+    if lines then
+        for _, l in ipairs(lines) do out[#out + 1] = "  tooltip: " .. l end
+    else
+        out[#out + 1] = "  tooltip: cannot be read"
+    end
+    local stats = C.CampStats(found)
+    local p = {}
+    for i = 1, 5 do if stats[i] then p[#p + 1] = C.STAT_EN[i] .. " +" .. stats[i] end end
+    out[#out + 1] = "  stats found: " .. (#p > 0 and table.concat(p, ", ") or "none (no Strength, Stamina, Intellect or Spirit perk)")
+    return out
+end
+OMQ:RegisterCommand("camp", function()
+    for _, l in ipairs(C.CampExplain()) do print(l) end
+end, "what One More Quest reads from the camp buff")
 
 M:Register({ id = "consumable", name = "Use your buff items (elixirs, scrolls, food, stones, oils)", check = function()
     local r = C.Check()
