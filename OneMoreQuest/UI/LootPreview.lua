@@ -13,7 +13,6 @@ OMQ.LootPreview = LP
 
 LP.COUNT = 3
 LP.MIN_W = 560                   -- the Group Check is at least this wide when the tiles are shown
-local TILE_H, ICON, GAP = 52, 38, 8
 local HEAD_H = 20
 
 local function SC() return OMQ.Score end
@@ -132,6 +131,24 @@ function LP.Rewards(q, class, level, role, wornOf)
     return LP.ItemEntries(ids, class, level, role, wornOf)
 end
 
+-- decision 531: the other dads in the group for whom an item is an upgrade (their gear from the gear sync,
+-- decision 198): list of { name, gain }, best first; nil when it is for none of them
+function LP.DadUpgrades(link, equipLoc, minLevel)
+    local S, C = SC(), OMQ.Compare
+    if not (S and C and C.Dads) then return nil end
+    local out = {}
+    for _, d in ipairs(C.Dads()) do
+        if d.gear and d.class and S.CanUse(link, d.class, math.max(d.level or 1, minLevel or 0)) then
+            local worn = function(slot) return d.gear[slot] or nil end
+            local g = LP.Gain(link, equipLoc, d.class, d.role or "damage", worn)
+            if g and g > 0 then out[#out + 1] = { name = d.name, gain = g } end
+        end
+    end
+    if #out == 0 then return nil end
+    table.sort(out, function(a, b) return a.gain > b.gain end)
+    return out
+end
+
 -- the same for any list of item ids (boss loot in the dungeon window, decision 530)
 function LP.ItemEntries(ids, class, level, role, wornOf)
     local S = SC()
@@ -155,6 +172,7 @@ function LP.ItemEntries(ids, class, level, role, wornOf)
                 e.gain = LP.Gain(link, equipLoc, class, role, wornOf)
                 e.state = (e.gain and e.gain > 0) and "up" or "no"
             end
+            if gear and S then e.dads = LP.DadUpgrades(link, equipLoc, minLevel) end
             list[#list + 1] = e
         end
     end
@@ -218,6 +236,9 @@ function LP.RewardScoreLine(tip, e)
         tip:AddLine(" ")
         tip:AddLine("Item score: not for you", 0.6, 0.63, 0.68)
     end
+    for _, d in ipairs(e.dads or {}) do
+        tip:AddLine("Upgrade for " .. d.name .. ": |cff5aa0ff+" .. d.gain .. "|r", 0.35, 0.63, 1)
+    end
 end
 
 local function rewardEnter(self)
@@ -244,8 +265,13 @@ function LP.MakeRewardIcon(parent)
     e[2]:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0); e[2]:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0); e[2]:SetHeight(1)
     e[3]:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0); e[3]:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0); e[3]:SetWidth(1)
     e[4]:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0); e[4]:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0); e[4]:SetWidth(1)
-    b.up = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    b.up:SetPoint("TOPRIGHT", b, "TOPRIGHT", 2, 3)
+    -- decision 531: a small arrow up in the corner: green = an upgrade for me, blue = for another dad
+    b.up = b:CreateTexture(nil, "OVERLAY", nil, 2)
+    b.up:SetSize(12, 12)
+    b.up:SetPoint("TOPRIGHT", b, "TOPRIGHT", 3, 3)
+    b.up:SetTexture("Interface\\Buttons\\Arrow-Up-Up")
+    if b.up.SetDesaturated then b.up:SetDesaturated(true) end
+    b.up:Hide()
     b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
     b:RegisterForClicks("AnyUp")
     b:SetScript("OnEnter", rewardEnter)
@@ -264,7 +290,11 @@ function LP.SetRewardIcon(b, e)
     local r, g, bl = 0.4, 0.4, 0.4
     if not e.loading then r, g, bl = rewardColor(e.quality) end
     for _, edge in ipairs(b.edges) do edge:SetColorTexture(r, g, bl, 1) end
-    b.up:SetText(e.state == "up" and "|cff40e060+|r" or "")
+    local arrow = e.state == "up" and "me" or (e.dads and "dad") or nil
+    if arrow == "me" then b.up:SetVertexColor(0.25, 0.95, 0.35); b.up:Show()
+    elseif arrow == "dad" then b.up:SetVertexColor(0.30, 0.62, 1.00); b.up:Show()
+    else b.up:Hide() end
+    b.omqArrow = arrow
 end
 
 -- adds the reward lines to the GameTooltip; true when there were rewards
@@ -299,67 +329,18 @@ end
 local head, note, tiles = nil, nil, {}
 LP._tiles = tiles
 
-local function qualityColor(q)
-    if C_Item and C_Item.GetItemQualityColor then
-        local r, g, b = C_Item.GetItemQualityColor(q)
-        if r then return r, g, b end
-    end
-    local c = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q]
-    if c then return c.r, c.g, c.b end
-    return 1, 1, 1
-end
-
-local function makeTile(parent)
-    local t = CreateFrame("Button", nil, parent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-    t:SetHeight(TILE_H)
-    t.bg = t:CreateTexture(nil, "BACKGROUND")
-    t.bg:SetAllPoints()
-    t.bg:SetColorTexture(1, 1, 1, 0.04)
-    t:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-    t.icon = t:CreateTexture(nil, "ARTWORK")
-    t.icon:SetSize(ICON, ICON)
-    t.icon:SetPoint("LEFT", t, "LEFT", 7, 0)
-    t.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-    -- quality border: four thin lines around the icon
-    t.edges = {}
-    for i = 1, 4 do t.edges[i] = t:CreateTexture(nil, "OVERLAY") end
-    local e = t.edges
-    e[1]:SetPoint("TOPLEFT", t.icon, "TOPLEFT", -2, 2); e[1]:SetPoint("TOPRIGHT", t.icon, "TOPRIGHT", 2, 2); e[1]:SetHeight(2)
-    e[2]:SetPoint("BOTTOMLEFT", t.icon, "BOTTOMLEFT", -2, -2); e[2]:SetPoint("BOTTOMRIGHT", t.icon, "BOTTOMRIGHT", 2, -2); e[2]:SetHeight(2)
-    e[3]:SetPoint("TOPLEFT", t.icon, "TOPLEFT", -2, 2); e[3]:SetPoint("BOTTOMLEFT", t.icon, "BOTTOMLEFT", -2, -2); e[3]:SetWidth(2)
-    e[4]:SetPoint("TOPRIGHT", t.icon, "TOPRIGHT", 2, 2); e[4]:SetPoint("BOTTOMRIGHT", t.icon, "BOTTOMRIGHT", 2, -2); e[4]:SetWidth(2)
-    t.name = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    t.name:SetPoint("TOPLEFT", t.icon, "TOPRIGHT", 8, 1)
-    t.name:SetPoint("RIGHT", t, "RIGHT", -40, 0)
-    t.name:SetJustifyH("LEFT")
-    t.name:SetJustifyV("TOP")
-    t.name:SetHeight(24)
-    if t.name.SetWordWrap then t.name:SetWordWrap(true) end
-    t.sub = t:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    t.sub:SetPoint("BOTTOMLEFT", t.icon, "BOTTOMRIGHT", 8, -1)
-    t.sub:SetPoint("RIGHT", t, "RIGHT", -6, 0)
-    t.sub:SetJustifyH("LEFT")
-    if t.sub.SetWordWrap then t.sub:SetWordWrap(false) end
-    t.gain = t:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    t.gain:SetPoint("TOPRIGHT", t, "TOPRIGHT", -7, -6)
-    t.gain:SetJustifyH("RIGHT")
-    t:RegisterForClicks("AnyUp")
-    t:SetScript("OnEnter", function(self)
-        if not (GameTooltip and self.link) then return end
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetHyperlink(self.link)       -- the game's own item tooltip
-        GameTooltip:Show()
-    end)
-    t:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-    t:SetScript("OnClick", function(self)
-        if self.link and HandleModifiedItemClick then HandleModifiedItemClick(self.link) end
-    end)
-    return t
-end
+-- decision 531: the Group Check shows the bosses of the dungeon as a row of round icons (the icons of the dungeon
+-- window); hover over one: all its loot beside the Group Check, the game's tooltip on each item. The best-upgrade
+-- tiles (decision 233) are gone from the Group Check; LP.Best stays for other callers.
+LP.BOSS_ICON = 36
+LP.BOSS_GAP = 6
+local bossIcons = {}
+LP._bossIcons = bossIcons
 
 function LP:Hide()
     if head then head:Hide(); note:Hide() end
     for _, t in ipairs(tiles) do t:Hide() end
+    for _, b in ipairs(bossIcons) do b:Hide() end
 end
 
 -- draws the part into the Group Check at (x, -y) with the given width; returns its height
@@ -370,60 +351,41 @@ function LP:Render(parent, key, x, y, width)
         note = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         note:SetJustifyH("LEFT")
     end
+    for _, t in ipairs(tiles) do t:Hide() end
     head:ClearAllPoints()
     head:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -y)
     head:SetWidth(width)
-    local S = SC()
-    local role = S and S.MyRole() or "damage"
-    head:SetText("Best boss loot for you  |cff9aa0aa(item score, " .. ((S and S.ROLE_LABEL[S.RoleOf(S.MyClass(), role) or role]) or role) .. ")|r")
+    head:SetText("Bosses  |cff9aa0aa(hover: their loot)|r")
     head:Show()
-    note:ClearAllPoints()
-    note:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -(y + HEAD_H))
-    note:SetWidth(width)
-    local best, loading = {}, 0
-    if (OMQ.DungeonLoot or {})[key] then best, loading = LP.Best(key, LP.COUNT) end
-    local tw = math.floor((width - GAP * (LP.COUNT - 1)) / LP.COUNT)
-    for i = 1, LP.COUNT do
-        local t = tiles[i] or makeTile(parent)
-        tiles[i] = t
-        local b = best[i]
-        if b then
-            t:ClearAllPoints()
-            t:SetPoint("TOPLEFT", parent, "TOPLEFT", x + (i - 1) * (tw + GAP), -(y + HEAD_H))
-            t:SetWidth(tw)
-            t.link = b.link
-            t.icon:SetTexture(b.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
-            local r, g, bl = qualityColor(b.quality)
-            for _, e in ipairs(t.edges) do e:SetColorTexture(r, g, bl, 1) end
-            t.name:SetText(b.name)
-            t.name:SetTextColor(r, g, bl)
-            t.gain:SetText("|cff40e060+" .. b.gain .. "|r")
-            local slot = _G[b.equipLoc] or ""
-            local myLevel = UnitLevel and UnitLevel("player") or 1
-            if b.minLevel > myLevel then
-                t.sub:SetText(slot .. "  |cffff5050level " .. b.minLevel .. "|r")
-            else
-                t.sub:SetText(slot)
-            end
-            t:Show()
-        else
-            t:Hide()
-        end
+    local list = {}
+    local W, UI = OMQ.DungeonWin, OMQ.DungeonWinUI
+    if W and UI and (OMQ.DungeonLoot or {})[key] then
+        local bosses, rares = W.Bosses(key)
+        for _, e in ipairs(bosses) do list[#list + 1] = e end
+        for _, e in ipairs(rares) do list[#list + 1] = e end
     end
-    local text
-    if not (OMQ.DungeonLoot or {})[key] then text = "No loot list for this dungeon yet"
-    elseif #best == 0 and loading > 0 then text = "Loading the items..."
-    elseif #best == 0 then text = "Nothing from the bosses beats your gear"
-    elseif loading > 0 then text = "" end
-    if text then
-        note:SetText(text)
+    local step = LP.BOSS_ICON + LP.BOSS_GAP
+    local cols = math.max(1, math.floor((width + LP.BOSS_GAP) / step))
+    for i, e in ipairs(list) do
+        local b = bossIcons[i]
+        if not b then b = UI.MakeBossIcon(parent, LP.BOSS_ICON, parent); bossIcons[i] = b end
+        local r, c = math.floor((i - 1) / cols), (i - 1) % cols
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", parent, "TOPLEFT", x + c * step, -(y + HEAD_H + r * step))
+        UI.SetIcon(b, e, false)
+    end
+    for i = #list + 1, #bossIcons do bossIcons[i]:Hide() end
+    LP.loading = 0
+    if #list == 0 then
+        note:ClearAllPoints()
+        note:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -(y + HEAD_H))
+        note:SetWidth(width)
+        note:SetText("No loot list for this dungeon yet")
         note:Show()
-    else
-        note:Hide()
+        return HEAD_H + 16
     end
-    LP.loading = loading
-    if #best == 0 then return HEAD_H + 16 end
-    return HEAD_H + TILE_H
+    note:Hide()
+    return HEAD_H + math.ceil(#list / cols) * step
 end
 
 -- items arrive from the server: draw again (the Group Check redraws everything, at most twice a second)

@@ -2,7 +2,7 @@
 -- Shows itself in every 5-player dungeon (not in raids) and hides outside. Top: the dungeon, Time, Mobs XP and Gold
 -- (coins looted). Below: the bosses as round portraits (the game's creature portrait from the display id; without
 -- one a small 3D model of the creature), a red X on a dead boss. Then "Rare": the rares, grey while alive, in colour
--- with the X once dead. Hover over a boss or rare: its loot as item icons beside the window; hover over an item:
+-- with the X once dead. Hover over a boss or rare: its loot as item icons right under the icon; hover over an item:
 -- the game's own item tooltip at once (with the item score line, a green "+" marks an upgrade).
 -- No close button: the "-" button folds the window to one line (dungeon, time, mob XP, gold); a click on the line
 -- or "+" opens it again. Drag to move; the place and the folded state are kept (OMQDB.dwin). /omq dwin reset puts it
@@ -72,9 +72,14 @@ local function mask(b, tex)
     call(tex.AddMaskTexture, tex, maskOf[b])
 end
 
-local function makeIcon(parent)
+-- the icon frame that a loot strip of this icon hangs beside (the window, or the Dungeon Check, decision 531)
+local anchorOf = {}
+
+local function makeIcon(parent, size, anchor)
+    size = size or U.ICON
     local b = CreateFrame("Button", nil, parent)
-    b:SetSize(U.ICON, U.ICON)
+    b:SetSize(size, size)
+    anchorOf[b] = anchor
     b.back = b:CreateTexture(nil, "BACKGROUND")
     b.back:SetAllPoints()
     b.back:SetColorTexture(0.02, 0.02, 0.03, 1)
@@ -84,13 +89,15 @@ local function makeIcon(parent)
     b.tex:SetPoint("BOTTOMRIGHT", -2, 2)
     mask(b, b.tex)
     b.cross = b:CreateTexture(nil, "OVERLAY")
-    b.cross:SetSize(U.ICON * 0.7, U.ICON * 0.7)
+    b.cross:SetSize(size * 0.7, size * 0.7)
     b.cross:SetPoint("CENTER")
     b.cross:SetTexture(CROSS)
     b.cross:Hide()
     b:SetScript("OnEnter", function(self) U.ShowLoot(self) end)
     return b
 end
+-- a boss icon for another window: hover shows the loot beside that window
+function U.MakeBossIcon(parent, size, anchor) return makeIcon(parent, size, anchor or parent) end
 
 -- the 3D model (only made when an icon needs one: no display id for a portrait)
 local function model(b)
@@ -142,8 +149,9 @@ end
 local hoverIcon, leaveAt
 
 local function buildFly()
-    fly = CreateFrame("Frame", "OneMoreQuestDungeonLoot", win)
-    fly:SetFrameStrata("DIALOG")
+    fly = CreateFrame("Frame", "OneMoreQuestDungeonLoot", UIParent)
+    fly:SetFrameStrata("FULLSCREEN_DIALOG")
+    fly:SetClampedToScreen(true)
     fly:EnableMouse(true)
     local bg = fly:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
@@ -162,9 +170,11 @@ end
 
 function U.FlyTick()
     if not (fly and fly:IsShown()) then return end
-    local over = fly:IsMouseOver() or (hoverIcon and hoverIcon:IsShown() and hoverIcon:IsMouseOver())
+    local box = hoverIcon and (anchorOf[hoverIcon] or win)
+    if not (hoverIcon and hoverIcon:IsShown() and box and box:IsShown()) then U.HideLoot(); return end
+    local over = fly:IsMouseOver() or hoverIcon:IsMouseOver()
     if over then leaveAt = nil; return end
-    leaveAt = leaveAt or GetTime() + 0.3
+    leaveAt = leaveAt or GetTime() + 0.4
     if GetTime() >= leaveAt then U.HideLoot() end
 end
 
@@ -176,7 +186,8 @@ end
 
 function U.ShowLoot(b)
     local e = b and b.omqBoss
-    if not (e and win) then return end
+    local box = b and (anchorOf[b] or win)
+    if not (e and box) then return end
     if not fly then buildFly() end
     hoverIcon, leaveAt = b, nil
     local name = W().Name(e.npc) or (e.rare and "Rare" or "Boss")
@@ -204,14 +215,10 @@ function U.ShowLoot(b)
     local rows = math.max(1, math.ceil(#list / U.LOOT_COLS))
     local w = math.max(150, 16 + U.LOOT_COLS * (U.LOOT_ICON + 4) - 4)
     fly:SetSize(w, #list > 0 and (50 + rows * (U.LOOT_ICON + 4)) or 44)
+    -- directly under the icon (decision 531, Tobias): the mouse goes straight down onto the items; the strip may
+    -- cover the other icons for the time being
     fly:ClearAllPoints()
-    local right = call(win.GetRight, win)
-    local screen = call(UIParent.GetWidth, UIParent)
-    if type(right) == "number" and type(screen) == "number" and right + w + 8 > screen then
-        fly:SetPoint("TOPRIGHT", win, "TOPLEFT", -4, 0)
-    else
-        fly:SetPoint("TOPLEFT", win, "TOPRIGHT", 4, 0)
-    end
+    fly:SetPoint("TOPLEFT", b, "BOTTOMLEFT", 0, 1)
     fly:Show()
     U._loot = { npc = e.npc, name = name, n = #list, loading = loading }
 end
