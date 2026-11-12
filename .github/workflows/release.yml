@@ -51,6 +51,9 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
+      - name: Solo pet threat regression
+        run: lua5.1 tests/threat_meter.lua
+
   release:
     needs: check
     if: github.event_name != 'pull_request'

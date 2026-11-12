@@ -1,9 +1,8 @@
 -- One More Quest: the threat meter (decision 333, step 2)
 -- A small frame that shows, for the current target, how much threat the player, the pet, the party and their
--- pets have, as the game's scaled percentage (UnitDetailedThreatSituation, 100 = the unit is the target; it can
--- be above 100 for a moment before the mob turns). Shown in a group, in dungeons or never (option), always inside a dungeon, 8 seconds after a fight, whenever
--- somebody has threat on the target, also when I have none yet. Values the game
--- does not give (secret) are skipped; when nothing is readable the frame stays hidden. In combat without
+-- pets have, as the game's scaled percentage (UnitDetailedThreatSituation). The tank flag marks who has aggro.
+-- Supports solo and group play, group only, dungeon only or disabled. Shows readable threat on the selected
+-- enemy, including when the pet pulls first. A dash means the client did not provide a readable percentage. In combat without
 -- an attackable target a faded one line hint shows. It can be dragged in the move mode only; /omq threat reset puts it back.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
@@ -45,11 +44,11 @@ end
 
 local function inGroup() return (IsInGroup and IsInGroup()) and true or false end
 
--- when the meter may show (decision 335): "group" = in a group, "dungeon" = inside a dungeon or raid, "never"
+-- When the meter may show, including the opt-in solo and group mode.
 function M.Mode()
     local o = OMQ.db and OMQ.db.options
     local m = o and o.threatMode
-    if m == "group" or m == "dungeon" or m == "never" then return m end
+    if m == "always" or m == "group" or m == "dungeon" or m == "never" then return m end
     if o and o.threat == false then return "never" end         -- the old on/off option (0.54.24)
     return "group"
 end
@@ -60,18 +59,9 @@ local function inDungeon()
     return inside and (kind == "party" or kind == "raid") or false
 end
 
-local function modeAllows()
-    if OMQ.Unlock and not OMQ.Unlock:Has("threat") then return false end   -- off until the first dungeon
-    local m = M.Mode()
-    if m == "never" then return false end
-    if m == "dungeon" then return inDungeon() end
-    return inGroup()
-end
-
-
 local function classColor(unit)
     local ok, _, file = pcall(UnitClass, unit)
-    local c = ok and file and not isSecret(file) and RAID_CLASS_COLORS and RAID_CLASS_COLORS[file]
+    local c = ok and not isSecret(file) and file and RAID_CLASS_COLORS and RAID_CLASS_COLORS[file]
     if c then return { c.r, c.g, c.b } end
     return { 0.8, 0.8, 0.8 }
 end
@@ -84,69 +74,88 @@ local function graceActive() return GetTime and GetTime() < M.graceUntil end
 
 -- nothing to list: a faded hint line or nothing. The hint shows while I fight, always inside a dungeon
 -- and for the grace period after a fight (decision 336)
-local function quiet(fighting, targetOk)
+local function quiet(fighting, targetOk, unavailable)
     local text
-    if fighting then text = targetOk and "No threat" or "No target in combat"
-    elseif inDungeon() then text = targetOk and "No threat" or "No target"
+    local threatText = unavailable and "Threat unavailable" or "No threat"
+    if fighting then text = targetOk and threatText or "No target in combat"
+    elseif inDungeon() then text = targetOk and threatText or "No target"
     elseif graceActive() then text = "Combat over" end
     if text then M.hintText = text; return "notarget" end
     return "hidden"
 end
 
+local SOLO_UNITS = { "player", "pet" }
+local function inCombat(unit)
+    local fighting = UnitAffectingCombat and UnitAffectingCombat(unit)
+    return not isSecret(fighting) and fighting == true
+end
+
 function M.Compute()
-    if not modeAllows() then return "hidden" end
-    local fighting = UnitAffectingCombat and UnitAffectingCombat("player") and true or false
+    local mode, grouped = M.Mode(), inGroup()
+    if mode == "never" then return "hidden" end
+    if mode ~= "always" then
+        if OMQ.Unlock and not OMQ.Unlock:Has("threat") then return "hidden" end
+        if (mode == "group" and not grouped) or (mode == "dungeon" and not inDungeon()) then return "hidden" end
+    end
+    local solo = not grouped and mode == "always"
+    local petDead = solo and UnitIsDead and UnitIsDead("pet")
+    petDead = not isSecret(petDead) and petDead == true
+    local fighting = inCombat("player") or (solo and not petDead and inCombat("pet"))
     -- the rows show whenever somebody has threat on the target, also when I have none yet (decision 335)
     local T = OMQ.ThreatProbe
     if not (T and UnitExists and UnitExists("target")) then return quiet(fighting, false) end
     local okA, attack = pcall(UnitCanAttack, "player", "target")
-    if not okA or attack ~= true then return quiet(fighting, false) end
-    if UnitIsDead and UnitIsDead("target") then return quiet(fighting, false) end
-    local rows = {}
-    local tankMode = M.TankMode()
-    local sawSecret = false
-    for _, unit in ipairs(T.UNITS) do
-        local r = T.Read(unit, "target")
-        if r and isSecret(r.scaled) then sawSecret = true end
-        if r and not r.err and not r.none and type(r.scaled) == "number" and not isSecret(r.scaled) and r.scaled > 0 then
+    if not okA or isSecret(attack) or attack ~= true then return quiet(fighting, false) end
+    local dead = UnitIsDead and UnitIsDead("target")
+    if not isSecret(dead) and dead == true then return quiet(fighting, false) end
+    local rows, missing = {}, {}
+    local tankMode = not solo and M.TankMode()
+    local unavailable = false
+    for _, unit in ipairs(solo and SOLO_UNITS or T.UNITS) do
+        local r
+        if unit ~= "pet" or not petDead then r = T.Read(unit, "target") end
+        if r then
+            local pct
+            if not r.err then
+                if not isSecret(r.scaled) and type(r.scaled) == "number" then pct = r.scaled
+                elseif r.none then pct = 0 end
+            end
+            if pct == nil then unavailable = true end
             local pet = unit == "pet" or unit:find("^partypet") ~= nil
-            rows[#rows + 1] = {
-                unit = unit, name = tostring(r.name), pct = r.scaled, pet = pet,
-                tank = (not isSecret(r.tank)) and r.tank == true, me = unit == "player",
-                color = pet and PET_COLOR or classColor(unit), tankMode = tankMode,
-            }
+            local tank = not isSecret(r.tank) and r.tank == true
+            local hasThreat = tank or (pct and pct > 0)
+            if hasThreat or unit == "player" or (solo and pet) then
+                local list = hasThreat and rows or missing
+                list[#list + 1] = {
+                    unit = unit, name = r.name, pct = pct, pet = pet, tank = tank, me = unit == "player",
+                    color = pet and PET_COLOR or classColor(unit), tankMode = tankMode,
+                }
+            end
         end
     end
-    if #rows == 0 then
-        -- values the game hides: nothing to show (a dungeon keeps its frame); a target without threat in
-        -- my fight: the hint, the frame stays (decision 339)
-        if sawSecret then return inDungeon() and quiet(false, true) or "hidden" end
-        return quiet(fighting, true)
-    end
-    local mine = false
-    for _, r in ipairs(rows) do if r.me then mine = true end end
-    if not mine then
-        -- somebody has threat and I have none yet: my own row at 0
-        local okN, nm = pcall(UnitName, "player")
-        rows[#rows + 1] = { unit = "player", name = okN and nm and not isSecret(nm) and tostring(nm) or "?", pct = 0,
-                            pet = false, tank = false, me = true, color = classColor("player") }
-    end
-    table.sort(rows, function(a, b) if a.pct ~= b.pct then return a.pct > b.pct end return a.unit < b.unit end)
+    if #rows == 0 then return quiet(fighting, true, unavailable) end
+    for _, row in ipairs(missing) do rows[#rows + 1] = row end
+    table.sort(rows, function(a, b)
+        local aPct, bPct = a.pct or -1, b.pct or -1
+        if aPct ~= bPct then return aPct > bPct end
+        return a.unit < b.unit
+    end)
     while #rows > M.MAX_ROWS do table.remove(rows) end
     return "rows", rows
 end
 
 -- the bar colour of a row
 function M.BarColor(row)
+    local pct = row.pct or 0
     if row.tankMode then
         -- tank mode: somebody else holds the aggro = red, I hold it = green, the rest as usual
         if row.tank then return row.me and COLOR.good or COLOR.hot end
-        if row.pct >= M.WARM then return COLOR.warm end
+        if pct >= M.WARM then return COLOR.warm end
         return COLOR.calm
     end
     if row.tank then return COLOR.tank end
-    if row.me and row.pct >= M.HOT then return COLOR.hot end
-    if row.pct >= M.WARM then return COLOR.warm end
+    if row.me and pct >= M.HOT then return COLOR.hot end
+    if pct >= M.WARM then return COLOR.warm end
     return COLOR.calm
 end
 
@@ -231,7 +240,7 @@ end
 
 local function targetName()
     local ok, n = pcall(UnitName, "target")
-    if ok and n and not isSecret(n) then return tostring(n) end
+    if ok and not isSecret(n) and n then return tostring(n) end
     return ""
 end
 
@@ -247,21 +256,22 @@ local function render(rows, name)
         row:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -6, top)
         local c = M.BarColor(r)
         row.bar:SetColorTexture(c[1], c[2], c[3], r.tank and 0.75 or 0.55)
-        row.bar:SetWidth(math.max(1, (WIDTH - 12) * math.min(r.pct, 100) / 100))
+        row.bar:SetWidth(math.max(1, (WIDTH - 12) * math.min(r.pct or 0, 100) / 100))
         if r.tankMode and r.tank then
             if r.me then row.edge:SetColorTexture(0.45, 0.9, 0.5, 1) else row.edge:SetColorTexture(1, 0.54, 0.36, 1) end
         elseif r.tankMode then
             row.edge:SetColorTexture(0, 0, 0, 0)
         elseif r.tank then
             row.edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
-        elseif r.me and r.pct >= M.HOT then
+        elseif r.me and (r.pct or 0) >= M.HOT then
             row.edge:SetColorTexture(1, 0.54, 0.36, 1)
         else
             row.edge:SetColorTexture(0, 0, 0, 0)
         end
         row.name:SetText(r.pet and (r.name .. " (pet)") or r.name)
         row.name:SetTextColor(r.color[1], r.color[2], r.color[3])
-        row.value:SetText(string.format("%d", math.floor(r.pct + 0.5)))
+        local value = r.pct and string.format("%d%%", math.floor(r.pct + 0.5)) or "-"
+        row.value:SetText(r.tank and (value .. " Aggro") or value)
         row:Show()
         top = top - ROW_H - GAP
     end
@@ -318,7 +328,7 @@ end)
 
 local driver = CreateFrame("Frame")
 local acc = 0
-for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_TARGET_CHANGED", "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD", "UNIT_THREAT_LIST_UPDATE" }) do
+for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_TARGET_CHANGED", "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD", "UNIT_THREAT_LIST_UPDATE", "UNIT_THREAT_SITUATION_UPDATE", "UNIT_PET" }) do
     pcall(driver.RegisterEvent, driver, e)
 end
 driver:SetScript("OnEvent", function(_, event)
