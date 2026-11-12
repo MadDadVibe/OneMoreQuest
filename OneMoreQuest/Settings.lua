@@ -203,6 +203,14 @@ local function allSections()
               tip = "When you leave a dungeon after at least 5 minutes inside: a card with the XP you got inside, its XP per hour and the XP per hour outside (your last 3 hours of play outside, AFK does not count). /omq dxp lists your last visits.",
               get = function() return OMQ.db.options.dungeonXP ~= false end,
               set = function(v) OMQ.db.options.dungeonXP = v and true or false end },
+            -- decision 533: upgrade arrows on the game's item buttons
+            { type = "check", label = "Upgrade arrows on items",
+              tip = "A green arrow up on an item icon when it is an upgrade for you, a blue one when it is not for you but for another dad in your group. In your bags and bank, the loot window, need/greed rolls, merchants and quest rewards (and OMQ's own item icons).",
+              get = function() return OMQ.db.options.upgradeArrows ~= false end,
+              set = function(v)
+                  OMQ.db.options.upgradeArrows = v and true or false
+                  if OMQ.UpgradeArrows then OMQ.UpgradeArrows.All() end
+              end },
             -- decision 530: the dungeon window
             { type = "check", label = "Dungeon window",
               tip = "In every dungeon a small window with the time, the XP from mobs, the coins you looted and the bosses and rares (a red X when dead). Hover over a boss: its loot. The - button folds it to one line; drag it to move it. /omq dwin reset puts it back.",

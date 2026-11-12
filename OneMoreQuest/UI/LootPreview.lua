@@ -241,6 +241,90 @@ function LP.RewardScoreLine(tip, e)
     end
 end
 
+----------------------------------------------------------------------
+-- Upgrade arrows (decisions 531, 533): a green arrow up = an upgrade for me, blue = not for me but for another dad
+-- of the group. Drawn on OMQ's own item icons and (UI/UpgradeArrows.lua) on the game's bag, bank, loot, roll,
+-- merchant and quest reward buttons. At least 16 px, half the icon, with a dark shadow behind it. The textures live
+-- in a side table: no field is written onto the game's own buttons.
+----------------------------------------------------------------------
+local ARROW = "Interface\\Buttons\\Arrow-Up-Up"
+local arrows = {}
+LP._arrows = arrows
+LP.ARROW_COLOR = { me = { 0.25, 0.95, 0.35 }, dad = { 0.30, 0.62, 1.00 } }
+
+-- the arrow texture of a button (made once); size = the icon size
+function LP.ArrowTex(b, size)
+    local a = arrows[b]
+    if a then return a.tex end
+    local s = math.max(16, math.floor((size or 32) * 0.5 + 0.5))
+    a = {}
+    a.shadow = b:CreateTexture(nil, "OVERLAY", nil, 6)
+    a.shadow:SetSize(s + 4, s + 4)
+    a.shadow:SetPoint("TOPRIGHT", b, "TOPRIGHT", 4, 4)
+    a.shadow:SetTexture(ARROW)
+    if a.shadow.SetDesaturated then a.shadow:SetDesaturated(true) end
+    a.shadow:SetVertexColor(0, 0, 0, 0.9)
+    a.tex = b:CreateTexture(nil, "OVERLAY", nil, 7)
+    a.tex:SetSize(s, s)
+    a.tex:SetPoint("CENTER", a.shadow, "CENTER", 0, 0)
+    a.tex:SetTexture(ARROW)
+    if a.tex.SetDesaturated then a.tex:SetDesaturated(true) end
+    a.shadow:Hide(); a.tex:Hide()
+    arrows[b] = a
+    return a.tex
+end
+
+-- shows the arrow of a kind ("me", "dad") on a button, or hides it (nil)
+function LP.Arrow(b, kind, size)
+    if not b then return end
+    if not arrows[b] then
+        if not kind then return end
+        LP.ArrowTex(b, size or (b.GetWidth and b:GetWidth()) or 32)
+    end
+    local a = arrows[b]
+    local c = kind and LP.ARROW_COLOR[kind]
+    if c then
+        a.tex:SetVertexColor(c[1], c[2], c[3], 1)
+        a.tex:Show(); a.shadow:Show()
+    else
+        a.tex:Hide(); a.shadow:Hide()
+    end
+    a.kind = kind
+end
+function LP.ArrowKind(b) return arrows[b] and arrows[b].kind or nil end
+
+-- the arrow of any item link: "me", "dad" or nil (cached for a few seconds; gear changes clear it)
+LP.ARROW_CACHE = 5
+local arrowCache = {}
+function LP.ArrowReset() arrowCache = {} end
+function LP.ArrowOf(link)
+    if type(link) ~= "string" or isSecret(link) then return nil end
+    local c = arrowCache[link]
+    local now = GetTime()
+    if c and now - c.t < LP.ARROW_CACHE then return c.kind end
+    local S = SC()
+    local kind
+    local _, _, _, equipLoc = instant(link)
+    local gear = equipLoc and equipLoc ~= "" and OMQ.Compare and OMQ.Compare.SLOTS and OMQ.Compare.SLOTS[equipLoc]
+    if gear and S then
+        local name, full, _, _, minLevel = info(link)
+        if name then
+            full = (full and not isSecret(full)) and full or link
+            local level = (UnitLevel and UnitLevel("player")) or 1
+            if S.CanUse(full, S.MyClass(), math.max(level, minLevel or 0)) then
+                local g = LP.Gain(full, equipLoc)
+                if g and g > 0 then kind = "me" end
+            end
+            if not kind and LP.DadUpgrades(full, equipLoc, minLevel) then kind = "dad" end
+        else
+            request(tonumber(link:match("item:(%d+)")) or link)
+            return nil                              -- not loaded yet: asked again on the next draw
+        end
+    end
+    arrowCache[link] = { t = now, kind = kind }
+    return kind
+end
+
 local function rewardEnter(self)
     local e = self.omqReward
     if not (GameTooltip and e) then return end
@@ -265,13 +349,8 @@ function LP.MakeRewardIcon(parent)
     e[2]:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0); e[2]:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0); e[2]:SetHeight(1)
     e[3]:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0); e[3]:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0); e[3]:SetWidth(1)
     e[4]:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0); e[4]:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0); e[4]:SetWidth(1)
-    -- decision 531: a small arrow up in the corner: green = an upgrade for me, blue = for another dad
-    b.up = b:CreateTexture(nil, "OVERLAY", nil, 2)
-    b.up:SetSize(12, 12)
-    b.up:SetPoint("TOPRIGHT", b, "TOPRIGHT", 3, 3)
-    b.up:SetTexture("Interface\\Buttons\\Arrow-Up-Up")
-    if b.up.SetDesaturated then b.up:SetDesaturated(true) end
-    b.up:Hide()
+    -- decision 531: an arrow up in the corner: green = an upgrade for me, blue = for another dad (LP.Arrow)
+    b.up = LP.ArrowTex(b, LP.REWARD_ICON)
     b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
     b:RegisterForClicks("AnyUp")
     b:SetScript("OnEnter", rewardEnter)
@@ -291,9 +370,7 @@ function LP.SetRewardIcon(b, e)
     if not e.loading then r, g, bl = rewardColor(e.quality) end
     for _, edge in ipairs(b.edges) do edge:SetColorTexture(r, g, bl, 1) end
     local arrow = e.state == "up" and "me" or (e.dads and "dad") or nil
-    if arrow == "me" then b.up:SetVertexColor(0.25, 0.95, 0.35); b.up:Show()
-    elseif arrow == "dad" then b.up:SetVertexColor(0.30, 0.62, 1.00); b.up:Show()
-    else b.up:Hide() end
+    LP.Arrow(b, arrow)
     b.omqArrow = arrow
 end
 
