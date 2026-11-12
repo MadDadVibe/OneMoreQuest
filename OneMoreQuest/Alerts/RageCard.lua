@@ -3,7 +3,9 @@
 -- Like the mana card, the card's transparency follows a step curve on the rage percentage
 -- (UnitPowerPercent with a curve): invisible below 15 percent (15 of 100 rage), visible above.
 -- Everything readable gates the card: Battle Shout learned, not on the warrior (auras are readable
--- out of combat), not in combat, buff alerts on, no snooze. A click casts Battle Shout.
+-- out of combat), not in combat, buff alerts on, no snooze.
+-- Like the mana card it only reminds and takes no clicks (fix 569): its alpha is a secret number, so nobody
+-- can tell whether it can be seen, and an invisible card must not swallow clicks.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -54,26 +56,13 @@ local function build()
     card:SetScale(1.2)
     card:SetFrameStrata("HIGH")
     card:SetPoint("BOTTOM", parent, "TOP", 0, 4)
-    card:RegisterForClicks("AnyUp", "AnyDown")
     if M.MakeSkin then
         local skin = M.MakeSkin(card)
         skin:SetAllPoints()
         card.skin = skin
     end
-    -- the same click logic as every card (decision 328): left casts, right goes away, shift + right snoozes 5 minutes
-    card:SetScript("PostClick", function(_, button, down)
-        if down or button ~= "RightButton" then return end
-        M:Dismiss("ragecard", true, IsShiftKeyDown and IsShiftKeyDown() or false)
-    end)
-    card:SetScript("OnEnter", function(self)
-        if not GameTooltip then return end
-        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:SetText("Battle Shout")
-        GameTooltip:AddLine(M.HINT_AWAY, 0.66, 0.69, 0.73, true)
-        GameTooltip:Show()
-    end)
-    card:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     card:SetAlpha(0)
+    if card.EnableMouse then card:EnableMouse(false) end
     card:Hide()
 end
 
@@ -133,15 +122,13 @@ local function update(_, elapsed)
         if not curve then M.unavailable = M.unavailable or {}; M.unavailable.buff = curveError; return end
     end
     local ok, err = pcall(function()
-        card:SetAttribute("type1", "spell")
-        card:SetAttribute("spell1", spell)
-        card:SetAttribute("unit1", "player")
         if M.FillSkin and card.skin then
-            M.FillSkin(card.skin, { tag = "BUFF", title = "Battle Shout", sub = "You are missing " .. spell,
+            M.FillSkin(card.skin, { tag = "BUFF", title = "Battle Shout", sub = "You are missing " .. spell .. " - cast it",
                                     icon = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(6673)) or "Interface\\Icons\\Ability_Warrior_BattleShout",
                                     color = { 0.85, 0.45, 0.75 } })
         end
         card:SetAlpha(UnitPowerPercent("player", rageType(), false, curve))
+        if card.EnableMouse then card:EnableMouse(false) end
         if not driven and RegisterStateDriver then
             RegisterStateDriver(card, "visibility", "[combat] hide; show")
             driven = true
