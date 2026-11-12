@@ -282,8 +282,10 @@ local function readList()
         if id and not isSecret(id) and not isSecret(price) and type(price) == "number" and price > 0 then
             if checked < P.CHECK_LINES then
                 checked = checked + 1
-                local c, sc = classOf(id)
-                if c and (c ~= q.classID or (q.subClassID and sc and sc ~= q.subClassID)) then foreign = foreign + 1 end
+                -- fix 578: only the class counts - the game's own subclass of an item can differ from the one the
+                -- auction house files it under (every answer to a consumables subcategory was thrown away)
+                local c = classOf(id)
+                if c and c ~= q.classID then foreign = foreign + 1 end
             end
             qty = (not isSecret(qty) and tonumber(qty)) or 0
             local e = items[id]
