@@ -177,6 +177,7 @@ P.PAGE, P.EMPTY_WAIT = 500, 1.5      -- EMPTY_WAIT 0 (tests only): an empty list
 -- empty, did not answer, or brought less than CAT_SHRINK of its lines of the last complete scan loses nothing: its items
 -- keep their old prices when the scan replaces the list.
 P.EMPTY_TRIES = 2
+P.CHECK_LINES = 30   -- fix 557: this many lines of an answer are checked for their category
 P.CAT_SHRINK, P.CAT_MIN = 0.5, 20   -- short: under half the lines of a category that had at least 20
 
 local function helper() return OMQ.AuctionHelper end
@@ -272,10 +273,10 @@ local function readList()
         local k = res.itemKey
         local id, price, qty = k and k.itemID, res.minPrice, res.totalQuantity
         if id and not isSecret(id) and not isSecret(price) and type(price) == "number" and price > 0 then
-            if checked < 5 then
+            if checked < P.CHECK_LINES then
                 checked = checked + 1
-                local c = classOf(id)
-                if c and c ~= q.classID then foreign = foreign + 1 end
+                local c, sc = classOf(id)
+                if c and (c ~= q.classID or (q.subClassID and sc and sc ~= q.subClassID)) then foreign = foreign + 1 end
             end
             qty = (not isSecret(qty) and tonumber(qty)) or 0
             local e = items[id]
@@ -285,7 +286,9 @@ local function readList()
             else items[id] = { p = math.floor(price), q = qty } end
         end
     end
-    if checked > 0 and foreign == checked then return #list, false end
+    -- fix 557: a list with items of other categories is not ours (the game's favorites list when the window opens
+    -- came as the answer to the consumables: 41 lines, and every other consumable lost its price)
+    if foreign >= 2 or (foreign >= 1 and checked < 10) then return #list, false end
     q.items, q.results = items, #list
     return #list, true
 end
