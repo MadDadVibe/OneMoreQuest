@@ -1,5 +1,5 @@
 -- One More Quest: Skill Route next to the profession window (decision 558)
--- A gold button at the top left of the profession window (right of its portrait; fix 560) folds out a panel with the route of the open profession: the
+-- A gold button at the top right of the profession window (under the close button, above the frame art; fix 561) folds out a panel with the route of the open profession: the
 -- same route the Profession Check and its shopping lists use (Data/ProfRoutes.lua), 1 to 300 in the four sections
 -- 1-75, 75-150, 150-225, 225-300. Done steps are green with a check, the step for the current skill has a gold frame,
 -- the crafts still left (from the Forever skill-up thresholds, Data/SkillThresholds.lua) and the materials for them
@@ -15,7 +15,8 @@ OMQ.SkillRoute = SR
 
 SR.W = 330                     -- panel width
 SR.TAB_W, SR.TAB_H = 26, 26
-SR.TAB_X, SR.TAB_Y = 100, -54    -- the button: between the portrait and the skill bar
+SR.TAB_X, SR.TAB_Y = -12, -52    -- the button: top right, under the close button, right of the skill bar
+SR.TAB_LEVEL = 30                -- frame levels above the window, so its border and children do not cover it
 SR.GAP = 44                      -- the panel: right of the profession tabs on the window's right edge
 SR.ROW_H, SR.SUB_H, SR.HEAD_H = 16, 14, 20
 SR.NOTE_TIME = 4
@@ -379,7 +380,10 @@ end
 local function build(pf)
     tab = CreateFrame("Button", "OneMoreQuestSkillRouteTab", pf, BackdropTemplateMixin and "BackdropTemplate" or nil)
     tab:SetSize(SR.TAB_W, SR.TAB_H)
-    tab:SetPoint("TOPLEFT", pf, "TOPLEFT", SR.TAB_X, SR.TAB_Y)
+    tab:SetPoint("TOPRIGHT", pf, "TOPRIGHT", SR.TAB_X, SR.TAB_Y)
+    local lvl = pf.GetFrameLevel and pf:GetFrameLevel()
+    if type(lvl) == "number" then tab:SetFrameLevel(lvl + SR.TAB_LEVEL) end
+    if tab.SetToplevel then tab:SetToplevel(true) end
     local tbg = tab:CreateTexture(nil, "BACKGROUND")
     tbg:SetAllPoints()
     tbg:SetColorTexture(0.23, 0.18, 0.11, 0.95)
