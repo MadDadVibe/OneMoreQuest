@@ -203,6 +203,14 @@ local function allSections()
               tip = "When you leave a dungeon after at least 5 minutes inside: a card with the XP you got inside, its XP per hour and the XP per hour outside (your last 3 hours of play outside, AFK does not count). /omq dxp lists your last visits.",
               get = function() return OMQ.db.options.dungeonXP ~= false end,
               set = function(v) OMQ.db.options.dungeonXP = v and true or false end },
+            -- decision 530: the dungeon window
+            { type = "check", label = "Dungeon window",
+              tip = "In every dungeon a small window with the time, the XP from mobs, the coins you looted and the bosses and rares (a red X when dead). Hover over a boss: its loot. The - button folds it to one line; drag it to move it. /omq dwin reset puts it back.",
+              get = function() return OMQ.db.options.dungeonWin ~= false end,
+              set = function(v)
+                  OMQ.db.options.dungeonWin = v and true or false
+                  if OMQ.DungeonWinUI then OMQ.DungeonWinUI.Refresh() end
+              end },
             -- decisions 334, 335: the threat meter
             { type = "segment", label = "Threat meter", unlock = "threat",
               tip = "A small frame with the threat of everyone in your group on your target, in percent (100 = he is the target). In group: whenever you are in a group. Dungeons: only inside a dungeon or raid. Place it in the move mode; /omq threat reset puts it back.",

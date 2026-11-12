@@ -129,6 +129,11 @@ end
 function LP.Rewards(q, class, level, role, wornOf)
     local ids = LP.RewardIDs(q)
     if not ids then return nil, 0 end
+    return LP.ItemEntries(ids, class, level, role, wornOf)
+end
+
+-- the same for any list of item ids (boss loot in the dungeon window, decision 530)
+function LP.ItemEntries(ids, class, level, role, wornOf)
     local S = SC()
     class = class or (S and S.MyClass())
     level = level or (UnitLevel and UnitLevel("player")) or 1
@@ -183,7 +188,11 @@ LP.REWARD_STEP = 24
 
 -- the icons of a quest in their order: the loaded ones as Rewards sorts them, then the ones still loading
 function LP.RewardIcons(q)
-    local list, loading, pend = LP.Rewards(q)
+    return LP.IconEntries(LP.Rewards(q))
+end
+
+-- icon entries of an item list (LP.ItemEntries): loaded ones first, then the ones still loading
+function LP.IconEntries(list, loading, pend)
     if not list then return {}, 0 end
     local out = {}
     for _, e in ipairs(list) do out[#out + 1] = e end

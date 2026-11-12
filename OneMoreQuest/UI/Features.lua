@@ -33,6 +33,7 @@ FE.SECTIONS = {
         { "Arrow to the dungeon entrance, with how to get in", unlock = "dungeon" },
         { "Dungeon Run: one way through every pre-quest that picks up all dungeon quests of a dungeon, from the Group Check", unlock = "dungeon" },
         { "Switch between the dungeons of your level in the Group Check", unlock = "dungeon" },
+        "Dungeon window: in every dungeon the time, the XP from mobs, the coins looted and the bosses and rares with a red X when dead; hover over a boss for its loot, fold it to one line",
         "Dungeon XP: when you leave a dungeon, a card shows the XP you got inside and its XP per hour against your XP per hour outside",
         "Progress Check: the milestones of your class, the dungeons and, on request, the quest zones by level; a click on a zone leads to its quest hub",
     } },
