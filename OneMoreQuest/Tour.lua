@@ -32,7 +32,8 @@ TR.STEPS = {
       cleanup = function() if OMQ.Tooltip then pcall(OMQ.Tooltip.Hide, OMQ.Tooltip) end end },
     { title = "Alert cards", target = function() return shown("OneMoreQuestAlerts") end,
       text = "Small helpers that pop up when something needs doing: repair, train, drink, buy a tool, call your pet. Most of them do the job for you.",
-      mouse = { { "Left click", "do it (cast, arrow, place, open)" }, { "Right click", "hide it for 5 minutes" } } },
+      mouse = { { "Left click", "do it (cast, arrow, place, open)" }, { "Right click", "away until it is solved (some: for good)" },
+                { "Shift + right click", "hide it for 5 minutes" } } },
     { title = "Where to go", target = function() return shown("OneMoreQuestGuideBar") end,
       text = "The meeting point is always here. Hover it for trainer, vendor, repair, flight master, mailbox, inn and bank.",
       mouse = { { "Click an icon", "the arrow leads you to the nearest one" }, { "Meeting point", "every dad gets an arrow to you" },
@@ -326,12 +327,12 @@ if OMQ.Alerts then
         if TR.active then return nil end
         return { {
             key = "welcome", tag = "WELCOME", title = "New to One More Quest?",
-            sub = "Left click: guided tour - Right click: not now", text = "New to One More Quest?",
+            sub = "Left click: guided tour - Right click: no thanks", text = "New to One More Quest?",
             icon = "Interface\\Icons\\INV_Misc_Book_09", color = GOLD,
             open = function() TR:Start() end,        -- then dismissed like every card, which marks it seen
         } }
     end })
-    OMQ:On("ALERT_DISMISSED", function(key)
-        if key == "welcome" and OMQDB then OMQDB.tourSeen = true end
+    OMQ:On("ALERT_DISMISSED", function(key, snooze)
+        if key == "welcome" and not snooze and OMQDB then OMQDB.tourSeen = true end
     end)
 end

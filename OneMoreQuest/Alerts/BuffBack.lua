@@ -179,7 +179,7 @@ function B.Check()
                 title = "Buff back " .. who, text = "Buff back " .. who,
                 sub = (p.spell and (p.spell .. " from " .. who) or (who .. " buffed you")) .. " - left click: " .. buff,
                 tipLines = { "Buff back " .. who, (p.spell and (who .. " gave you " .. p.spell) or (who .. " buffed you")) .. ".",
-                             "Left click: " .. buff .. " on " .. who .. ".", "Right click: away." },
+                             "Left click: " .. buff .. " on " .. who .. "." },
             }
             if u == "target" then
                 a.cast, a.unit = cast, "target"

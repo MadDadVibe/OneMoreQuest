@@ -65,6 +65,14 @@ local function build()
         if down or button ~= "RightButton" then return end
         M:Dismiss("ragecard", true, IsShiftKeyDown and IsShiftKeyDown() or false)
     end)
+    card:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:SetText("Battle Shout")
+        GameTooltip:AddLine(M.HINT_AWAY, 0.66, 0.69, 0.73, true)
+        GameTooltip:Show()
+    end)
+    card:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     card:SetAlpha(0)
     card:Hide()
 end

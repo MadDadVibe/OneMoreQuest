@@ -555,8 +555,8 @@ if OMQ.Alerts then
             icon = "Interface\\Icons\\Spell_Holy_FlashHeal", color = { 0.49, 0.78, 0.44 },
         } }
     end })
-    OMQ:On("ALERT_DISMISSED", function(key)
-        if key == "clickintro" then
+    OMQ:On("ALERT_DISMISSED", function(key, snooze)
+        if key == "clickintro" and not snooze then
             local st = store()
             if st then st.introDone = true end
         end

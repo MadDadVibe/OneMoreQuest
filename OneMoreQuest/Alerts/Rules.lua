@@ -454,7 +454,8 @@ M:Register({
     end,
 })
 
-OMQ:On("ALERT_DISMISSED", function(key)
+OMQ:On("ALERT_DISMISSED", function(key, snooze)
+    if snooze then return end
     local lvl = tonumber(tostring(key):match("^train:(%d+)$"))
     if lvl then markTrained(lvl) end
     -- the level-up card: gone; the city and trainer card still reminds (decision 237)

@@ -195,7 +195,7 @@ function DQ.Card()
     for _, e in ipairs(list) do
         tips[#tips + 1] = string.format("%s - %s, %s", e.name, e.giver, e.dungeon.name)
     end
-    tips[#tips + 1] = "Left click: arrow to " .. first.giver .. ". Right click: not now."
+    tips[#tips + 1] = "Left click: arrow to " .. first.giver .. "."
     return {
         key = "dquest", title = title, text = title, sub = sub, tag = "QUEST", tipLines = tips,
         icon = "Interface\\GossipFrame\\AvailableQuestIcon", color = { 0.98, 0.82, 0.25 },

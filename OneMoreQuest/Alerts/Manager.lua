@@ -151,9 +151,21 @@ function permanentlyDismissed(key)
     return s and s[key] and true or false
 end
 
+-- the last line of every card's hover tooltip says what the right click does on that card (fix 536)
+M.HINT_AWAY = "Right click: away until it is solved - Shift + right click: 5 minutes"
+M.HINT_NEVER = "Right click: never remind - Shift + right click: 5 minutes"
+-- one-time cards that a right click settles for good (training of a level, level up, introductions)
+local function onceKind(key)
+    return type(key) == "string" and (key:find("^train:") or key:find("^trainup:") or key == "clickintro"
+        or key == "daduitwink" or key == "welcome") and true or false
+end
+function M.ClickHint(key)
+    return (permanentKind(key) or onceKind(key)) and M.HINT_NEVER or M.HINT_AWAY
+end
+
 -- One click logic for every card (decision 328):
 --   left click      the action of the card (cast, arrow, window); a card without one goes away for 5 minutes
---   right click     the card goes away (M:Dismiss(key, true)): for good for the training, tool and consumable cards,
+--   right click     the card goes away (M:Dismiss(key, true)): for good for the training, tool, consumable, upgrade and one-time cards,
 --                   otherwise as long as its problem lasts
 --   shift + right   the card snoozes for 5 minutes (M:Dismiss(key, false, true)) and then comes back
 function M:Dismiss(key, forGood, snooze)
@@ -171,7 +183,8 @@ function M:Dismiss(key, forGood, snooze)
     active[key] = nil
     if self._MarkDismissed then self:_MarkDismissed(key) end
     self:Render()
-    OMQ:Fire("ALERT_DISMISSED", key)
+    -- snooze: the listeners keep the card's state, it only waits 5 minutes (fix 536)
+    OMQ:Fire("ALERT_DISMISSED", key, snooze and true or false)
 end
 
 -- the card goes away for a few seconds and comes back by itself when its problem is still there (fix 486)
@@ -513,17 +526,25 @@ local function makeCard(i)
         if link and GameTooltip and GameTooltip.SetHyperlink then
             GameTooltip:SetOwner(self, "ANCHOR_LEFT")
             GameTooltip:SetHyperlink(link)
+            GameTooltip:AddLine(M.ClickHint(self.key), 0.66, 0.69, 0.73, true)
             GameTooltip:Show()
             return
         end
+        if not (GameTooltip and self.key) then return end
         local lines = rawget(self, "tipLines")
-        if not (lines and GameTooltip) then return end
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        for i, l in ipairs(lines) do
-            if type(l) == "table" then GameTooltip:AddDoubleLine(l[1], l[2], 1, 1, 1, 0.8, 0.8, 0.8)
-            elseif i == 1 then GameTooltip:SetText(l)
-            else GameTooltip:AddLine(l, 0.8, 0.8, 0.8, true) end
+        if type(lines) == "table" and #lines > 0 then
+            for i, l in ipairs(lines) do
+                if type(l) == "table" then GameTooltip:AddDoubleLine(l[1], l[2], 1, 1, 1, 0.8, 0.8, 0.8)
+                elseif i == 1 then GameTooltip:SetText(l)
+                else GameTooltip:AddLine(l, 0.8, 0.8, 0.8, true) end
+            end
+        else
+            -- a card without its own tooltip: its title, so the hint line has a head
+            local shown = self.skin and self.skin.shown
+            GameTooltip:SetText((shown and shown.title) or tostring(self.key))
         end
+        GameTooltip:AddLine(M.ClickHint(self.key), 0.66, 0.69, 0.73, true)
         GameTooltip:Show()
     end)
     card:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)

@@ -490,8 +490,8 @@ if OMQ.Alerts then
             open = function() D:AskApply() end,      -- then dismissed like every card, which marks it asked
         } }
     end })
-    OMQ:On("ALERT_DISMISSED", function(key)
-        if key ~= "daduitwink" then return end
+    OMQ:On("ALERT_DISMISSED", function(key, snooze)
+        if key ~= "daduitwink" or snooze then return end
         local st = state()
         if root().chars[charKey()] == st then st.asked = true end
     end)
