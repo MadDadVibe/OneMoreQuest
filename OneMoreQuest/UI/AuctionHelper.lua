@@ -421,7 +421,8 @@ function AH.Scanning()
     local A = CA()
     if A and A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return true end
     for _, e in ipairs(entries) do if e.state == "price" then return true end end
-    local B = OMQ.AuctionBuy
+    local B, S = OMQ.AuctionBuy, OMQ.Shopping
+    if AH.view == "shop" then return (S and S.Pending()) and true or false end      -- the Shopping tab (decision 551)
     return (AH.view == "buy" and B and B.Pending and B.Pending()) and true or false
 end
 -- a click that does nothing because a scan runs: no chat line any more (decision 441; was decision 289), the
@@ -647,6 +648,13 @@ local function batchQuery()
             list[#list + 1] = r; keys[#keys + 1] = r.itemKey
         end
     end
+    local S = OMQ.Shopping
+    if AH.view == "shop" and S then                       -- the rows of the chosen shopping list (decision 551)
+        for _, r in ipairs(S.BatchRows()) do
+            if #list >= AH.BATCH then break end
+            list[#list + 1] = r; keys[#keys + 1] = r.itemKey
+        end
+    end
     if #list == 0 then return nil end
     return { browse = true, batch = list, key = "batch", onResult = onBatch, keys = keys }
 end
@@ -722,6 +730,7 @@ function AH._pump()
     end
     -- then the buy mode's searches: stock prices, the weapon browse, the weapon offers (decision 264)
     local q = AH.view == "buy" and OMQ.AuctionBuy and OMQ.AuctionBuy.NextQuery()      -- only once the buy tab is looked at (decision 290)
+    if not q and AH.view == "shop" and OMQ.Shopping then q = OMQ.Shopping.NextQuery() end   -- the Shopping tab (decision 551)
     if q then
         asking, askedAt = q, now()
         if q.browse then
@@ -939,7 +948,7 @@ local function build()
     end)
     head:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     panel.head = head
-    -- Sell | Buy as two big tabs over a framed box (decision 267); the box holds the way of selling or
+    -- Sell | Buy | Shopping as big tabs over a framed box (decisions 267, 551); the box holds the way of selling or
     -- buying (Fast | Select, Fill up | Single) as a segmented switch, and everything below it
     local BOX = { 0.125, 0.135, 0.17 }
     local box = CreateFrame("Frame", nil, panel)
@@ -957,7 +966,7 @@ local function build()
     panel.box = box
     local function tab(label, view, x)
         local t = CreateFrame("Button", nil, panel)
-        t:SetSize(180, 35)                                   -- 1 px over the box: the open tab merges with it
+        t:SetSize(120, 35)                                   -- 1 px over the box: the open tab merges with it
         t:SetPoint("TOPLEFT", x, -30)
         t:SetFrameLevel(box:GetFrameLevel() + 2)
         t.bg = t:CreateTexture(nil, "BACKGROUND"); t.bg:SetAllPoints()
@@ -970,8 +979,9 @@ local function build()
         return t
     end
     panel.sellBtn = tab("Sell", "sell", 10)
-    panel.buyBtn = tab("Buy", "buy", 190)
-    panel.sellBtn.mode, panel.buyBtn.mode = "sell", "buy"
+    panel.buyBtn = tab("Buy", "buy", 130)
+    panel.shopBtn = tab("Shopping", "shop", 250)               -- the shopping lists (decision 551)
+    panel.sellBtn.mode, panel.buyBtn.mode, panel.shopBtn.mode = "sell", "buy", "shop"
     panel.BOX = BOX
     local function segment(label, mode, x, onClick)
         local b = CreateFrame("Button", nil, panel)
@@ -1103,7 +1113,7 @@ AH.MODE_HINT = { fast = "one button, item after item", select = "pick item by it
                  fill = "a click fills up to the target", single = "a click buys one piece" }
 
 function AH.SetView(v, auto)
-    AH.view = (v == "buy") and "buy" or "sell"
+    AH.view = (v == "buy" or v == "shop") and v or "sell"
     if not auto then AH.manualView = true end
     AH.Refresh()
     AH.Pump()
@@ -1114,10 +1124,22 @@ function AH.Refresh()
     paintScan()
     local L = AH.Lists()
     -- the helper stays on Sell until the dad opens Buy himself (decision 431; before: on to buying when nothing was left)
-    local buy = AH.view == "buy"
-    paintTab(panel.sellBtn, not buy); paintTab(panel.buyBtn, buy)
-    for _, b in ipairs({ panel.fastBtn, panel.selBtn }) do b:SetShown(not buy) end
+    local buy, shop = AH.view == "buy", AH.view == "shop"
+    local S = OMQ.Shopping
+    paintTab(panel.sellBtn, not buy and not shop); paintTab(panel.buyBtn, buy); paintTab(panel.shopBtn, shop)
+    local nLists = S and S.Count() or 0
+    panel.shopBtn.text:SetText(nLists > 0 and string.format("Shopping |cff66d17a(%d)|r", nLists) or "Shopping")
+    for _, b in ipairs({ panel.fastBtn, panel.selBtn }) do b:SetShown(not buy and not shop) end
     for _, b in ipairs({ panel.fillBtn, panel.oneBtn }) do b:SetShown(buy) end
+    panel.modeHint:SetShown(not shop)
+    if not shop and S then S.Hide() end
+    if shop then                                       -- the shopping lists (decision 551)
+        if OMQ.AuctionBuy then OMQ.AuctionBuy.Hide() end
+        fastUI:Hide(); selUI:Hide(); panel.out:SetText("")
+        local h = S.Render(panel, AH.HEAD)
+        panel:SetHeight(AH.HEAD + h + 16)
+        return
+    end
     if buy then
         local bm = OMQ.AuctionBuy.Mode()
         paint(panel.fillBtn, bm == "fill"); paint(panel.oneBtn, bm == "single")
@@ -1327,6 +1349,7 @@ function AH.Open()
     AH.round = { n = 0, income = 0 }
     AH.view, AH.manualView = "sell", false            -- always sell first (decision 264)
     if OMQ.AuctionBuy then OMQ.AuctionBuy.Open() end
+    if OMQ.Shopping then OMQ.Shopping.Open() end
     anchor()
     panel:Show()
     -- the scan of the whole house comes first; the cover goes up until the dump is read (decision 343)

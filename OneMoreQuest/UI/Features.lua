@@ -65,7 +65,7 @@ FE.SECTIONS = {
     } },
     { "Crafting", {
         { "Crafting profit in the profession window: what the materials cost against what the product brings on the auction house, for every recipe", unlock = "profession" },
-        "Profession Check: what each crafting profession costs to skill to 75, 150, 225 and 300, with the auction prices; hover a cell for the recipes and the materials",
+        "Profession Check: what each crafting profession costs to skill to 75, 150, 225 and 300, with the auction prices; hover a cell for the recipes and the materials, click it for a shopping list",
         { "Cheapest skill-up: two badges mark the cheapest recipe to skill up, by cost and by profit, and every recipe shows its skill-up chance", unlock = "profession" },
         { "Prices of the whole auction house in one scan, plus the vendor prices you have seen; every item tooltip shows the latest price", unlock = "auction" },
         { "Who in the group needs a crafting material, and who carries the materials of a recipe", unlock = "profession" },
@@ -82,6 +82,7 @@ FE.SECTIONS = {
     { "Comfort", {
         "Quests at the NPC: accepted (not the grey ones), finished ones handed in, the best reward marked by item score",
         { "Auction helper: everything worth more on the auction house (green items and materials at least 30% more), posted with one click each - fast or select mode; it starts with a scan of the whole auction house every 4 hours", unlock = "auction" },
+        { "Auction helper, shopping lists: the Shopping tab buys a list (from the Profession Check) item by item with one button; items cheaper at a vendor are listed apart", unlock = "auction" },
         { "Auction helper, buy mode: weapon upgrades you can wear right now, cheap potions, elixirs, stones, oils, scrolls, buff food and armor kits under a price limit, bags, reagent bags and quivers for your class - stock up or buy single pieces", unlock = "auction" },
         "Vendor helper: what to sell at the vendor - grey items, gear not worth the auction house or unsold, old food and drink, recipes of professions you do not have",
         "Automatic repair, selling of grey items, water and ammo at vendors",

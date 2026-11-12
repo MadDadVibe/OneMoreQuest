@@ -464,6 +464,7 @@ local function readOffers(r)
     return offers
 end
 
+B.ReadOffers = readOffers                     -- the Shopping tab reads its offers the same way (decision 551)
 local function onStock(r)
     r.offers = readOffers(r)
     r.checkedAt = now()
@@ -1240,6 +1241,7 @@ function done(ok, why)
     end
     if b and b.row then
         if ok and not b.row.bagKind then B.Bought(b.row.itemID, b.qty, b.base); B.Consume(b.row, b.qty) end
+        if ok and b.row.shop and OMQ.Shopping then OMQ.Shopping.Bought(b.row, b.qty) end      -- a shopping list row (decision 551)
         if b.row.bagKind then
             -- a bag stays while more of my slots would get bigger (decision 441): 3 bags of 6 slots, one 8 bought,
             -- the row stays for the other two; the next offer is searched again
@@ -1381,6 +1383,7 @@ local function makeRow(parent, h)
     r:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     return r
 end
+B._makeRow, B._fs, B._qColor = makeRow, fs, qColor      -- shared with the Shopping tab (decision 551)
 
 local function build(panel)
     ui = CreateFrame("Frame", nil, panel)

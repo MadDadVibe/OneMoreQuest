@@ -10,7 +10,9 @@
 -- Intermediate products that the route makes itself (bolts, blasting powder, cured hides ...) count only through
 -- their raw materials; what the route needs more of than it made is made from raw materials, too. Any other item
 -- of the same profession without a price is made from its materials as well.
--- Step 2 (later): the auction house integration.
+-- Step 2 (decision 551): a click on a cell makes a shopping list of its materials for the Auction Helper's Shopping tab
+-- (UI/Shopping.lua). The list counts the cell alone (no intermediates left over from the cells before it) and adds 25%
+-- to the crafts of the part of a step where the recipe is already green (Data/SkillThresholds.lua).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -105,8 +107,10 @@ end
 
 -- one profession: { id, name, brackets = { { cost, missing = {item = n}, buy = {item = n}, price = {item = p},
 -- steps = {...}, de = true }, ... }, total, complete }
-function PC.Compute(route)
+-- opts.green: the factor for the crafts of the green part of a step (the shopping list, decision 551)
+function PC.Compute(route, opts)
     local R = OMQ.ProfRecipes or {}
+    local greenF = opts and opts.green
     local own = makers(route)
     local stock = {}
     local res = { id = route.id, name = route.name, brackets = {}, total = 0, complete = true }
@@ -160,7 +164,7 @@ function PC.Compute(route)
         local b = res.brackets[bracketOf(st[1])]
         b.steps[#b.steps + 1] = st
         if st[5] == "D" then b.de = true
-        else craft(b, st[3], st[4], 0) end
+        else craft(b, st[3], st[4] * (greenF and (1 + (greenF - 1) * PC.GreenShare(st)) or 1), 0) end
     end
     for _, b in ipairs(res.brackets) do
         res.total = res.total + b.cost
@@ -168,6 +172,66 @@ function PC.Compute(route)
     end
     return res
 end
+
+-- how much of a step the recipe is green (0 to 1): the skill points from its green threshold on (decision 551)
+function PC.GreenShare(st)
+    local t = (OMQ.SkillThresholds or {})[st[3]]
+    local span = (st[2] or 0) - (st[1] or 0)
+    if not (t and t[3]) or span <= 0 then return 0 end
+    return math.max(0, math.min(span, st[2] - math.max(st[1], t[3]))) / span
+end
+
+----------------------------------------------------------------------
+-- Shopping list of a cell (decision 551)
+----------------------------------------------------------------------
+PC.GREEN = 1.25
+PC.TOTAL = 0                      -- the column "1-300"
+-- the list of one cell (col = bracket, PC.TOTAL = everything): { key, title, items = { { itemID, n, plan, vendor } } }
+-- The cell is counted alone: a route of only its steps. Amounts are rounded up; plan = the price per piece the check
+-- used (nil: no price); vendor = the cheapest price is a vendor's (bought there, not at the auction house).
+function PC.ShoppingList(route, col)
+    local steps = {}
+    for _, st in ipairs(route.steps) do
+        if col == PC.TOTAL or bracketOf(st[1]) == col then steps[#steps + 1] = st end
+    end
+    local res = PC.Compute({ id = route.id, name = route.name, steps = steps }, { green = PC.GREEN })
+    local sum = {}
+    for _, b in ipairs(res.brackets) do
+        for item, n in pairs(b.buy) do sum[item] = (sum[item] or 0) + n end
+    end
+    local items = {}
+    for item, n in pairs(sum) do
+        local p, from = PC.Price(item)
+        local cnt = math.ceil(n - 1e-6)
+        if cnt > 0 then items[#items + 1] = { itemID = item, n = cnt, plan = p, vendor = (from == "vendor") or nil } end
+    end
+    table.sort(items, function(a, c)
+        local va, vc = (a.plan or 0) * a.n, (c.plan or 0) * c.n
+        if va ~= vc then return va > vc end
+        return a.itemID < c.itemID
+    end)
+    local br = PC.BRACKETS[col]
+    local range = br and string.format("%d-%d", br[1], br[2]) or string.format("%d-%d", PC.BRACKETS[1][1], PC.BRACKETS[#PC.BRACKETS][2])
+    return { key = "prof:" .. route.id .. ":" .. col, title = PC.ProfName(route) .. " " .. range, source = "prof", items = items }
+end
+PC.NOTE_TIME = 4
+-- a click on a cell: the list is made (again) and the window says so for 4 seconds
+function PC.MakeList(route, col)
+    local S = OMQ.Shopping
+    if not (S and route) then return nil end
+    local list = S.Add(PC.ShoppingList(route, col))
+    local f = PC:Frame()
+    if f and f.made then
+        f.made:SetText("Shopping list created: " .. list.title)
+        f.made:Show()
+        local token = {}
+        f.madeToken = token
+        C_Timer.After(PC.NOTE_TIME, function() if f.madeToken == token then f.made:Hide() end end)
+    end
+    PC.Refresh()
+    return list
+end
+function PC.CellKey(route, col) return "prof:" .. route.id .. ":" .. col end
 
 function PC.All()
     local out = {}
@@ -355,6 +419,16 @@ function PC.FillTooltip(tt, res, i)
         tt:AddLine(string.format("%d item%s without a price - not in the sum. Scan the auction house to fill them.",
             b.nMissing, b.nMissing == 1 and "" or "s"), 1, 0.55, 0.45, true)
     end
+    PC.ClickLines(tt, res, i)
+end
+-- the last lines of a cell's tooltip: what a click does (decision 551)
+function PC.ClickLines(tt, res, col)
+    tt:AddLine(" ")
+    tt:AddLine("Click: create a shopping list", 0.4, 0.88, 0.48)
+    local S = OMQ.Shopping
+    if S and S.Has(PC.CellKey(res, col)) then
+        tt:AddLine("A list for this cell exists - a click makes it again", 0.6, 0.62, 0.66, true)
+    end
 end
 
 local function cellButton(parent)
@@ -377,9 +451,22 @@ local function cellButton(parent)
             GameTooltip:AddLine(self.res.label or self.res.name, GOLD[1], GOLD[2], GOLD[3])
             GameTooltip:AddDoubleLine("1-300, materials", money(self.res.total), 0.85, 0.85, 0.85, 1, 1, 1)
             if not self.res.complete then GameTooltip:AddLine("Some prices are missing - the real cost is higher.", 1, 0.55, 0.45, true) end
+            PC.ClickLines(GameTooltip, self.res, PC.TOTAL)
         end
         GameTooltip:Show()
     end)
+    -- a click: the shopping list of this cell (decision 551)
+    c:SetScript("OnClick", function(self)
+        if not (self.res and self.route) then return end
+        PC.MakeList(self.route, self.col or PC.TOTAL)
+        if PC._hover == self and self:GetScript("OnEnter") then self:GetScript("OnEnter")(self) end
+    end)
+    -- a small basket: this cell has a shopping list
+    c.cart = c:CreateTexture(nil, "OVERLAY")
+    c.cart:SetSize(14, 14)
+    c.cart:SetPoint("LEFT", 4, 0)
+    c.cart:SetTexture("Interface\\Icons\\INV_Misc_Bag_10")
+    c.cart:Hide()
     c:SetScript("OnLeave", function(self)
         if PC._hover == self then PC._hover = nil end
         if GameTooltip then GameTooltip:Hide() end
@@ -405,8 +492,10 @@ function PC.Refresh()
     local mine = PC.Mine()
     local all = PC.All()
     PC._last = all
+    local S = OMQ.Shopping
     for r, res in ipairs(all) do
         local row = rows[r]
+        local route = (OMQ.ProfRoutes or {})[r]
         res.label = PC.ProfName(res)
         local rank = mine[res.id]
         row.icon:SetTexture(ICON[res.id])
@@ -414,7 +503,8 @@ function PC.Refresh()
         if rank then row.name:SetTextColor(GOLD_LIGHT[1], GOLD_LIGHT[2], GOLD_LIGHT[3]) else row.name:SetTextColor(0.85, 0.85, 0.85) end
         for i = 1, #PC.BRACKETS + 1 do
             local c = cells[r][i]
-            c.res = res
+            c.res, c.route = res, route
+            if S and route and S.Has(PC.CellKey(route, i <= #PC.BRACKETS and i or PC.TOTAL)) then c.cart:Show() else c.cart:Hide() end
             if i <= #PC.BRACKETS then
                 c.col = i
                 c.text:SetText(PC.CellText(res.brackets[i]))
@@ -488,7 +578,10 @@ local function build()
     f.prices:SetPoint("BOTTOMLEFT", 30, 36)
     f.note = text(f, "GameFontDisableSmall", GREY, "LEFT")
     f.note:SetPoint("BOTTOMLEFT", 30, 20)
-    f.note:SetText("Route: the Wowhead WoW Forever leveling guides. Average crafts, materials only (no trainer or recipe costs). Hover a cell for the details.")
+    f.note:SetText("Route: the Wowhead WoW Forever leveling guides. Average crafts, materials only (no trainer or recipe costs). Hover a cell for the details, click it for a shopping list.")
+    f.made = text(f, "GameFontNormal", { 0.4, 0.88, 0.48 }, "LEFT")
+    f.made:SetPoint("BOTTOMLEFT", 30, 52)
+    f.made:Hide()
     f:Hide()
     if UISpecialFrames then table.insert(UISpecialFrames, "OneMoreQuestProfCheck") end
 end
