@@ -167,10 +167,17 @@ P.HELPER_WAIT, P.SHRINK = 6, 0.5
 -- decision 450: one search for everything now stops at 500 lines (the game says "complete" after the first
 -- page). The scan searches category by category, the way the weapon and bag searches of the buy mode do; a
 -- category that again stops at a full PAGE is searched once more per subcategory. An empty category answers with
--- an empty list: it counts as done after EMPTY_WAIT seconds without another answer.
+-- an empty list: since fix 549 it counts as empty only after EMPTY_TRIES asks (see below).
 P.CLASSES = { 0, 7, 5, 8, 9, 1, 11, 6, 3, 12, 15, 2, 4 }
 P.SUBCLASSES = { [2] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 13, 14, 15, 16, 17, 18, 19, 20 }, [4] = { 0, 1, 2, 3, 4, 6 } }
-P.PAGE, P.EMPTY_WAIT = 500, 1.5
+P.PAGE, P.EMPTY_WAIT = 500, 1.5      -- EMPTY_WAIT 0 (tests only): an empty list counts as an empty category at once
+-- fix 549: a late event of the last search reads the list the new search has just cleared. That empty list is no
+-- longer taken as "nothing on sale": an empty answer counts as no answer yet, the search is sent again after
+-- ANSWER_WAIT seconds, and only when after EMPTY_TRIES asks nothing but empty lists came is the category empty. A category that came
+-- empty, did not answer, or brought less than CAT_SHRINK of its lines of the last complete scan loses nothing: its items
+-- keep their old prices when the scan replaces the list.
+P.EMPTY_TRIES = 2
+P.CAT_SHRINK, P.CAT_MIN = 0.5, 20   -- short: under half the lines of a category that had at least 20
 
 local function helper() return OMQ.AuctionHelper end
 local function A() return C_AuctionHouse end
@@ -185,8 +192,9 @@ local function finish(ok, why, partial)
         -- the scan replaces the list: what was sold is gone; a live price of the last minutes stays (decision 427)
         local own = n
         for id, e in pairs(st.items) do
-            -- a category that stopped at a full page may miss items: those keep their old price (decision 450)
-            if (e.t and stamp() - e.t <= P.MAX_AGE) or (scan.capped and not scan.items[id]) then
+            -- a category that stopped at a full page may miss items: those keep their old price (decision 450);
+            -- so do the items of a category that came empty or short (fix 549)
+            if (e.t and stamp() - e.t <= P.MAX_AGE) or (not scan.items[id] and (scan.capped or P._Lost(scan, id))) then
                 if not scan.items[id] then n = n + 1 end
                 scan.items[id] = e
             end
@@ -196,6 +204,12 @@ local function finish(ok, why, partial)
         st.full = own                                   -- decision 450 (fullN of 448 could hold a wrong scan)
         st.fullN = nil
         st.check = {}
+        local catN = {}                                 -- lines per category; a lost one keeps its last count (fix 549)
+        for k, v in pairs(st.catN or {}) do catN[k] = v end
+        st.catN = catN
+        for _, c in ipairs(scan.cats) do
+            if c.how == "ok" or c.how == "capped" then st.catN[P.CatKey(c.c, c.s)] = c.n end
+        end
         sessionAt = now()
     elseif partial and n > 0 then
         for id, e in pairs(scan.items) do
@@ -207,7 +221,8 @@ local function finish(ok, why, partial)
         end
     end
     P.last = { ok = ok, items = n, secs = now() - scan.startedAt, results = scan.results, pages = scan.pages, why = why,
-               partial = partial and true or nil, searches = math.min(scan.qi, #scan.queue), capped = scan.capped }
+               partial = partial and true or nil, searches = math.min(scan.qi, #scan.queue), capped = scan.capped,
+               cats = scan.cats }
     if OMQDB then OMQDB.priceScanLast = P.last end
     scan = nil
     local H = helper()
@@ -222,6 +237,26 @@ local function classOf(id)
     if not f then return nil end
     local ok, _, _, _, _, _, c, sc = pcall(f, id)
     if ok then return c, sc end
+end
+
+-- fix 549: which categories of a scan count as lost (empty, no answer, or far fewer lines than last time)
+function P.CatKey(c, s) return s and (c .. "." .. s) or tostring(c) end
+function P._Lost(sc, id)
+    if not sc.lost or not next(sc.lost) then return false end
+    local c, s = classOf(id)
+    if c == nil then return false end
+    return sc.lost[tostring(c)] or (s ~= nil and sc.lost[c .. "." .. s]) or false
+end
+-- what one search brought: lines, and how it ended (ok, empty, failed, capped, split)
+local function noteCat(q, how)
+    local n = q.results or 0
+    scan.cats[#scan.cats + 1] = { c = q.classID, s = q.subClassID, n = n, how = how }
+    local key = P.CatKey(q.classID, q.subClassID)
+    local lastN = (store().catN or {})[key]
+    if how == "empty" or how == "failed" or (how == "ok" and lastN and lastN >= P.CAT_MIN and n < lastN * P.CAT_SHRINK) then
+        scan.lost[key] = true
+        if how == "ok" then scan.cats[#scan.cats].how = "short" end
+    end
 end
 
 -- the browse list of the current search: one line per item with the lowest price of one piece and the pieces on
@@ -323,14 +358,16 @@ local function nextSearch()
 end
 
 -- the current search is done: its items go to the scan; a search that stopped at a full page is split
-local function searchDone(capped)
+local function searchDone(capped, how)
     local q = scan.q
     if capped and q.subClassID == nil and P.SUBCLASSES[q.classID] then
+        noteCat(q, "split")
         for _, sub in ipairs(P.SUBCLASSES[q.classID]) do
             scan.queue[#scan.queue + 1] = { classID = q.classID, subClassID = sub }
         end
     else
         if capped then scan.capped = (scan.capped or 0) + 1 end
+        noteCat(q, how or (capped and "capped") or "ok")
         for id, e in pairs(q.items or {}) do
             local old = scan.items[id]
             if old then
@@ -350,12 +387,13 @@ local function onAnswer()
     local q = scan.q
     local n, mine = readList()
     if not mine then return end                            -- the answer to another search
-    q.lastAt = now()
     if n == 0 then                                         -- empty: maybe the list comes a moment later (decision 326)
-        q.emptyAt = now()
-        if P.EMPTY_WAIT <= 0 and full() then q.items, q.results = {}, 0; searchDone(false) end
+        q.emptyAt = q.emptyAt or now()                     -- no answer yet: asked again after ANSWER_WAIT (fix 549)
+        q.sawEmpty = true
+        if P.EMPTY_WAIT <= 0 and full() then q.items, q.results = {}, 0; searchDone(false, "empty") end   -- tests only
         return
     end
+    q.lastAt = now()
     q.answered, q.emptyAt = true, nil
     if full() then searchDone(n > 0 and n % P.PAGE == 0)
     elseif q.pages >= P.PAGES then searchDone(true)
@@ -381,12 +419,13 @@ function P.Step()
         if not throttleReady() then return end
         q.waiting = nil
         send()
-    elseif q.emptyAt and not q.answered then
-        -- an empty answer stays empty: nothing of this category on sale
-        if now() - q.emptyAt >= P.EMPTY_WAIT and full() then q.items, q.results = {}, 0; searchDone(false) end
     elseif not q.answered and now() - q.lastAt > P.ANSWER_WAIT then
+        -- an empty answer to EMPTY_TRIES asks in a row: nothing of this category on sale (fix 549)
+        if q.sawEmpty and q.tries >= P.EMPTY_TRIES then
+            q.items, q.results = {}, 0; searchDone(false, "empty"); return
+        end
         -- no list yet: ask again, a few times (decision 447); then the next category
-        if q.tries >= P.TRIES then scan.failed = scan.failed + 1; q.items = nil; searchDone(false); return end
+        if q.tries >= P.TRIES then scan.failed = scan.failed + 1; q.items = nil; searchDone(false, "failed"); return end
         if not throttleReady() then return end
         q.tries = q.tries + 1
         send()
@@ -398,7 +437,7 @@ function P.Step()
     elseif q.answered and now() - q.lastAt > P.WAIT then
         -- the next page never came: what is there counts, the category is not complete
         scan.failed = scan.failed + 1
-        searchDone(false)
+        searchDone(false, "failed")
     end
 end
 
@@ -412,7 +451,8 @@ function P.Start(manual)
     end
     local queue = {}
     for _, c in ipairs(P.CLASSES) do queue[#queue + 1] = { classID = c } end
-    scan = { state = "start", items = {}, seen = {}, results = 0, pages = 0, startedAt = now(), queue = queue, qi = 0, failed = 0 }
+    scan = { state = "start", items = {}, seen = {}, results = 0, pages = 0, startedAt = now(), queue = queue, qi = 0, failed = 0,
+             cats = {}, lost = {} }
     if manual then OMQ:Print("prices: asking the auction house category by category - this takes a little while") end
     sessionAt = nil
     if H.Refresh then pcall(H.Refresh) end
@@ -628,6 +668,15 @@ OMQ:RegisterCommand("prices", function(arg)
         if L then
             OMQ:Print(string.format("prices: last scan %s, %d lines on %d pages, %d items%s",
                 L.ok and "complete" or (L.partial and "partial" or "failed"), L.results or 0, L.pages or 0, L.items or 0, L.why and (" (" .. L.why .. ")") or ""))
+        end
+        if L and L.cats and #L.cats > 0 then                   -- lines per category (fix 549)
+            local parts = {}
+            for _, c in ipairs(L.cats) do
+                if c.how ~= "split" then
+                    parts[#parts + 1] = P.CatKey(c.c, c.s) .. ":" .. (c.n or 0) .. ((c.how ~= "ok") and ("(" .. c.how .. ")") or "")
+                end
+            end
+            OMQ:Print("prices: lines per category " .. table.concat(parts, " "))
         end
         if r.n == 0 then OMQ:Print("prices: no live price compared with the scan yet - open the Sell or Buy tab first"); return end
         OMQ:Print(string.format("prices: %d items compared with live prices, %d more than 50%% off", r.n, r.off))
