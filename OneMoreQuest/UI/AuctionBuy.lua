@@ -447,7 +447,9 @@ local function readOffers(r)
         r.commodity = true
         for i = 1, nc do
             local x = A.GetCommoditySearchResultInfo(r.itemID, i)
-            if x and x.unitPrice and x.quantity then offers[#offers + 1] = { unit = x.unitPrice, qty = x.quantity } end
+            -- my own pieces cannot be bought: the game leaves them out of a purchase, so they do not count (fix 562)
+            local q = x and x.quantity and x.quantity - (x.numOwnerItems or 0)
+            if x and x.unitPrice and q and q > 0 then offers[#offers + 1] = { unit = x.unitPrice, qty = q } end
         end
     else
         local ni = A.GetNumItemSearchResults and A.GetNumItemSearchResults(r.itemKey) or 0
@@ -1092,7 +1094,11 @@ function B.Buy(r, n)
         local cost, got = B.Cost(r, n)
         n = math.min(n, got)
         if n < 1 or not afford(cost) then return false end
-        buying = { row = r, qty = n, base = B.Have(r.itemID), at = now(), expect = cost, limit = r.cap and r.cap * n }
+        -- the price the game named after a refusal: the next click within AGREED_TIME buys at it (fix 562)
+        local ag = r.agreed
+        r.agreed = nil
+        local agreed = ag and now() - (ag.at or 0) < B.AGREED_TIME and ag.unit * n or nil
+        buying = { row = r, qty = n, base = B.Have(r.itemID), at = now(), expect = cost, limit = r.cap and r.cap * n, agreed = agreed }
         AH().Own(A.StartCommoditiesPurchase, r.itemID, n)
     else
         local o = r.offers[1]
@@ -1308,9 +1314,13 @@ end
 -- the game's price for a purchase may be above an estimate: then no purchase, the offers are looked at
 -- closely and the next click buys at the real price (decision 293)
 B.PRICE_SLACK = 1.2
-function B.PriceOk(expect, total, limit)
+-- after "click once more to buy" the dad has seen the real price: the next click buys up to it (fix 562; before, the
+-- next click compared with the offers again and could be refused forever, e.g. Moss Agate in the Shopping tab)
+B.AGREED_TIME, B.AGREED_SLACK = 120, 1.02
+function B.PriceOk(expect, total, limit, agreed)
     if not (expect and total) then return true end
     if limit and total > limit then return false end           -- never over the price limit of the row (decision 431)
+    if agreed and total <= agreed * B.AGREED_SLACK + 100 then return true end
     return total <= expect * B.PRICE_SLACK + 100
 end
 ev:SetScript("OnEvent", function(_, event, a1, a2)
@@ -1320,12 +1330,18 @@ ev:SetScript("OnEvent", function(_, event, a1, a2)
         local A = CA()
         if event == "COMMODITY_PRICE_UPDATED" then
             if buying and buying.row then
-                if B.PriceOk(buying.expect, a2, buying.limit) then
+                if B.PriceOk(buying.expect, a2, buying.limit, buying.agreed) then
                     AH().Own(A.ConfirmCommoditiesPurchase, buying.row.itemID, buying.qty)
                 else
                     if A.CancelCommoditiesPurchase then A.CancelCommoditiesPurchase() end
-                    buying.row.estimate = nil
-                    done(false, "the price is higher than shown (" .. money(a2) .. " in all) - looking again, click once more to buy")
+                    local r, over = buying.row, buying.limit and a2 and a2 > buying.limit
+                    r.estimate = nil
+                    if over then
+                        done(false, "the price is above the limit of this row (" .. money(a2) .. " in all) - not bought")
+                    else
+                        r.agreed = a2 and { unit = a2 / math.max(1, buying.qty or 1), at = now() } or nil
+                        done(false, "the price is higher than shown (" .. money(a2) .. " in all) - click once more to buy at this price")
+                    end
                 end
             end
         elseif event == "COMMODITY_PRICE_UNAVAILABLE" then done(false, "that price is gone - looking again")
