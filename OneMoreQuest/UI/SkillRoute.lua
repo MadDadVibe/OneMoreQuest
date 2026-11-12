@@ -1,4 +1,4 @@
--- One More Quest: Skill Route next to the profession window (decision 558)
+-- One More Quest: Skill Route next to the profession window (decision 558; intermediates decision 566)
 -- A gold button right above the top profession tab, outside the window (inside it the frame art covered it; fix 565) folds out a panel with the route of the open profession: the
 -- same route the Profession Check and its shopping lists use (Data/ProfRoutes.lua), 1 to 300 in the four sections
 -- 1-75, 75-150, 150-225, 225-300. Done steps are green with a check, the step for the current skill has a gold frame,
@@ -126,6 +126,45 @@ local function bracketOf(from)
     return #B
 end
 
+-- intermediates (decision 566): what a step makes that later steps of the route use. A later step's need of an item
+-- goes to the last step before it that makes the item. { [step index] = { item, yield, need (pieces later), extra
+-- (crafts beyond the skill crafts), uses = { { step index, pieces } } } }
+function SR.Later(route)
+    local R, out = OMQ.ProfRecipes or {}, {}
+    for j, st in ipairs(route.steps) do
+        local r = R[st[3]]
+        if r and (st[4] or 0) > 0 then
+            for k = 1, #r[3], 2 do
+                local item, q = r[3][k], r[3][k + 1]
+                for i = j - 1, 1, -1 do
+                    local m = R[route.steps[i][3]]
+                    if m and m[1] == item then
+                        local e = out[i] or { item = item, yield = m[2] or 1, need = 0, uses = {} }
+                        out[i] = e
+                        local pieces = math.ceil(q * st[4] - 1e-6)
+                        e.need = e.need + pieces
+                        e.uses[#e.uses + 1] = { j, pieces }
+                        break
+                    end
+                end
+            end
+        end
+    end
+    for i, e in pairs(out) do
+        local made = (route.steps[i][4] or 0) * e.yield
+        e.extra = math.max(0, math.ceil((e.need - made) / e.yield - 1e-6))
+    end
+    return out
+end
+-- the step of the route that makes an item, before step index j: index, spell, yield
+local function makerBefore(route, item, j)
+    local R = OMQ.ProfRecipes or {}
+    for i = j - 1, 1, -1 do
+        local m = R[route.steps[i][3]]
+        if m and m[1] == item then return i, route.steps[i][3], m[2] or 1 end
+    end
+end
+
 -- the lines of the panel for a route at a skill:
 --   { kind = "head", col, from, to, done }
 --   { kind = "step", st, state = "done" | "cur" | "todo", left (crafts, cur only), learn ("T"/"V"/"Q" when not learned) }
@@ -134,14 +173,15 @@ function SR.Lines(route, skill)
     local out, cur = {}, nil
     local B = OMQ.ProfCheck and OMQ.ProfCheck.BRACKETS or {}
     local lastCol
-    for _, st in ipairs(route.steps) do
+    local later = SR.Later(route)
+    for idx, st in ipairs(route.steps) do
         local col = bracketOf(st[1])
         if col ~= lastCol then
             lastCol = col
             local b = B[col] or { st[1], st[2] }
             out[#out + 1] = { kind = "head", col = col, from = b[1], to = b[2], done = skill >= b[2] }
         end
-        local line = { kind = "step", st = st }
+        local line = { kind = "step", st = st, idx = idx, later = later[idx] }
         if skill >= st[2] then line.state = "done"
         elseif not cur then line.state = "cur"; cur = line
         else line.state = "todo" end
@@ -150,13 +190,26 @@ function SR.Lines(route, skill)
         if line == cur then
             line.left = SR.Remaining(st, skill)
             local r = (OMQ.ProfRecipes or {})[st[3]]
+            local lt = line.later
+            if lt and r then
+                -- the pieces later steps need, minus what the remaining skill crafts make and what is in the bags
+                local short = lt.need - math.ceil(line.left - 1e-6) * lt.yield - bagCount(lt.item)
+                line.skillLeft = line.left
+                line.extraNow = math.max(0, math.ceil(short / lt.yield - 1e-6))
+                line.left = line.left + line.extraNow
+            end
             local n = math.ceil(line.left - 1e-6)
             if r and n > 0 then
                 for k = 1, #r[3], 2 do
                     local item = r[3][k]
                     local _, from = OMQ.ProfCheck.Price(item)
-                    out[#out + 1] = { kind = "mat", item = item, need = r[3][k + 1] * n, have = bagCount(item),
-                                      vendor = (from == "vendor") or nil }
+                    local m = { kind = "mat", item = item, need = r[3][k + 1] * n, have = bagCount(item),
+                                vendor = (from == "vendor") or nil }
+                    local mi, mspell, my = makerBefore(route, item, idx)
+                    if mi and m.have < m.need then
+                        m.make, m.makeSpell = math.ceil((m.need - m.have) / my - 1e-6), mspell
+                    end
+                    out[#out + 1] = m
                 end
             end
         end
@@ -235,7 +288,7 @@ local function row(i)
     b.range:SetWidth(52)
     b.name = text(b, "GameFontHighlightSmall", WHITE)
     b.name:SetPoint("LEFT", 62, 0)
-    b.name:SetPoint("RIGHT", -64, 0)
+    b.name:SetPoint("RIGHT", -100, 0)
     b.count = text(b, "GameFontHighlightSmall", WHITE, "RIGHT")
     b.count:SetPoint("RIGHT", -8, 0)
     b.cart = CreateFrame("Button", nil, b)
@@ -259,6 +312,8 @@ local function row(i)
     b.cart:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     if b.RegisterForClicks then b:RegisterForClicks("LeftButtonUp", "RightButtonUp") end
     b:SetScript("OnClick", function(self, button) SR.Click(self.line, button) end)
+    b:SetScript("OnEnter", function(self) SR.RowTooltip(self) end)
+    b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     rows[i] = b
     return b
 end
@@ -295,9 +350,13 @@ local function paintRow(b, l, route)
         if l.state == "cur" then
             b.bg:SetColorTexture(0.42, 0.33, 0.13, 0.55)
             b.name:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-            b.count:SetText(st[5] == "D" and ("until " .. st[2]) or string.format("~%dx left", math.ceil((l.left or 0) - 1e-6)))
+            local t = st[5] == "D" and ("until " .. st[2]) or string.format("~%dx left", math.ceil((l.left or 0) - 1e-6))
+            if (l.extraNow or 0) > 0 then t = t .. string.format(" (+%d later)", l.extraNow) end
+            b.count:SetText(t)
         elseif st[5] ~= "D" then
-            b.count:SetText(string.format("%dx", math.floor(st[4] + 0.5)))
+            local t = string.format("%dx", math.floor(st[4] + 0.5))
+            if l.later and l.later.extra > 0 and l.state ~= "done" then t = t .. string.format(" +%d later", l.later.extra) end
+            b.count:SetText(t)
         end
     elseif l.kind == "learn" then
         b:SetHeight(SR.SUB_H)
@@ -310,6 +369,10 @@ local function paintRow(b, l, route)
         local enough = l.have >= l.need
         b.count:SetText(l.have .. " in bags" .. (l.vendor and " - vendor" or ""))
         if enough then b.count:SetTextColor(0.5, 0.82, 0.42) else b.count:SetTextColor(0.9, 0.35, 0.3) end
+        if l.make then
+            b.count:SetText(l.have .. " in bags - make " .. l.make)
+            b.count:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+        end
     end
 end
 
@@ -388,12 +451,31 @@ end
 
 -- fix 562: a left click on the current step selects the recipe, fills in the crafts still left (at most what the
 -- materials allow) and starts crafting; a right click, and a click on any other step, only selects the recipe
-function SR.Click(l, button)
-    if not (l and l.kind == "step" and l.st[5] ~= "D") then return nil end
-    local spell = l.st[3]
-    SR.Select(spell)
-    if button == "RightButton" or l.state ~= "cur" or l.learn then return "select" end
-    local n = math.ceil((l.left or 0) - 1e-6)
+-- the tooltip of a step that makes something for later steps, or of a material to make (decision 566)
+function SR.RowTooltip(b)
+    local l, route = b.line, current.route
+    if not (GameTooltip and l and route) then return nil end
+    local lines = {}
+    if l.kind == "step" and l.later then
+        lines[1] = string.format("Also makes %s for later steps:", OMQ.ProfCheck.ItemName(l.later.item))
+        for _, u in ipairs(l.later.uses) do
+            local st = route.steps[u[1]]
+            lines[#lines + 1] = string.format("%d-%d %s: %d", st[1], st[2], OMQ.ProfCheck.RecipeName(st[3]), u[2])
+        end
+        if l.later.extra > 0 then lines[#lines + 1] = string.format("Make %d more than the skill needs.", l.later.extra) end
+    elseif l.kind == "mat" and l.make then
+        lines[1] = string.format("Click: make %d %s", l.make, OMQ.ProfCheck.ItemName(l.item))
+        lines[2] = "Right click: only select the recipe"
+    end
+    if #lines == 0 then return nil end
+    GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+    for i, t in ipairs(lines) do GameTooltip:AddLine(t, i == 1 and 1 or 0.9, i == 1 and 0.82 or 0.9, i == 1 and 0.4 or 0.9, true) end
+    GameTooltip:Show()
+    return lines
+end
+
+-- crafts n of a recipe now (at most what the materials allow); the count field shows it
+function SR.Craft(spell, n)
     local can = SR.Craftable(spell)
     if can then n = math.min(n, can) end
     if n <= 0 then SR.Note("|cffff6655Not enough materials for one craft.|r"); return "none" end
@@ -405,6 +487,20 @@ function SR.Click(l, button)
     if not ok then OMQ:Error("skill route craft", err); return "select" end
     SR.Note(string.format("Crafting %dx %s", n, OMQ.ProfCheck.RecipeName(spell)))
     return n
+end
+
+function SR.Click(l, button)
+    -- decision 566: a material the route makes itself and that is missing: the click makes it
+    if l and l.kind == "mat" and l.make then
+        SR.Select(l.makeSpell)
+        if button == "RightButton" or SR.Learned(l.makeSpell) == false then return "select" end
+        return SR.Craft(l.makeSpell, l.make)
+    end
+    if not (l and l.kind == "step" and l.st[5] ~= "D") then return nil end
+    local spell = l.st[3]
+    SR.Select(spell)
+    if button == "RightButton" or l.state ~= "cur" or l.learn then return "select" end
+    return SR.Craft(spell, math.ceil((l.left or 0) - 1e-6))
 end
 
 function SR.MakeList(col)
