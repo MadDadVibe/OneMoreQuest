@@ -269,6 +269,7 @@ function AH.Evaluate()
             else
                 e.state = "low"
                 if e.keep or e.useful then                               -- my own consumables are never sold that way
+                elseif OMQ.BuyKind and OMQ.BuyKind(e.itemID) then        -- a buff item, whatever its item class (fix 534)
                 elseif e.classID == 7 then db().low[e.itemID] = time()   -- trade goods: for 3 days
                 elseif e.quality == 1 then db().lowDay[e.itemID] = AH.Today() end   -- white items: today only (decision 276)
             end
@@ -355,10 +356,13 @@ end)
 -- sold at the vendor with the grey items (QoL.lua): not worth the auction house lately, cannot be worn.
 -- Never consumables (potions, elixirs, food, scrolls, bandages) and never what I made myself (decision 468):
 -- they stay on the vendor helper's list, sold only with a click.
+-- Never a buff item OMQ knows either (Data/BuyList.lua, buff food): WoW Forever lists the wizard oils as trade
+-- goods, not as consumables (fix 534).
 function AH.VendorIt(itemID)
     local ah = OMQDB and OMQDB.ah
     if not ah then return false end
     if select(6, instant(itemID)) == 0 then return false end
+    if OMQ.BuyKind and OMQ.BuyKind(itemID) then return false end
     if AH.Crafted(itemID) then return false end
     if ah.lowDay and ah.lowDay[itemID] and ah.lowDay[itemID] == AH.Today() then return true end
     local t = ah.low and ah.low[itemID]

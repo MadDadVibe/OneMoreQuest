@@ -1,7 +1,7 @@
 -- One More Quest: what the buy mode suggests to stock up (decision 431)
 -- Small, cheap buffs at any time instead of only the newest, best item. Every group shows the strongest item
 -- I can use whose live price per use stays under the group's limit; none under the limit: no row.
---   Weapon oil (casters: wizard oil, healers: mana oil) and weapon stones (melee, the kind that fits the weapon
+--   Weapon oil (casters: wizard oil, healers: wizard oil and mana oil) and weapon stones (melee, the kind that fits the weapon
 --     in hand): at most 2s per use - an oil has 5 uses, so 10s per oil.
 --   Scrolls: per category that fits the class, only the highest one under 3s.
 --   Elixirs: per stat that makes sense for the class, the highest one under 3s, its rank does not matter.
@@ -62,7 +62,7 @@ function R.Groups(class, role, ctx)
     if p.str then add("s_str", "scroll", 5) end
     if p.agi then add("s_agi", "scroll", 5) end
     if p.caster or p.healer then add("s_int", "scroll", 5); add("s_spi", "scroll", 5) end
-    if p.caster then add("oil_wiz", "oil", 2) end
+    if p.caster or p.healer then add("oil_wiz", "oil", 2) end   -- healers too: spell damage while questing (decision 534)
     if p.healer then add("oil_mana", "oil", 2) end
     if p.melee then for _, l in ipairs(ctx.stones or {}) do add(l, "stone", 10) end end
     if (ctx.kitSlots or 0) > 0 then add(R.KitLine(p), "kit", ctx.kitSlots) end
