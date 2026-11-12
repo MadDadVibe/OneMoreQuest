@@ -13,6 +13,9 @@
 -- Never offered: quest items, ammo, tools of my professions, the drinks and class supplies of the Group
 -- Check, consumables of my buy list, an upgrade for me, items of an equipment
 -- set, items without a vendor price, and what I marked "keep" with a right click.
+-- Bought back (fix 559): an item I buy back from the vendor's buyback tab is never sold automatically again
+-- (not by "sell grey items", not by "Sell all") until I sell it myself, by a right click in the bags or a
+-- click on its row here. Per character, by item ID. My own sale shows as a new entry in the buyback list.
 -- A click on a row sells that item; "Sell all" sells the whole list. A right click on the header
 -- closes the helper until the next vendor visit.
 local ADDON, OMQ = ...
@@ -257,6 +260,57 @@ function V.Reason(it, extra, ctx)
     return nil
 end
 
+----------------------------------------------------------------------
+-- Bought back (fix 559)
+----------------------------------------------------------------------
+local function charKey() return (UnitGUID and UnitGUID("player")) or "?" end
+local function backDB()
+    local d = db()
+    d.back = d.back or {}                                   -- character GUID -> { item ID -> time bought back }
+    local k = charKey()
+    d.back[k] = d.back[k] or {}
+    return d.back[k]
+end
+function V.BoughtBack(id)
+    if type(id) ~= "number" or not OMQDB then return false end
+    return backDB()[id] ~= nil
+end
+local function linkID(link)
+    if type(link) ~= "string" or isSecret(link) then return nil end
+    return tonumber(link:match("item:(%d+)"))
+end
+local backLinks, backCount = {}, nil      -- the buyback list as last seen: index -> item ID, item ID -> entries
+-- reads the buyback list; an item I keep that has more entries than before was sold by me: free again
+function V.ReadBuyback()
+    if not (GetNumBuybackItems and GetBuybackItemLink) then return end
+    local n = tonumber(GetNumBuybackItems()) or 0
+    local count = {}
+    for i = #backLinks, 1, -1 do backLinks[i] = nil end
+    for i = 1, n do
+        local id = linkID(GetBuybackItemLink(i))
+        backLinks[i] = id or false
+        if id then count[id] = (count[id] or 0) + 1 end
+    end
+    if backCount and OMQDB then
+        local kept = backDB()
+        for id, c in pairs(count) do
+            if kept[id] and c > (backCount[id] or 0) then kept[id] = nil end
+        end
+    end
+    backCount = count
+end
+function V.OnBuyback(index)
+    local id = GetBuybackItemLink and linkID(GetBuybackItemLink(index))
+    id = id or backLinks[index] or nil
+    if id and OMQDB then backDB()[id] = time() end
+end
+if hooksecurefunc and BuybackItem then
+    hooksecurefunc("BuybackItem", function(index)
+        local ok, err = pcall(V.OnBuyback, index)
+        if not ok then OMQ:Error("vendor buyback", err) end
+    end)
+end
+
 -- the list: { bag, slot, itemID, link, name, icon, quality, qty, price, why, reason }
 local list = {}
 V._list = list
@@ -274,6 +328,7 @@ function V.Scan()
                 local _, _, _, equipLoc, icon2, classID = instant(it.itemID)
                 if name then
                     local why, reason = V.Reason(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, ctx)
+                    if why and V.BoughtBack(it.itemID) then why, reason = "back", "you bought it back - sold only with a click" end
                     if why then
                         local qty = it.stackCount or 1
                         list[#list + 1] = { bag = bag, slot = slot, itemID = it.itemID, link = link, name = name,
@@ -291,10 +346,16 @@ function V.Scan()
     return list
 end
 
+-- "Sell all" leaves what I bought back (fix 559)
 function V.Total()
     local t = 0
-    for _, e in ipairs(list) do t = t + e.price end
+    for _, e in ipairs(list) do if e.why ~= "back" then t = t + e.price end end
     return t
+end
+function V.SellAllCount()
+    local n = 0
+    for _, e in ipairs(list) do if e.why ~= "back" then n = n + 1 end end
+    return n
 end
 
 local function stillThere(e)
@@ -314,13 +375,16 @@ function V.SellAll()
     local C = C_Container
     if not (C and C.UseContainerItem) or not V.open then return 0 end
     local n, total = 0, 0
-    for _, e in ipairs(list) do
-        if stillThere(e) then
-            C.UseContainerItem(e.bag, e.slot)
-            n, total = n + 1, total + e.price
+    for i = #list, 1, -1 do
+        local e = list[i]
+        if e.why ~= "back" then
+            if stillThere(e) then
+                C.UseContainerItem(e.bag, e.slot)
+                n, total = n + 1, total + e.price
+            end
+            table.remove(list, i)
         end
     end
-    for i = #list, 1, -1 do list[i] = nil end
     if n > 0 then OMQ:Print(string.format("vendor helper: sold %d item%s for %s", n, n == 1 and "" or "s", money(total))) end
     V.Refresh()
     return n
@@ -465,12 +529,13 @@ function V.Refresh()
         panel.more:SetText(string.format("Mouse wheel: %d more", #list - V.ROWS)); panel.more:Show()
         y = y + 16
     else panel.more:Hide() end
-    panel.all:SetShown(#list > 0)
-    if #list > 0 then
+    local allPrice, allN = V.Total(), V.SellAllCount()
+    panel.all:SetShown(allN > 0)
+    if allN > 0 then
         y = y + 6
         panel.all:ClearAllPoints(); panel.all:SetPoint("TOPLEFT", 16, -y)
-        panel.all.title:SetText(string.format("Sell all - %d item%s", #list, #list == 1 and "" or "s"))
-        panel.all.price:SetText(money(V.Total()))
+        panel.all.title:SetText(string.format("Sell all - %d item%s", allN, allN == 1 and "" or "s"))
+        panel.all.price:SetText(money(allPrice))
         y = y + 48
     end
     panel.hint:ClearAllPoints(); panel.hint:SetPoint("TOPLEFT", 16, -(y + 4))
@@ -495,12 +560,16 @@ function V.Close()
 end
 
 local ev = CreateFrame("Frame")
-for _, e in ipairs({ "MERCHANT_SHOW", "MERCHANT_CLOSED", "BAG_UPDATE_DELAYED", "GET_ITEM_INFO_RECEIVED" }) do
+for _, e in ipairs({ "MERCHANT_SHOW", "MERCHANT_CLOSED", "MERCHANT_UPDATE", "BAG_UPDATE_DELAYED", "GET_ITEM_INFO_RECEIVED" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 local pending = false
 ev:SetScript("OnEvent", function(_, event)
     local ok, err = pcall(function()
+        if V.atMerchant or event == "MERCHANT_SHOW" then
+            if event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" or event == "BAG_UPDATE_DELAYED" then V.ReadBuyback() end
+        end
+        if event == "MERCHANT_UPDATE" and not V.open then return end
         if event == "MERCHANT_SHOW" then
             V.atMerchant = true
             -- after "sell grey items" (QoL.lua) had its turn

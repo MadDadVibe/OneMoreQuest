@@ -118,7 +118,8 @@ function Q:SellJunk()
         for slot = 1, C.GetContainerNumSlots(bag) or 0 do
             local info = C.GetContainerItemInfo(bag, slot)
             local ahLow = info and info.itemID and OMQ.AuctionHelper and OMQ.AuctionHelper.VendorIt(info.itemID)   -- decision 259
-            if info and not isSecret(info.quality) and (info.quality == 0 or ahLow) and not info.hasNoValue then
+            local back = info and OMQ.Vendor and OMQ.Vendor.BoughtBack and OMQ.Vendor.BoughtBack(info.itemID)   -- fix 559
+            if info and not back and not isSecret(info.quality) and (info.quality == 0 or ahLow) and not info.hasNoValue then
                 local per = info.hyperlink and sellPrice(info.hyperlink) or 0
                 C.UseContainerItem(bag, slot)
                 sold = sold + 1

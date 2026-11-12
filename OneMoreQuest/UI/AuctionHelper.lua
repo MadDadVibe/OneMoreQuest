@@ -364,6 +364,7 @@ function AH.VendorIt(itemID)
     if select(6, instant(itemID)) == 0 then return false end
     if OMQ.BuyKind and OMQ.BuyKind(itemID) then return false end
     if AH.Crafted(itemID) then return false end
+    if OMQ.Vendor and OMQ.Vendor.BoughtBack and OMQ.Vendor.BoughtBack(itemID) then return false end   -- fix 559
     if ah.lowDay and ah.lowDay[itemID] and ah.lowDay[itemID] == AH.Today() then return true end
     local t = ah.low and ah.low[itemID]
     return t and (time() - t) < AH.LOW_DAYS * 86400 or false
