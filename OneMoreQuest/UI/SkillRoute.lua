@@ -1,5 +1,5 @@
 -- One More Quest: Skill Route next to the profession window (decision 558)
--- A gold tab on the right edge of the profession window folds out a panel with the route of the open profession: the
+-- A gold button at the top left of the profession window (right of its portrait; fix 560) folds out a panel with the route of the open profession: the
 -- same route the Profession Check and its shopping lists use (Data/ProfRoutes.lua), 1 to 300 in the four sections
 -- 1-75, 75-150, 150-225, 225-300. Done steps are green with a check, the step for the current skill has a gold frame,
 -- the crafts still left (from the Forever skill-up thresholds, Data/SkillThresholds.lua) and the materials for them
@@ -14,7 +14,9 @@ local SR = {}
 OMQ.SkillRoute = SR
 
 SR.W = 330                     -- panel width
-SR.TAB_W, SR.TAB_H = 24, 60
+SR.TAB_W, SR.TAB_H = 26, 26
+SR.TAB_X, SR.TAB_Y = 100, -54    -- the button: between the portrait and the skill bar
+SR.GAP = 44                      -- the panel: right of the profession tabs on the window's right edge
 SR.ROW_H, SR.SUB_H, SR.HEAD_H = 16, 14, 20
 SR.NOTE_TIME = 4
 SR.DISENCHANT = 13262          -- the Disenchant spell: its name in the client's language for the enchanting step 2-20
@@ -272,6 +274,7 @@ local function paintRow(b, l, route)
     b.count:SetTextColor(WHITE[1], WHITE[2], WHITE[3])
     if l.kind == "head" then
         b:SetHeight(SR.HEAD_H)
+        b.range:SetWidth(120)
         b.range:SetText(string.format("%d - %d", l.from, l.to))
         b.range:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
         if l.done then b.count:SetText("done"); b.count:SetTextColor(GREY[1], GREY[2], GREY[3])
@@ -279,6 +282,7 @@ local function paintRow(b, l, route)
     elseif l.kind == "step" then
         local st = l.st
         b:SetHeight(SR.ROW_H)
+        b.range:SetWidth(52)
         b.range:SetText(string.format("%d-%d", st[1], st[2]))
         local name = st[5] == "D" and (OMQ.ProfCheck.RecipeName(SR.DISENCHANT) .. " (no recipe)") or OMQ.ProfCheck.RecipeName(st[3])
         if l.state == "done" then
@@ -375,21 +379,23 @@ end
 local function build(pf)
     tab = CreateFrame("Button", "OneMoreQuestSkillRouteTab", pf, BackdropTemplateMixin and "BackdropTemplate" or nil)
     tab:SetSize(SR.TAB_W, SR.TAB_H)
-    tab:SetPoint("TOPLEFT", pf, "TOPRIGHT", -2, -60)
+    tab:SetPoint("TOPLEFT", pf, "TOPLEFT", SR.TAB_X, SR.TAB_Y)
     local tbg = tab:CreateTexture(nil, "BACKGROUND")
     tbg:SetAllPoints()
     tbg:SetColorTexture(0.23, 0.18, 0.11, 0.95)
     edge(tab, { 0.85, 0.7, 0.3 })
     tab.icon = tab:CreateTexture(nil, "ARTWORK")
-    tab.icon:SetSize(18, 18)
-    tab.icon:SetPoint("TOP", 0, -8)
+    tab.icon:SetSize(20, 20)
+    tab.icon:SetPoint("CENTER", 0, 0)
     tab.icon:SetTexture(MEDIA .. "Icon_Profession")
-    tab.arrow = text(tab, "GameFontNormal", GOLD, "CENTER")
-    tab.arrow:SetPoint("BOTTOM", 0, 8)
+    tab.lit = tab:CreateTexture(nil, "OVERLAY")
+    tab.lit:SetAllPoints()
+    tab.lit:SetColorTexture(1, 0.85, 0.35, 0.25)
+    tab.lit:Hide()
     tab:SetScript("OnClick", function() SR.Toggle() end)
     tab:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
         GameTooltip:AddLine("Skill Route")
         GameTooltip:AddLine("Which recipe to make how often, from your skill to 300 (the route of the Profession Check).", 1, 1, 1, true)
         GameTooltip:Show()
@@ -398,8 +404,8 @@ local function build(pf)
 
     panel = CreateFrame("Frame", "OneMoreQuestSkillRoute", pf)
     panel:SetWidth(SR.W)
-    panel:SetPoint("TOPLEFT", pf, "TOPRIGHT", SR.TAB_W - 2, 0)
-    panel:SetPoint("BOTTOMLEFT", pf, "BOTTOMRIGHT", SR.TAB_W - 2, 0)
+    panel:SetPoint("TOPLEFT", pf, "TOPRIGHT", SR.GAP, 0)
+    panel:SetPoint("BOTTOMLEFT", pf, "BOTTOMRIGHT", SR.GAP, 0)
     panel:EnableMouse(true)
     local bg = panel:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
@@ -419,10 +425,9 @@ local function build(pf)
     content = CreateFrame("Frame", nil, scroll)
     content:SetSize(SR.W - 30, 1)
     scroll:SetScrollChild(content)
-    panel:SetScript("OnShow", function() if tab then tab.arrow:SetText("<") end end)
-    panel:SetScript("OnHide", function() if tab then tab.arrow:SetText(">") end; SR.Reanchor() end)
+    panel:SetScript("OnShow", function() if tab then tab.lit:Show() end end)
+    panel:SetScript("OnHide", function() if tab then tab.lit:Hide() end; SR.Reanchor() end)
     panel:Hide()
-    tab.arrow:SetText(">")
 end
 
 -- the "who has the materials" panel moves right of the route while it is open
