@@ -179,6 +179,11 @@ P.PAGE, P.EMPTY_WAIT = 500, 1.5      -- EMPTY_WAIT 0 (tests only): an empty list
 P.EMPTY_TRIES = 2
 P.CHECK_LINES = 30   -- fix 557: this many lines of an answer are checked for their category
 P.CAT_SHRINK, P.CAT_MIN = 0.5, 20   -- short: under half the lines of a category that had at least 20
+-- fix 575: on Forever a search for the whole consumables or trade goods category (no subcategory) brings only a small
+-- part of them (41 and 393 lines). These two are searched subcategory by subcategory, the way the game's own window
+-- does it from the Burning Crusade on: the subcategories the game names (C_AuctionHouse.GetAuctionItemSubClasses)
+-- and these known ones. An empty subcategory is asked once more after EMPTY_WAIT seconds, then it counts as empty.
+P.BY_SUBCLASS = { [0] = { 0, 1, 2, 3, 4, 5, 6, 7, 8 }, [7] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 } }
 
 local function helper() return OMQ.AuctionHelper end
 local function A() return C_AuctionHouse end
@@ -422,6 +427,12 @@ function P.Step()
         if not throttleReady() then return end
         q.waiting = nil
         send()
+    elseif not q.answered and q.emptyAt and now() - q.emptyAt >= P.EMPTY_WAIT then
+        -- an empty list: asked once more a moment later; empty again = nothing of this category on sale (fix 575)
+        if q.tries >= P.EMPTY_TRIES then q.items, q.results = {}, 0; searchDone(false, "empty"); return end
+        if not throttleReady() then return end
+        q.tries = q.tries + 1
+        send()
     elseif not q.answered and now() - q.lastAt > P.ANSWER_WAIT then
         -- an empty answer to EMPTY_TRIES asks in a row: nothing of this category on sale (fix 549)
         if q.sawEmpty and q.tries >= P.EMPTY_TRIES then
@@ -444,6 +455,22 @@ function P.Step()
     end
 end
 
+-- the subcategories one class is searched by (fix 575), nil = the whole class in one search
+function P.SubclassesOf(c)
+    local known = P.BY_SUBCLASS[c]
+    if not known then return nil end
+    local list, seen = {}, {}
+    local function add(s) if type(s) == "number" and not seen[s] then seen[s] = true; list[#list + 1] = s end end
+    local api = A()
+    if api and api.GetAuctionItemSubClasses then
+        local ok, t = pcall(api.GetAuctionItemSubClasses, c)
+        if ok and type(t) == "table" then for _, s in ipairs(t) do add(s) end end
+    end
+    for _, s in ipairs(known) do add(s) end
+    table.sort(list)
+    return list
+end
+
 function P.Start(manual)
     if scan then return false, "a scan is running" end
     local H = helper()
@@ -453,7 +480,12 @@ function P.Start(manual)
         return false, "this client has no browse list"
     end
     local queue = {}
-    for _, c in ipairs(P.CLASSES) do queue[#queue + 1] = { classID = c } end
+    for _, c in ipairs(P.CLASSES) do
+        local subs = P.SubclassesOf(c)
+        if subs then
+            for _, sub in ipairs(subs) do queue[#queue + 1] = { classID = c, subClassID = sub } end
+        else queue[#queue + 1] = { classID = c } end
+    end
     scan = { state = "start", items = {}, seen = {}, results = 0, pages = 0, startedAt = now(), queue = queue, qi = 0, failed = 0,
              cats = {}, lost = {} }
     if manual then OMQ:Print("prices: asking the auction house category by category - this takes a little while") end
