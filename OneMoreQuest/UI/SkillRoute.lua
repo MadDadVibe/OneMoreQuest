@@ -172,7 +172,7 @@ function SR.Footer(skill, max)
     if not nextAt then
         for _, b in ipairs(OMQ.ProfCheck.BRACKETS) do if b[2] > skill then nextAt = b[2]; break end end
     end
-    return "Click a step to select its recipe. Next trainer visit: at " .. (nextAt or 300) .. "."
+    return "Click the gold step to craft it. Next trainer visit: at " .. (nextAt or 300) .. "."
 end
 
 ----------------------------------------------------------------------
@@ -257,10 +257,8 @@ local function row(i)
         GameTooltip:Show()
     end)
     b.cart:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-    b:SetScript("OnClick", function(self)
-        local l = self.line
-        if l and l.kind == "step" and l.st[5] ~= "D" then SR.Select(l.st[3]) end
-    end)
+    if b.RegisterForClicks then b:RegisterForClicks("LeftButtonUp", "RightButtonUp") end
+    b:SetScript("OnClick", function(self, button) SR.Click(self.line, button) end)
     rows[i] = b
     return b
 end
@@ -362,18 +360,59 @@ function SR.ScrollToCurrent()
     current.scrolled = target
 end
 
+-- a short green note in the footer, 4 seconds
+function SR.Note(msg)
+    if not panel then return end
+    panel.foot:SetText("|cff66e07a" .. msg .. "|r")
+    current.noteUntil = GetTime() + SR.NOTE_TIME
+    C_Timer.After(SR.NOTE_TIME, function()
+        if current.noteUntil and GetTime() >= current.noteUntil - 1e-6 then current.noteUntil = nil; SR.Refresh() end
+    end)
+end
+
+-- how many the bags allow now (the game's count), nil when unknown
+function SR.Craftable(spell)
+    local T = C_TradeSkillUI
+    if not (T and T.GetRecipeInfo) then return nil end
+    local ok, info = pcall(T.GetRecipeInfo, spell)
+    return ok and type(info) == "table" and num(info.numAvailable) or nil
+end
+
+-- the count field of the profession window (fix 562): set the number the player sees next to Create
+local function setCount(n)
+    local pf = host()
+    local page = pf and pf.CraftingPage
+    local box = page and (page.CreateMultipleInputBox or (page.SchematicForm and page.SchematicForm.CreateMultipleInputBox))
+    if box and box.SetValue then pcall(box.SetValue, box, n) elseif box and box.SetText then pcall(box.SetText, box, tostring(n)) end
+end
+
+-- fix 562: a left click on the current step selects the recipe, fills in the crafts still left (at most what the
+-- materials allow) and starts crafting; a right click, and a click on any other step, only selects the recipe
+function SR.Click(l, button)
+    if not (l and l.kind == "step" and l.st[5] ~= "D") then return nil end
+    local spell = l.st[3]
+    SR.Select(spell)
+    if button == "RightButton" or l.state ~= "cur" or l.learn then return "select" end
+    local n = math.ceil((l.left or 0) - 1e-6)
+    local can = SR.Craftable(spell)
+    if can then n = math.min(n, can) end
+    if n <= 0 then SR.Note("|cffff6655Not enough materials for one craft.|r"); return "none" end
+    setCount(n)
+    if C_Timer and C_Timer.After then C_Timer.After(0.1, function() setCount(n) end) end
+    local T = C_TradeSkillUI
+    if not (T and T.CraftRecipe) then return "select" end
+    local ok, err = pcall(T.CraftRecipe, spell, n)
+    if not ok then OMQ:Error("skill route craft", err); return "select" end
+    SR.Note(string.format("Crafting %dx %s", n, OMQ.ProfCheck.RecipeName(spell)))
+    return n
+end
+
 function SR.MakeList(col)
     local PC = OMQ.ProfCheck
     local route = current.route
     if not (PC and route and OMQ.Shopping) then return nil end
     local list = PC.MakeList(route, col)
-    if list and panel then
-        panel.foot:SetText("|cff66e07aShopping list created: " .. list.title .. "|r")
-        current.noteUntil = GetTime() + SR.NOTE_TIME
-        C_Timer.After(SR.NOTE_TIME, function()
-            if current.noteUntil and GetTime() >= current.noteUntil - 1e-6 then current.noteUntil = nil; SR.Refresh() end
-        end)
-    end
+    if list then SR.Note("Shopping list created: " .. list.title) end
     return list
 end
 
@@ -402,6 +441,7 @@ local function build(pf)
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
         GameTooltip:AddLine("Skill Route")
         GameTooltip:AddLine("Which recipe to make how often, from your skill to 300 (the route of the Profession Check).", 1, 1, 1, true)
+        GameTooltip:AddLine("Left click on the gold step: crafts what is still needed. Right click: only selects the recipe.", 0.6, 0.8, 1, true)
         GameTooltip:Show()
     end)
     tab:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
