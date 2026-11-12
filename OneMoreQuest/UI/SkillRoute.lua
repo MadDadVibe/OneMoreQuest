@@ -1,5 +1,5 @@
 -- One More Quest: Skill Route next to the profession window (decision 558)
--- A gold button at the top right of the profession window (under the close button, above the frame art; fix 561) folds out a panel with the route of the open profession: the
+-- A gold button right above the top profession tab, outside the window (inside it the frame art covered it; fix 565) folds out a panel with the route of the open profession: the
 -- same route the Profession Check and its shopping lists use (Data/ProfRoutes.lua), 1 to 300 in the four sections
 -- 1-75, 75-150, 150-225, 225-300. Done steps are green with a check, the step for the current skill has a gold frame,
 -- the crafts still left (from the Forever skill-up thresholds, Data/SkillThresholds.lua) and the materials for them
@@ -14,10 +14,10 @@ local SR = {}
 OMQ.SkillRoute = SR
 
 SR.W = 330                     -- panel width
-SR.TAB_W, SR.TAB_H = 26, 26
-SR.TAB_X, SR.TAB_Y = -12, -52    -- the button: top right, under the close button, right of the skill bar
+SR.TAB_W, SR.TAB_H = 34, 34
+SR.TAB_X, SR.TAB_Y = 12, -42     -- the button: outside the window, right above the top profession tab (fix 565)
 SR.TAB_LEVEL = 30                -- frame levels above the window, so its border and children do not cover it
-SR.GAP = 44                      -- the panel: right of the profession tabs on the window's right edge
+SR.GAP = 70                      -- the panel: right of the profession tabs on the window's right edge (fix 565)
 SR.ROW_H, SR.SUB_H, SR.HEAD_H = 16, 14, 20
 SR.NOTE_TIME = 4
 SR.DISENCHANT = 13262          -- the Disenchant spell: its name in the client's language for the enchanting step 2-20
@@ -419,7 +419,7 @@ end
 local function build(pf)
     tab = CreateFrame("Button", "OneMoreQuestSkillRouteTab", pf, BackdropTemplateMixin and "BackdropTemplate" or nil)
     tab:SetSize(SR.TAB_W, SR.TAB_H)
-    tab:SetPoint("TOPRIGHT", pf, "TOPRIGHT", SR.TAB_X, SR.TAB_Y)
+    tab:SetPoint("TOPLEFT", pf, "TOPRIGHT", SR.TAB_X, SR.TAB_Y)
     local lvl = pf.GetFrameLevel and pf:GetFrameLevel()
     if type(lvl) == "number" then tab:SetFrameLevel(lvl + SR.TAB_LEVEL) end
     if tab.SetToplevel then tab:SetToplevel(true) end
@@ -428,7 +428,7 @@ local function build(pf)
     tbg:SetColorTexture(0.23, 0.18, 0.11, 0.95)
     edge(tab, { 0.85, 0.7, 0.3 })
     tab.icon = tab:CreateTexture(nil, "ARTWORK")
-    tab.icon:SetSize(20, 20)
+    tab.icon:SetSize(26, 26)
     tab.icon:SetPoint("CENTER", 0, 0)
     tab.icon:SetTexture(MEDIA .. "Icon_Profession")
     tab.lit = tab:CreateTexture(nil, "OVERLAY")
