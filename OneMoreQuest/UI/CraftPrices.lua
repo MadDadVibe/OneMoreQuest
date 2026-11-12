@@ -201,8 +201,9 @@ local function finish(ok, why, partial)
         local own = n
         for id, e in pairs(st.items) do
             -- a category that stopped at a full page may miss items: those keep their old price (decision 450);
-            -- so do the items of a category that came empty or short (fix 549)
-            if (e.t and stamp() - e.t <= P.MAX_AGE) or (not scan.items[id] and (scan.capped or P._Lost(scan, id))) then
+            -- so do the items of a category that came empty or short (fix 549), and the items the item pass asked
+        -- for without an answer (decision 580)
+            if (e.t and stamp() - e.t <= P.MAX_AGE) or (not scan.items[id] and (scan.capped or P._Lost(scan, id) or (scan.asked and scan.asked[id]))) then
                 if not scan.items[id] then n = n + 1 end
                 scan.items[id] = e
             end
@@ -371,10 +372,11 @@ local function nextSearch()
         local items = count(scan.seen)
         local last = store().full
         if scan.failed > 0 then
-            finish(false, scan.failed .. " categories did not answer", true)
+            scan.endArgs = { false, scan.failed .. " categories did not answer", true }
         elseif last and items < last * P.SHRINK then
-            finish(false, string.format("only %d items, the last complete scan had %d", items, last), true)
-        else finish(true) end
+            scan.endArgs = { false, string.format("only %d items, the last complete scan had %d", items, last), true }
+        else scan.endArgs = { true } end
+        P._StartItems()                                  -- decision 580: then the important items one by one
         return
     end
     scan.q = { classID = f.classID, subClassID = f.subClassID, pages = 1, tries = 1 }
@@ -435,6 +437,10 @@ function P.Step()
     local api = A()
     local H = helper()
     if not (api and H and H.open) then finish(false, "the window closed"); return end
+    if scan.state == "items" then                          -- decision 580: no answer in time = not on sale, next batch
+        if not scan.iq or now() - scan.iq.at > P.ITEM_WAIT then scan.iq = nil; P._NextItems() end
+        return
+    end
     if scan.state == "start" then
         if now() - scan.startedAt < P.FIRST_WAIT then return end
         if yielding() or not throttleReady() then return end
@@ -468,6 +474,112 @@ function P.Step()
         searchDone(false, "failed")
     end
 end
+
+----------------------------------------------------------------------
+-- Decision 580: after the categories, the important items the categories did not bring are searched by name
+-- (SearchForItemKeys, ITEM_BATCH at once, like the auction helper's batch): everything the Profession Check
+-- crafts or needs, what the buy mode can suggest, and the items of the shopping lists. On Forever the
+-- category search brings only part of the consumables and trade goods, and a search per subcategory runs into
+-- empty answers (fix 579 log). An item that is not on sale keeps its old price.
+----------------------------------------------------------------------
+P.ITEM_BATCH, P.ITEM_WAIT, P.ITEM_MAX = 40, 5, 800
+function P.ImportantItems()
+    local ids, seen = {}, {}
+    local function add(id)
+        id = tonumber(id)
+        if id and id > 0 and not seen[id] then seen[id] = true; ids[#ids + 1] = id end
+    end
+    for _, r in pairs(OMQ.ProfRecipes or {}) do
+        add(r[1])
+        for k = 1, #(r[3] or {}), 2 do add(r[3][k]) end
+    end
+    for _, line in pairs(OMQ.BuyLines or {}) do
+        for _, e in ipairs(line[2] or {}) do add(e[1]) end
+    end
+    for _, e in ipairs(OMQ.BuyFoods or {}) do add(e[1]) end
+    local S = OMQ.Shopping
+    if S and S.Lists then
+        local ok, lists = pcall(S.Lists)
+        for _, l in ipairs(ok and lists or {}) do
+            for _, it in ipairs(l.items or {}) do if not it.vendor then add(it.itemID) end end
+        end
+    end
+    table.sort(ids)
+    return ids
+end
+local function itemKey(id)
+    local api = A()
+    if api and api.MakeItemKey then
+        local ok, k = pcall(api.MakeItemKey, id)
+        if ok and k then return k end
+    end
+    return { itemID = id, itemLevel = 0, itemSuffix = 0 }
+end
+function P._StartItems()
+    local want = {}
+    local vendor = OMQ.ProfVendorPrices or {}
+    for _, id in ipairs(P.ImportantItems()) do
+        -- already in the categories, or a vendor item (thread, vials): nothing to ask
+        if not scan.items[id] and not vendor[id] and not vendorStore()[id] then want[#want + 1] = id end
+        if #want >= P.ITEM_MAX then break end
+    end
+    local api = A()
+    if #want == 0 or not (api and api.SearchForItemKeys) then finish(unpack(scan.endArgs)); return end
+    scan.want, scan.wi, scan.state, scan.itemsFound = want, 0, "items", 0
+    scan.cats[#scan.cats + 1] = { c = "items", n = 0, how = "ok", asks = 0, ev = 0, emp = 0 }
+    P._NextItems()
+end
+function P._NextItems()
+    if scan.wi >= #scan.want then
+        local c = scan.cats[#scan.cats]
+        c.n = scan.itemsFound
+        finish(unpack(scan.endArgs))
+        return
+    end
+    if not throttleReady() then scan.iq = nil; return end
+    local keys, batch = {}, {}
+    for i = scan.wi + 1, math.min(#scan.want, scan.wi + P.ITEM_BATCH) do
+        keys[#keys + 1] = itemKey(scan.want[i]); batch[scan.want[i]] = true
+    end
+    scan.wi = scan.wi + #keys
+    scan.asked = scan.asked or {}
+    for id in pairs(batch) do scan.asked[id] = true end   -- asked and not found: keeps its old price
+    scan.iq = { batch = batch, at = now() }
+    scan.cats[#scan.cats].asks = scan.cats[#scan.cats].asks + 1
+    local Eo = Enum and Enum.AuctionHouseSortOrder
+    local ok, err = pcall(own, A().SearchForItemKeys, keys, { { sortOrder = Eo and Eo.Price or 0, reverseSort = false } })
+    if not ok then finish(false, "SearchForItemKeys failed: " .. tostring(err), true) end
+end
+-- an answer during the item pass: the lines of the items asked for count, every other line is not ours
+local function onItems()
+    local iq = scan.iq
+    if not iq then return end
+    local c = scan.cats[#scan.cats]
+    c.ev = c.ev + 1
+    local ok, list = pcall(A().GetBrowseResults)
+    if not ok or type(list) ~= "table" then return end
+    local got = 0
+    for _, res in ipairs(list) do
+        local k = res.itemKey
+        local id, price, qty = k and k.itemID, res.minPrice, res.totalQuantity
+        if id and not isSecret(id) and iq.batch[id] and type(price) == "number" and not isSecret(price) and price > 0 then
+            qty = (not isSecret(qty) and tonumber(qty)) or 0
+            local e = scan.items[id]
+            if e then
+                if price < e.p then e.p = math.floor(price) end
+            else
+                scan.items[id] = { p = math.floor(price), q = qty }; scan.seen[id] = true
+                scan.itemsFound = scan.itemsFound + 1
+            end
+            got = got + 1
+        end
+    end
+    if got == 0 then c.emp = c.emp + 1; return end      -- an empty list or another search's: wait for ours
+    scan.results = scan.results + got
+    scan.iq = nil
+    P._NextItems()
+end
+P._onItems = onItems
 
 -- the subcategories one class is searched by (fix 575), nil = the whole class in one search
 function P.SubclassesOf(c)
@@ -653,7 +765,7 @@ ev:SetScript("OnEvent", function(_, event, a1)
     local ok, err = pcall(function()
         if event == "COMMODITY_SEARCH_RESULTS_UPDATED" then learnCommodity(a1)
         elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
-            if scan then onAnswer() else learnBrowse() end
+            if scan and scan.state == "items" then onItems() elseif scan then onAnswer() else learnBrowse() end
         elseif event == "AUCTION_HOUSE_BROWSE_FAILURE" then
             if scan and scan.state == "browsing" and scan.q and not scan.q.answered then scan.q.lastAt = 0 end   -- ask again at once (decision 447)
         elseif event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
