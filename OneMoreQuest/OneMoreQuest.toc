@@ -2,7 +2,7 @@
 ## Title: One More Quest
 ## Notes: Group stats, distance arrow, alerts and quest sync for a leveling party. Type /omq
 ## Author: MadDadVibe
-## Version: 1.3.143
+## Version: 1.3.144
 ## SavedVariables: OMQDB
 
 Core.lua
@@ -58,6 +58,7 @@ Data\ForeverDungeons.lua
 Data\DungeonWindow.lua
 Data\Milestones.lua
 Data\SkillThresholds.lua
+Data\ProfRoutes.lua
 Data\TrainerSpells.lua
 Data\BuyList.lua
 UI\Ready.lua
@@ -141,6 +142,7 @@ UI\ThreatProbe.lua
 UI\ThreatMeter.lua
 UI\SelfCastProbe.lua
 UI\Milestones.lua
+UI\ProfCheck.lua
 UI\Minimap.lua
 UI\Ledger.lua
 UI\Match.lua

@@ -65,6 +65,7 @@ FE.SECTIONS = {
     } },
     { "Crafting", {
         { "Crafting profit in the profession window: what the materials cost against what the product brings on the auction house, for every recipe", unlock = "profession" },
+        "Profession Check: what each crafting profession costs to skill to 75, 150, 225 and 300, with the auction prices; hover a cell for the recipes and the materials",
         { "Cheapest skill-up: two badges mark the cheapest recipe to skill up, by cost and by profit, and every recipe shows its skill-up chance", unlock = "profession" },
         { "Prices of the whole auction house in one scan, plus the vendor prices you have seen; every item tooltip shows the latest price", unlock = "auction" },
         { "Who in the group needs a crafting material, and who carries the materials of a recipe", unlock = "profession" },

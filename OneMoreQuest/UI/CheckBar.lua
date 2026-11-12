@@ -32,6 +32,8 @@ local ITEMS = {
       icon = MEDIA .. "Icon_Grind", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("grind") end },
     { id = "bet", label = "Bet Check", tip = "Click: start a bet with the dads",          -- decision 170, from level 5
       icon = MEDIA .. "Icon_Bet", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("bets") end },
+    { id = "prof", label = "Profession Check", tip = "Click: what each crafting profession costs to skill to 75, 150, 225 and 300, with the auction prices",   -- decision 535
+      icon = MEDIA .. "Icon_Profession" },
     { id = "progress", label = "Progress Check", tip = "Click: your milestone timeline, from level 1 to 60",   -- decision 184
       icon = MEDIA .. "Icon_Progress" },
     { id = "duel", label = "Dad Duel", tip = "Click: challenge the dads in your group - 5 rounds with the foes of your journey",   -- from level 15
@@ -111,6 +113,8 @@ local function click(item)
             local fine, why = OMQ.Match:Challenge()
             if not fine then OMQ:Print("duel: " .. tostring(why)) end
         end
+    elseif item.id == "prof" then
+        if OMQ.ProfCheck then OMQ.ProfCheck:Toggle() end
     elseif item.id == "progress" then
         if OMQ.Milestones then OMQ.Milestones:Toggle() end
     elseif item.id == "rhythm" then
