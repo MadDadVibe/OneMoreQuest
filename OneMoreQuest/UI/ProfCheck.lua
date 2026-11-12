@@ -72,6 +72,37 @@ local function fallbackMaker(item)
     return fallbackMakers[item]
 end
 
+-- an item has a price, or the profession makes it from materials that have one (fix 539: Medium Leather without a
+-- price became 3500 Ruined Leather Scraps without a price; now the item itself stays the missing one)
+function PC.CanPrice(item, depth)
+    depth = depth or 0
+    if PC.Price(item) then return true end
+    local other = fallbackMaker(item)
+    local r = other and (OMQ.ProfRecipes or {})[other]
+    if not r or depth >= PC.DEPTH then return false end
+    for k = 1, #r[3], 2 do
+        if not PC.CanPrice(r[3][k], depth + 1) then return false end
+    end
+    return true
+end
+
+-- what one piece costs when this recipe makes it from priced materials; nil when a material has no price
+function PC.MakeCost(recipe, depth)
+    local r = (OMQ.ProfRecipes or {})[recipe]
+    if not r then return nil end
+    local sum = 0
+    for k = 1, #r[3], 2 do
+        local item = r[3][k]
+        local p = PC.Price(item)
+        if not p and (depth or 0) + 1 < PC.DEPTH and PC.CanPrice(item, (depth or 0) + 1) then
+            p = PC.MakeCost(fallbackMaker(item), (depth or 0) + 1)
+        end
+        if not p then return nil end
+        sum = sum + p * r[3][k + 1]
+    end
+    return sum / (r[2] or 1)
+end
+
 -- one profession: { id, name, brackets = { { cost, missing = {item = n}, buy = {item = n}, price = {item = p},
 -- steps = {...}, de = true }, ... }, total, complete }
 function PC.Compute(route)
@@ -97,14 +128,17 @@ function PC.Compute(route)
             amount = amount - take
         end
         if amount <= 1e-6 then return end
-        local mine = own[item]
-        if mine and depth < PC.DEPTH then        -- the route makes it itself: from the raw materials
-            local r = R[mine]
-            craft(b, mine, amount / (r[2] or 1), depth + 1)
-            stock[item] = (stock[item] or 0) - amount
-            return
-        end
         local p = PC.Price(item)
+        local mine = own[item]
+        if mine and depth < PC.DEPTH then        -- the route makes it itself: more of it from the raw materials,
+            local make = PC.MakeCost(mine, depth)  -- unless buying it is cheaper or making it has no price (fix 539)
+            if make and (not p or make <= p) then
+                local r = R[mine]
+                craft(b, mine, amount / (r[2] or 1), depth + 1)
+                stock[item] = (stock[item] or 0) - amount
+                return
+            end
+        end
         if p then
             b.cost = b.cost + p * amount
             b.buy[item] = (b.buy[item] or 0) + amount
@@ -112,7 +146,7 @@ function PC.Compute(route)
             return
         end
         local other = fallbackMaker(item)
-        if other and depth < PC.DEPTH then       -- no price, but this profession can make it
+        if other and depth < PC.DEPTH and PC.CanPrice(item, depth) then   -- no price, but it can be made from priced materials
             local r = R[other]
             craft(b, other, amount / (r[2] or 1), depth + 1)
             stock[item] = (stock[item] or 0) - amount
@@ -177,16 +211,39 @@ end
 ----------------------------------------------------------------------
 -- Names (from the game, in the client's language)
 ----------------------------------------------------------------------
-function PC.ItemName(id)
-    local n
+-- a name the game has not loaded yet is asked for; the window asks for all of them when it opens (PC.Prefetch), and
+-- an open tooltip is drawn again when the game delivers a name (GET_ITEM_INFO_RECEIVED, ITEM_DATA_LOAD_RESULT; fix 539)
+local function known(id)
     if C_Item and C_Item.GetItemNameByID then
         local ok, v = pcall(C_Item.GetItemNameByID, id)
-        if ok and type(v) == "string" and v ~= "" then n = v end
+        if ok and type(v) == "string" and v ~= "" then return v end
     end
-    if not n and GetItemInfo then
+    if C_Item and C_Item.GetItemInfo then
+        local ok, v = pcall(C_Item.GetItemInfo, id)
+        if ok and type(v) == "string" and v ~= "" then return v end
+    end
+    if GetItemInfo then
         local ok, v = pcall(GetItemInfo, id)
-        if ok and type(v) == "string" and v ~= "" then n = v end
+        if ok and type(v) == "string" and v ~= "" then return v end
     end
+end
+function PC.Prefetch()
+    local asked, n = {}, 0
+    for _, r in pairs(OMQ.ProfRecipes or {}) do
+        for k = 1, #r[3], 2 do
+            local id = r[3][k]
+            if not asked[id] then
+                asked[id] = true
+                if not known(id) and C_Item and C_Item.RequestLoadItemDataByID then
+                    pcall(C_Item.RequestLoadItemDataByID, id); n = n + 1
+                end
+            end
+        end
+    end
+    return n
+end
+function PC.ItemName(id)
+    local n = known(id)
     if not n and C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, id) end
     return n or ("item " .. id)
 end
@@ -312,6 +369,7 @@ local function cellButton(parent)
     c.text = text(c, "GameFontHighlightSmall", nil, "RIGHT")
     c.text:SetPoint("RIGHT", -6, 0)
     c:SetScript("OnEnter", function(self)
+        PC._hover = self
         if not (GameTooltip and self.res) then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         if self.col then PC.FillTooltip(GameTooltip, self.res, self.col)
@@ -322,7 +380,10 @@ local function cellButton(parent)
         end
         GameTooltip:Show()
     end)
-    c:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    c:SetScript("OnLeave", function(self)
+        if PC._hover == self then PC._hover = nil end
+        if GameTooltip then GameTooltip:Hide() end
+    end)
     return c
 end
 
@@ -434,6 +495,7 @@ end
 
 function PC:Show()
     if not f then build() end
+    PC.Prefetch()
     PC.Refresh()
     f:Show()
 end
@@ -442,5 +504,22 @@ function PC:Toggle()
 end
 function PC:Frame() return f end
 function PC:Cell(r, i) return cells[r] and cells[r][i] end
+
+-- a name arrived: the open tooltip is drawn again, at most every 0.2 s
+PC.REDRAW = 0.2
+local redrawAt
+function PC.OnItemLoaded()
+    local c = PC._hover
+    if not (c and f and f:IsShown() and c.res) or redrawAt then return end
+    redrawAt = true
+    C_Timer.After(PC.REDRAW, function()
+        redrawAt = nil
+        local h = PC._hover
+        if h and f and f:IsShown() and h:GetScript("OnEnter") then h:GetScript("OnEnter")(h) end
+    end)
+end
+local names = CreateFrame("Frame")
+for _, e in ipairs({ "GET_ITEM_INFO_RECEIVED", "ITEM_DATA_LOAD_RESULT" }) do pcall(names.RegisterEvent, names, e) end
+names:SetScript("OnEvent", function() PC.OnItemLoaded() end)
 
 OMQ:RegisterCommand("prof", function() PC:Toggle() end, "Profession Check: what each crafting profession costs to skill")
