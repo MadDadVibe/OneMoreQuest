@@ -14,8 +14,9 @@ local SR = {}
 OMQ.SkillRoute = SR
 
 SR.W = 330                     -- panel width
-SR.TAB_W, SR.TAB_H = 34, 34
-SR.TAB_X, SR.TAB_Y = 12, -42     -- the button: outside the window, right above the top profession tab (fix 565)
+SR.TAB_W, SR.TAB_H = 40, 40      -- as big as the profession tab icons (fix 567)
+SR.ICON = "Interface\\Icons\\INV_Scroll_03"
+SR.TAB_X, SR.TAB_Y = 10, -34     -- the button: outside the window, right above the top profession tab (fix 565)
 SR.TAB_LEVEL = 30                -- frame levels above the window, so its border and children do not cover it
 SR.GAP = 70                      -- the panel: right of the profession tabs on the window's right edge (fix 565)
 SR.ROW_H, SR.SUB_H, SR.HEAD_H = 16, 14, 20
@@ -519,17 +520,19 @@ local function build(pf)
     local lvl = pf.GetFrameLevel and pf:GetFrameLevel()
     if type(lvl) == "number" then tab:SetFrameLevel(lvl + SR.TAB_LEVEL) end
     if tab.SetToplevel then tab:SetToplevel(true) end
-    local tbg = tab:CreateTexture(nil, "BACKGROUND")
-    tbg:SetAllPoints()
-    tbg:SetColorTexture(0.23, 0.18, 0.11, 0.95)
-    edge(tab, { 0.85, 0.7, 0.3 })
+    -- the look of the profession tabs next to it (fix 567): the spellbook skill line tab art around a full icon
+    tab.frame = tab:CreateTexture(nil, "BACKGROUND")
+    tab.frame:SetSize(SR.TAB_W * 2, SR.TAB_H * 2)
+    tab.frame:SetPoint("TOPLEFT", -SR.TAB_W * 3 / 32, SR.TAB_H * 11 / 32)
+    tab.frame:SetTexture("Interface\\SpellBook\\SpellBook-SkillLineTab")
     tab.icon = tab:CreateTexture(nil, "ARTWORK")
-    tab.icon:SetSize(26, 26)
-    tab.icon:SetPoint("CENTER", 0, 0)
-    tab.icon:SetTexture(MEDIA .. "Icon_Profession")
+    tab.icon:SetAllPoints()
+    tab.icon:SetTexture(SR.ICON)
+    if tab.SetHighlightTexture then tab:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD") end
     tab.lit = tab:CreateTexture(nil, "OVERLAY")
     tab.lit:SetAllPoints()
-    tab.lit:SetColorTexture(1, 0.85, 0.35, 0.25)
+    tab.lit:SetTexture("Interface\\Buttons\\CheckButtonHilight")
+    if tab.lit.SetBlendMode then tab.lit:SetBlendMode("ADD") end
     tab.lit:Hide()
     tab:SetScript("OnClick", function() SR.Toggle() end)
     tab:SetScript("OnEnter", function(self)
