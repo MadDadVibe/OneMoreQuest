@@ -215,7 +215,7 @@ function U.ShowLoot(b)
     local rows = math.max(1, math.ceil(#list / U.LOOT_COLS))
     local w = math.max(150, 16 + U.LOOT_COLS * (U.LOOT_ICON + 4) - 4)
     fly:SetSize(w, #list > 0 and (50 + rows * (U.LOOT_ICON + 4)) or 44)
-    -- directly under the icon (decision 531, Tobias): the mouse goes straight down onto the items; the strip may
+    -- directly under the icon (decision 531): the mouse goes straight down onto the items; the strip may
     -- cover the other icons for the time being
     fly:ClearAllPoints()
     fly:SetPoint("TOPLEFT", b, "BOTTOMLEFT", 0, 1)
@@ -237,6 +237,18 @@ local function statCol(i, label)
     return v
 end
 
+-- decision 532: the window hangs at its top left corner, so folding and opening keep the top edge in place
+-- (a moved window had a centre point and grew up and down). Saved as { "TOPLEFT", "BOTTOMLEFT", left, top }.
+function U.KeepTop()
+    local l, t = call(win.GetLeft, win), call(win.GetTop, win)
+    if type(l) ~= "number" or type(t) ~= "number" then return false end
+    win:ClearAllPoints()
+    win:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l, t)
+    local s = saved()
+    if s then s.pos = { "TOPLEFT", "BOTTOMLEFT", l, t } end
+    return true
+end
+
 function U.Place()
     if not win then return end
     local s = saved()
@@ -244,6 +256,7 @@ function U.Place()
     win:ClearAllPoints()
     if type(p) == "table" and p[1] then
         win:SetPoint(p[1], UIParent, p[2] or p[1], p[3] or 0, p[4] or 0)
+        if p[1] ~= "TOPLEFT" then U.KeepTop() end          -- a place saved by v1.3.139
     else
         win:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -230, -230)
     end
@@ -260,9 +273,7 @@ local function build()
     win:SetScript("OnDragStart", function(self) dragged = true; self:StartMoving() end)
     win:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
-        local p, _, rp, x, y = self:GetPoint()
-        local s = saved()
-        if s and p then s.pos = { p, rp, x, y } end
+        U.KeepTop()
     end)
     win:SetScript("OnMouseUp", function(self, button)
         if dragged then dragged = false; return end
