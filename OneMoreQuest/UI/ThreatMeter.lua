@@ -1,7 +1,7 @@
 -- One More Quest: the threat meter (decision 333, step 2)
 -- A small frame that shows, for the current target, how much threat the player, the pet, the party and their
 -- pets have, as the game's scaled percentage (UnitDetailedThreatSituation, 100 = the unit is the target; it can
--- be above 100 for a moment before the mob turns). Shown in a group, in dungeons or never (option), always inside a dungeon, 8 seconds after a fight, whenever
+-- be above 100 for a moment before the mob turns). Shown in a group, in dungeons, solo + group or never (option), always inside a dungeon, 8 seconds after a fight, whenever
 -- somebody has threat on the target, also when I have none yet. Values the game
 -- does not give (secret) are skipped; when nothing is readable the frame stays hidden. In combat without
 -- an attackable target a faded one line hint shows. It can be dragged in the move mode only; /omq threat reset puts it back.
@@ -45,11 +45,12 @@ end
 
 local function inGroup() return (IsInGroup and IsInGroup()) and true or false end
 
--- when the meter may show (decision 335): "group" = in a group, "dungeon" = inside a dungeon or raid, "never"
+-- when the meter may show (decision 335): "group" = in a group, "dungeon" = inside a dungeon or raid, "never";
+-- "always" = solo and in a group (decision 583, option "Always"): alone it lists only me and my pet
 function M.Mode()
     local o = OMQ.db and OMQ.db.options
     local m = o and o.threatMode
-    if m == "group" or m == "dungeon" or m == "never" then return m end
+    if m == "group" or m == "dungeon" or m == "never" or m == "always" then return m end
     if o and o.threat == false then return "never" end         -- the old on/off option (0.54.24)
     return "group"
 end
@@ -65,6 +66,7 @@ local function modeAllows()
     local m = M.Mode()
     if m == "never" then return false end
     if m == "dungeon" then return inDungeon() end
+    if m == "always" then return true end
     return inGroup()
 end
 
@@ -93,8 +95,57 @@ local function quiet(fighting, targetOk)
     return "hidden"
 end
 
+-- solo (decision 583): me and my living pet on the target. The pet may open the fight; the tank flag says who
+-- holds the enemy ("Aggro"), a value the game does not give shows as a dash, never as 0.
+local function inCombat(unit)
+    local ok, v = pcall(UnitAffectingCombat, unit)
+    return ok and not isSecret(v) and v == true
+end
+
+local function livingPet()
+    if not UnitExists then return false end
+    local e = UnitExists("pet")
+    if isSecret(e) or e ~= true then return false end
+    local d = UnitIsDead and UnitIsDead("pet")
+    return isSecret(d) or d ~= true
+end
+
+local function computeSolo(T)
+    local pet = livingPet()
+    local fighting = inCombat("player") or (pet and inCombat("pet"))
+    if not (T and UnitExists and UnitExists("target")) then return quiet(fighting, false) end
+    local okA, attack = pcall(UnitCanAttack, "player", "target")
+    if not okA or isSecret(attack) or attack ~= true then return quiet(fighting, false) end
+    local dead = UnitIsDead and UnitIsDead("target")
+    if not isSecret(dead) and dead == true then return quiet(fighting, false) end
+    local rows, any = {}, false
+    for _, unit in ipairs({ "player", "pet" }) do
+        local r = (unit == "player" or pet) and T.Read(unit, "target") or nil
+        if r then
+            local pct
+            if not r.err then
+                if type(r.scaled) == "number" and not isSecret(r.scaled) then pct = r.scaled
+                elseif r.none then pct = 0 end
+            end
+            local tank = not isSecret(r.tank) and r.tank == true
+            if tank or (pct and pct > 0) then any = true end
+            rows[#rows + 1] = { unit = unit, name = tostring(r.name), pct = pct, pet = unit == "pet", tank = tank,
+                                me = unit == "player", solo = true,
+                                color = unit == "pet" and PET_COLOR or classColor(unit) }
+        end
+    end
+    if not any then return quiet(fighting, true) end
+    table.sort(rows, function(a, b)
+        local x, y = a.pct or -1, b.pct or -1
+        if x ~= y then return x > y end
+        return a.unit < b.unit
+    end)
+    return "rows", rows
+end
+
 function M.Compute()
     if not modeAllows() then return "hidden" end
+    if M.Mode() == "always" and not inGroup() then return computeSolo(OMQ.ThreatProbe) end
     local fighting = UnitAffectingCombat and UnitAffectingCombat("player") and true or false
     -- the rows show whenever somebody has threat on the target, also when I have none yet (decision 335)
     local T = OMQ.ThreatProbe
@@ -138,6 +189,7 @@ end
 
 -- the bar colour of a row
 function M.BarColor(row)
+    if row.solo and not row.pct then return row.tank and COLOR.tank or COLOR.calm end
     if row.tankMode then
         -- tank mode: somebody else holds the aggro = red, I hold it = green, the rest as usual
         if row.tank then return row.me and COLOR.good or COLOR.hot end
@@ -247,21 +299,23 @@ local function render(rows, name)
         row:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -6, top)
         local c = M.BarColor(r)
         row.bar:SetColorTexture(c[1], c[2], c[3], r.tank and 0.75 or 0.55)
-        row.bar:SetWidth(math.max(1, (WIDTH - 12) * math.min(r.pct, 100) / 100))
+        row.bar:SetWidth(math.max(1, (WIDTH - 12) * math.min(r.pct or 0, 100) / 100))
         if r.tankMode and r.tank then
             if r.me then row.edge:SetColorTexture(0.45, 0.9, 0.5, 1) else row.edge:SetColorTexture(1, 0.54, 0.36, 1) end
         elseif r.tankMode then
             row.edge:SetColorTexture(0, 0, 0, 0)
         elseif r.tank then
             row.edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
-        elseif r.me and r.pct >= M.HOT then
+        elseif r.me and (r.pct or 0) >= M.HOT then
             row.edge:SetColorTexture(1, 0.54, 0.36, 1)
         else
             row.edge:SetColorTexture(0, 0, 0, 0)
         end
         row.name:SetText(r.pet and (r.name .. " (pet)") or r.name)
         row.name:SetTextColor(r.color[1], r.color[2], r.color[3])
-        row.value:SetText(string.format("%d", math.floor(r.pct + 0.5)))
+        local value = r.pct and string.format("%d", math.floor(r.pct + 0.5)) or "-"
+        if r.solo and r.tank then value = value .. " Aggro" end      -- solo (decision 583): who holds the enemy
+        row.value:SetText(value)
         row:Show()
         top = top - ROW_H - GAP
     end
@@ -318,10 +372,14 @@ end)
 
 local driver = CreateFrame("Frame")
 local acc = 0
-for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_TARGET_CHANGED", "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD", "UNIT_THREAT_LIST_UPDATE" }) do
+for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_TARGET_CHANGED", "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD", "UNIT_THREAT_LIST_UPDATE",
+                        "UNIT_THREAT_SITUATION_UPDATE", "UNIT_PET" }) do
     pcall(driver.RegisterEvent, driver, e)
 end
+-- these two can fire many times a frame: they only ask for a refresh on the next frame (decision 583)
+local LATER = { UNIT_THREAT_SITUATION_UPDATE = true, UNIT_PET = true }
 driver:SetScript("OnEvent", function(_, event)
+    if LATER[event] then acc = 0.4; return end
     if event == "PLAYER_REGEN_ENABLED" and M.visible and GetTime then M.graceUntil = GetTime() + M.GRACE end
     if event == "PLAYER_REGEN_DISABLED" then M.graceUntil = 0 end
     M.Refresh()

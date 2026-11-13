@@ -231,14 +231,14 @@ local function allSections()
               end },
             -- decisions 334, 335: the threat meter
             { type = "segment", label = "Threat meter", unlock = "threat",
-              tip = "A small frame with the threat of everyone in your group on your target, in percent (100 = he is the target). In group: whenever you are in a group. Dungeons: only inside a dungeon or raid. Place it in the move mode; /omq threat reset puts it back.",
-              options = { "In group", "Dungeons", "Never" },
+              tip = "A small frame with the threat of everyone in your group on your target, in percent (100 = he is the target). In group: whenever you are in a group. Dungeons: only inside a dungeon or raid. Always: also when you play alone, then it shows you and your pet (the pet may pull first); Aggro marks who holds the enemy, a dash means the game gives no value. Place it in the move mode; /omq threat reset puts it back.",
+              options = { "In group", "Dungeons", "Never", "Always" },     -- decision 583: also solo
               get = function()
                   local m = OMQ.ThreatMeter and OMQ.ThreatMeter.Mode() or "group"
-                  return (m == "group" and 1) or (m == "dungeon" and 2) or 3
+                  return (m == "group" and 1) or (m == "dungeon" and 2) or (m == "always" and 4) or 3
               end,
               set = function(i)
-                  OMQ.db.options.threatMode = ({ "group", "dungeon", "never" })[i] or "group"
+                  OMQ.db.options.threatMode = ({ "group", "dungeon", "never", "always" })[i] or "group"
                   OMQ.db.options.threat = nil
                   if OMQ.ThreatMeter then OMQ.ThreatMeter.Refresh() end
               end },

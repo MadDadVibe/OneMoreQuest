@@ -18,8 +18,8 @@ local MOB = "target"
 local function isSecret(v) return issecretvalue and issecretvalue(v) or false end
 -- a value as text: "secret", "-" for nil, else the number rounded
 local function fmt(v)
+    if isSecret(v) then return "secret" end           -- before any compare (decision 583)
     if v == nil then return "-" end
-    if isSecret(v) then return "secret" end
     if type(v) == "number" then return string.format("%.0f", v) end
     return tostring(v)
 end
@@ -34,9 +34,10 @@ function T.Read(unit, mob)
     if isSecret(r.name) then r.name = "secret" end
     if not UnitDetailedThreatSituation then r.err = "UnitDetailedThreatSituation missing"; return r end
     local ok, tank, status, scaled, raw, value = pcall(UnitDetailedThreatSituation, unit, mob)
-    if not ok then r.err = tostring(tank); return r end
+    if not ok then r.err = fmt(tank); return r end
     r.tank, r.status, r.scaled, r.raw, r.value = tank, status, scaled, raw, value
-    r.none = (status == nil and scaled == nil and raw == nil and value == nil)
+    r.none = not (isSecret(tank) or isSecret(status) or isSecret(scaled) or isSecret(raw) or isSecret(value))
+        and tank ~= true and status == nil and scaled == nil and raw == nil and value == nil
     return r
 end
 
@@ -45,7 +46,7 @@ function T.Line(r)
     if r.none then return string.format("%-9s %s: no threat", r.unit, r.name) end
     local tank = isSecret(r.tank) and "secret" or (r.tank and "TANK" or "-")
     local over = ""
-    if not isSecret(r.raw) and type(r.raw) == "number" and r.raw > 100 and not r.tank then over = "  (over the tank)" end
+    if not isSecret(r.raw) and type(r.raw) == "number" and r.raw > 100 and not isSecret(r.tank) and not r.tank then over = "  (over the tank)" end
     return string.format("%-9s %s: %s  status %s  scaled %s  raw %s  value %s%s",
         r.unit, r.name, tank, fmt(r.status), fmt(r.scaled), fmt(r.raw), fmt(r.value), over)
 end
@@ -57,7 +58,7 @@ local function targetLine()
     local okL, lvl = pcall(UnitLevel, MOB)
     local okA, attack = pcall(UnitCanAttack, "player", MOB)
     return string.format("target: %s  %s  level %s  attackable %s",
-        okN and fmt(name) or "?", okC and fmt(class) or "?", okL and fmt(lvl) or "?", okA and tostring(attack) or "?")
+        okN and fmt(name) or "?", okC and fmt(class) or "?", okL and fmt(lvl) or "?", okA and fmt(attack) or "?")
 end
 
 -- the lines of one report (a list of strings)
@@ -90,7 +91,7 @@ local function tick()
             for _, u in ipairs(T.UNITS) do
                 local r = T.Read(u, MOB)
                 if r and not r.err and not r.none then
-                    parts[#parts + 1] = string.format("%s %s/%s%s", r.name, fmt(r.scaled), fmt(r.raw), r.tank == true and "T" or "")
+                    parts[#parts + 1] = string.format("%s %s/%s%s", r.name, fmt(r.scaled), fmt(r.raw), not isSecret(r.tank) and r.tank == true and "T" or "")
                 end
             end
             OMQ:Print("threat " .. (#parts > 0 and table.concat(parts, "  ") or "nothing readable"))

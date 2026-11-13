@@ -29,7 +29,7 @@ FE.SECTIONS = {
         "Group Check before a dungeon: durability, bags, drinks, class items, distance to the entrance",
         { "Dungeon quests of every dad, where each quest starts, with an arrow to the quest giver and the rewards scored for you", unlock = "dungeon" },
         { "Best boss loot of a dungeon for you, also for the new Forever dungeons", unlock = "dungeon" },
-        { "Threat meter: everybody's threat on your target, in every group or only in dungeons; as the tank you see who pulls the aggro off you", unlock = "threat" },
+        { "Threat meter: everybody's threat on your target, in every group, only in dungeons or also solo with your pet; as the tank you see who pulls the aggro off you", unlock = "threat" },
         { "Arrow to the dungeon entrance, with how to get in", unlock = "dungeon" },
         { "Dungeon Run: one way through every pre-quest that picks up all dungeon quests of a dungeon, from the Group Check", unlock = "dungeon" },
         { "Switch between the dungeons of your level in the Group Check", unlock = "dungeon" },
