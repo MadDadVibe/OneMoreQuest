@@ -11,7 +11,9 @@
 --   P.Way(p, q)   the way for an arrow (Quest Run's small arrow, the main arrow of Guide.lua): { cost, straight, a, b (the point to head for now), via, flight }
 -- Fine steering (decision 472): near me the arrow's heading is checked on the 8-yard raster of Data/PathRaster.lua
 -- and steered around walls, cliffs and water the coarse network does not see.
--- /omq path [on|off|fine on|fine off|diag|probe|log]
+-- Routes (decision 585): the whole walk to the arrow's target is searched once on that raster and kept; the arrow
+-- follows it (the network and the fine look above are what the arrow uses until the route is found).
+-- /omq path [on|off|fine on|fine off|diag|probe|log]   (fine off: neither fine steering nor routes)
 -- Middle click on an arrow: way over the land <-> straight line (decision 505)
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
@@ -486,7 +488,7 @@ local function coarseWay(p, q)
         return t.a, t.b
     end
     -- head for the farthest node the way reaches almost straight; never past a flight master I fly from
-    local way = { cost = flew and best or math.max(best, s), straight = s, via = true }
+    local way = { cost = flew and best or math.max(best, s), straight = s, via = true, srch = srch, first = first, best = best }
     local pick, n, steps = nil, first, 0
     while n and n > 0 and steps < 2000 do
         steps = steps + 1
@@ -580,7 +582,7 @@ P.LOOK = 250                    -- yards ahead the fine way is searched
 P.FINE_NODES = 4000             -- cells a fine search looks at at most
 P.FINE_MARGIN = 24              -- cells around me and the point the search may use
 P.FINE_GOAL = 3                 -- cells from a point that is not walkable ground that count as there
-P.FINE_KEEP = 16                -- unpacked tiles kept
+P.FINE_KEEP = 64                -- unpacked tiles kept (a route search crosses many, 585)
 P.FINE_MOVE, P.FINE_AGE = 5, 2  -- the fine way is found again after these yards moved or seconds
 P.FINE_HOLD = 4                 -- seconds a way round is kept against a clear line while I am on it (477)
 P.FINE_NEAR = 10                -- or at once this close to the point it heads for
@@ -635,7 +637,9 @@ end
 local cellAt = P.CellAt
 
 -- can I walk straight from cell (r0, c0) to cell (r1, c1)? (the cells of the line, step by step)
-function P.Sight(inst, r0, c0, r1, c1)
+-- strict (585): a diagonal step also needs ground in both cells beside it (the data lets a walk cut the corner of a
+-- rock; a player walking the straight line then brushes it)
+function P.Sight(inst, r0, c0, r1, c1, strict)
     local dx, dy = math.abs(c1 - c0), math.abs(r1 - r0)
     local sc, sr = c1 > c0 and 1 or -1, r1 > r0 and 1 or -1
     local err = dx - dy
@@ -646,6 +650,7 @@ function P.Sight(inst, r0, c0, r1, c1)
         if e2 > -dy then err = err - dy; mc = sc end
         if e2 < dx then err = err + dx; mr = sr end
         if not walks(v, DIR[(mr + 1) * 3 + mc + 2]) then return false end
+        if strict and mr ~= 0 and mc ~= 0 and (cellAt(inst, r + mr, c) == 0 or cellAt(inst, r, c + mc) == 0) then return false end
         r, c = r + mr, c + mc
         v = cellAt(inst, r, c)
     end
@@ -758,15 +763,16 @@ end
 
 -- a wide line of sight between two places (477): three lines, the middle one and one on each side a third of a
 -- cell off, so that a straight walk does not clip the corner of a wall
-function P.SightWide(inst, pa, pb, qa, qb)
+function P.SightWide(inst, pa, pb, qa, qb, wide, strict)
     local d = straight(pa, pb, qa, qb)
     if d < 0.01 then return true end
-    local ua, ub = -(qb - pb) / d * CELL * 0.35, (qa - pa) / d * CELL * 0.35
+    wide = wide or 0.35
+    local ua, ub = -(qb - pb) / d * CELL * wide, (qa - pa) / d * CELL * wide
     for _, o in ipairs({ 0, 1, -1 }) do
         local r0, c0 = rc(pa + ua * o, pb + ub * o)
         local r1, c1 = rc(qa + ua * o, qb + ub * o)
         if o ~= 0 and cellAt(inst, r0, c0) == 0 then r0, c0 = rc(pa, pb) end   -- I stand right at a wall
-        if not P.Sight(inst, r0, c0, r1, c1) then return false end
+        if not P.Sight(inst, r0, c0, r1, c1, strict) then return false end
     end
     return true
 end
@@ -831,7 +837,11 @@ function P.Carrot(p, w)
     -- (along counts fully up to CARROT yards to the side of the stretch, not at all from twice that)
     local side = math.abs((p.a - w.ga) * ub - (p.b - w.gb) * ua)
     local near = math.max(0, math.min(1, (2 * L - side) / L))
-    local t = math.max(0, L - straight(p.a, p.b, w.ga, w.gb)) + math.max(0, along) * near
+    -- (fix 585: before, the lead was L minus my yards from the start, so 40 yd along the stretch it was gone and the
+    -- point lay beside me: the arrow pointed sideways or back. Now the lead stays L while I am on the stretch.)
+    local lead = math.max(0, L - straight(p.a, p.b, w.ga, w.gb))
+    if along > 0 then lead = math.max(lead, L * near) end
+    local t = math.max(0, along) * near + lead
     if t <= 0 then return w end                      -- still far before the stretch
     t = math.min(t, seg)
     w.a, w.b, w.glide = w.ga + ua * t, w.gb + ub * t, true
@@ -885,16 +895,346 @@ local function steer(p, w, ka, kb)
     return w
 end
 
+----------------------------------------------------------------------
+-- Routes on the raster (decision 585)
+----------------------------------------------------------------------
+-- The whole walk from me to the target is searched once on the 8-yard raster (A*, a little greedy so that it looks
+-- at few cells) and then KEPT: the arrow follows it, a point CARROT_ROUTE yards ahead on it. Before, the way was
+-- found again every step from the coarse network (anchors on the tile borders) and a fine look 250 yards ahead,
+-- and the two disagreed at cliffs, tile borders and towns with more floors: the arrow swung to and fro or led into
+-- a dead end. The search runs in small slices (ROUTE_MS per frame), so nothing stutters; until it is done (mostly
+-- well under a second) the arrow uses the old way. A new search starts only when I leave the route by ROUTE_OFF
+-- yards or the target moves. Far targets: the route goes to a point about ROUTE_LEG yards along the coarse network
+-- and the next part is searched before I get there. A flight: the route goes to the flight master.
+P.ROUTES = true
+P.ROUTE_W = 1.4                 -- greed of the search (1: the shortest walk, more: fewer cells looked at)
+P.ROUTE_NODES = 120000          -- cells a search looks at at most
+P.ROUTE_MS = 3                  -- milliseconds of search per slice
+P.ROUTE_SLICE = 400             -- cells per slice without a clock
+P.ROUTE_FIRST_MS, P.ROUTE_FIRST_SLICE = 8, 2000   -- the first slice of a search, right when it starts
+P.ROUTE_OFF = 4                 -- cells (about 33 yd) off the route: search again
+P.ROUTE_FAR = 1500              -- yards: farther targets get a part of the way (a leg) at a time
+P.ROUTE_LEG = 1200              -- yards along the coarse network a leg goes
+P.ROUTE_RENEW = 300             -- yards before the end of a leg the next one is searched
+P.ROUTE_STALL, P.ROUTE_STALL_YD = 3, 10   -- seconds within these yards (stuck or pacing) on the route: searched once again from here
+P.ROUTE_RETRY = 8               -- seconds before a failed search is tried again (or 50 yd moved)
+P.ROUTE_GOAL = 3                -- cells round a target that is not walkable ground that count as there
+P.ROUTE_NEAR_YD = 40            -- a search that ends this close to its goal is good enough
+P.ROUTE_WIDE = 0.6               -- the line to that point keeps this many cells off walls on both sides
+P.CARROT_ROUTE = 35             -- the arrow heads for a point this far ahead on the route
+
+local function clockMs() return debugprofilestop and debugprofilestop() or nil end
+local function cellId(r, c) return r * 16384 + c end
+
+-- a new search from p to the goal (ga, gb): the state of an A* that runs in slices
+local function newSearch(inst, pa, pb, ga, gb)
+    local r0, c0 = rc(pa, pb)
+    local r1, c1 = rc(ga, gb)
+    local function h(r, c)
+        local a, b = math.abs(r - r1), math.abs(c - c1)
+        if a > b then return (a + (SQ2 - 1) * b) * P.ROUTE_W end
+        return (b + (SQ2 - 1) * a) * P.ROUTE_W
+    end
+    local s = cellId(r0, c0)
+    local st = { inst = inst, r0 = r0, c0 = c0, r1 = r1, c1 = c1, h = h, g = { [s] = 0 }, prev = {}, done = {},
+        heap = {}, count = 0, closest = s, closestH = h(r0, c0), open = cellAt(inst, r1, c1) ~= 0, start = s,
+        ga = ga, gb = gb, pa = pa, pb = pb }
+    push(st.heap, h(r0, c0), s)
+    return st
+end
+
+-- run a search for a while: true when it has ended (found or given up)
+local function stepSearch(st, budgetMs, slice)
+    if st.ended then return true end
+    local inst, heap, g, prev, done, h = st.inst, st.heap, st.g, st.prev, st.done, st.h
+    local r1, c1, open = st.r1, st.c1, st.open
+    local t0 = clockMs()
+    local n = 0
+    while heap[1] do
+        if st.count >= P.ROUTE_NODES then break end
+        n = n + 1
+        if n % 100 == 0 then
+            if t0 then
+                if clockMs() - t0 >= (budgetMs or P.ROUTE_MS) then return false end
+            elseif n >= (slice or P.ROUTE_SLICE) then
+                return false
+            end
+        end
+        local i = pop(heap)[2]
+        if not done[i] then
+            done[i] = true
+            st.count = st.count + 1
+            local r = math.floor(i / 16384)
+            local c = i - r * 16384
+            local hi = h(r, c)
+            if hi < st.closestH then st.closest, st.closestH = i, hi end
+            if (r == r1 and c == c1) or (not open and math.max(math.abs(r - r1), math.abs(c - c1)) <= P.ROUTE_GOAL) then
+                st.found = i
+                break
+            end
+            local v, gi = cellAt(inst, r, c), g[i]
+            -- the walks of the first floor (the ground itself) also in a cell with more floors (a bridge, a roof, a
+            -- cave above); a cell without data (only where I stand): to any neighbour with ground
+            local free = v == 0
+            for d = 1, 8 do
+                local nr, nc = r + DR[d], c + DC[d]
+                local nv = cellAt(inst, nr, nc)
+                -- (a diagonal step only with ground on both sides: no corner of a rock cut, see P.Sight strict)
+                if nv ~= 0 and (free or walks(v, d))
+                    and (d <= 4 or (cellAt(inst, nr, c) ~= 0 and cellAt(inst, r, nc) ~= 0)) then
+                    local j = cellId(nr, nc)
+                    if not done[j] then
+                        local step = d > 4 and SQ2 or 1
+                        if nv % FLOORS >= SWUM then step = step * P.SWIM end
+                        if nv % SWUM ~= 255 and nv < FLOORS then step = step + P.EDGE end
+                        local ng = gi + step
+                        if g[j] == nil or ng < g[j] then
+                            g[j], prev[j] = ng, i
+                            push(heap, ng + h(nr, nc), j)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    st.ended = true
+    P.stats.routes = (P.stats.routes or 0) + 1
+    P.stats.routeCells = st.count
+    return true
+end
+P._NewSearch, P._StepSearch = newSearch, stepSearch
+
+-- the route a finished search found: { cells = { {r, c}, ... }, cum = yards along it, ... }, nil when it failed
+local function routeOf(st)
+    local last = st.found
+    if not last then
+        -- not reached: good enough when it ended close to the goal (a target in a house the raster does not know)
+        local r = math.floor(st.closest / 16384)
+        local ca, cb = center(r, st.closest - r * 16384)
+        if straight(ca, cb, st.ga, st.gb) <= P.ROUTE_NEAR_YD then last = st.closest end
+    end
+    if not last then return nil end
+    local back, i = {}, last
+    while i do
+        local r = math.floor(i / 16384)
+        back[#back + 1] = { r, i - r * 16384 }
+        i = st.prev[i]
+    end
+    local cells, cum = {}, {}
+    for k = #back, 1, -1 do cells[#cells + 1] = back[k] end
+    cum[1] = 0
+    for k = 2, #cells do
+        local dr, dc = math.abs(cells[k][1] - cells[k - 1][1]), math.abs(cells[k][2] - cells[k - 1][2])
+        cum[k] = cum[k - 1] + ((dr + dc == 2) and SQ2 or 1) * CELL
+    end
+    return { cells = cells, cum = cum, k = 1, ga = st.ga, gb = st.gb }
+end
+P._RouteOf = routeOf
+
+-- where I am on the route: the index of the nearest cell near the last one, and whether I left it
+local function progress(rt, pa, pb)
+    local r0, c0 = rc(pa, pb)
+    local cells = rt.cells
+    local lo, hi = math.max(1, rt.k - 10), math.min(#cells, rt.k + 120)
+    local bk, bd = rt.k, nil
+    for k = lo, hi do
+        local dr, dc = cells[k][1] - r0, cells[k][2] - c0
+        local d = dr * dr + dc * dc
+        if not bd or d < bd or (d == bd and k > bk) then bk, bd = k, d end
+    end
+    rt.k = bk
+    return bk, math.sqrt(bd or 0) > P.ROUTE_OFF
+end
+
+-- the point to head for: CARROT_ROUTE yards ahead of my place on the route, as far as I see it
+local function routeCarrot(inst, rt, pa, pb)
+    local cells, cum, k = rt.cells, rt.cum, rt.k
+    local function at(len)
+        local want = cum[k] + len
+        for j = k + 1, #cells do
+            if cum[j] >= want then return center(cells[j][1], cells[j][2]) end
+        end
+        return nil
+    end
+    local len = P.CARROT_ROUTE
+    while len >= CELL do
+        local a, b = at(len)
+        if not a then
+            -- the end of the route is closer than that: its goal, when I see it
+            if P.SightWide(inst, pa, pb, rt.ga, rt.gb, P.ROUTE_WIDE, true) then return rt.ga, rt.gb end
+        elseif P.SightWide(inst, pa, pb, a, b, P.ROUTE_WIDE, true) then
+            return a, b
+        end
+        len = len - CELL / 2
+    end
+    -- right at a corner: the farthest of the next cells my own cell sees, else back onto the route's cell next to me
+    local r0, c0 = rc(pa, pb)
+    for j = math.min(#cells, k + 8), k + 1, -1 do
+        if P.Sight(inst, r0, c0, cells[j][1], cells[j][2], true) then return center(cells[j][1], cells[j][2]) end
+    end
+    if r0 ~= cells[k][1] or c0 ~= cells[k][2] then return center(cells[k][1], cells[k][2]) end
+    local j = math.min(#cells, k + 1)
+    return center(cells[j][1], cells[j][2])
+end
+
+-- the goal of a new route from p for target q, with the coarse way w: { a, b, tail (yards from the goal on to the
+-- target), leg, flight }
+local function goalOf(p, q, w)
+    if w and w.flight then
+        local fy = straight(p.a, p.b, w.a, w.b)
+        return { a = w.a, b = w.b, tail = math.max(0, (w.cost or 0) - fy), flight = w.flight }
+    end
+    local s = straight(p.a, p.b, q.a, q.b)
+    if s > P.ROUTE_FAR and w and w.srch and w.first and w.best then
+        local srch, g = w.srch, w.srch.g
+        local n, steps = w.first, 0
+        while n and n > 0 and steps < 2000 do
+            steps = steps + 1
+            local nx = srch.nxt[n]
+            if w.best - srch.dist[n] >= P.ROUTE_LEG or not nx or nx <= 0 then break end
+            n = nx
+        end
+        if n and n > 0 and srch.dist[n] and srch.dist[n] > P.ROUTE_RENEW then
+            local a, b
+            if n <= g.n then a, b = g.x[n], g.y[n] else local t = srch.taxis[n - g.n]; a, b = t.a, t.b end
+            return { a = a, b = b, tail = srch.dist[n], leg = true }
+        end
+    end
+    return { a = q.a, b = q.b, tail = 0 }
+end
+P._GoalOf = goalOf
+
+local routes = {}               -- the routes of the last few targets, found by the target's place
+local pending = {}              -- searches still running: stepped by the driver below
+P._routes = routes
+
+local function routeFor(q)
+    for _, x in ipairs(routes) do
+        if x.inst == q.inst and math.abs(x.qa - q.a) < 5 and math.abs(x.qb - q.b) < 5 then return x end
+    end
+    local x = { qa = q.a, qb = q.b, inst = q.inst }
+    table.insert(routes, 1, x)
+    local old = routes[P.WAY_KEEP + 1]
+    routes[P.WAY_KEEP + 1] = nil
+    if old then old.search = nil end
+    return x
+end
+
+local function startSearch(x, p, q, w)
+    local goal = goalOf(p, q, w)
+    local st = newSearch(p.inst, p.a, p.b, goal.a, goal.b)
+    st.goal = goal
+    x.search = st
+    x.tries = { a = p.a, b = p.b, t = GetTime and GetTime() or 0 }
+    pending[#pending + 1] = x
+    -- a short search (most are: a few hundred cells) ends right here, so the arrow goes from route to route without
+    -- showing the old way (and its other yards) in between
+    stepSearch(st, P.ROUTE_FIRST_MS, P.ROUTE_FIRST_SLICE)
+end
+
+-- a search has ended: its route replaces the old one, or the target gets no route for a while
+local function adopt(x)
+    local st = x.search
+    x.search = nil
+    local rt = routeOf(st)
+    if not rt then x.failed = true; return end
+    x.failed = nil
+    rt.tail, rt.leg, rt.flight = st.goal.tail, st.goal.leg, st.goal.flight
+    x.cur = rt
+end
+
+-- the way for an arrow along the kept route, nil while there is none (the arrow then uses the old way)
+function P.RouteWay(p, q, w)
+    if not (P.ROUTES and OMQ.PathRaster and OMQ.PathRaster[p.inst]) then return nil end
+    local x = routeFor(q)
+    if x.search and stepSearch(x.search, 1) then adopt(x) end
+    local now = GetTime and GetTime() or 0
+    local rt = x.cur
+    if rt then
+        local k, off = progress(rt, p.a, p.b)
+        if off then
+            x.cur, rt = nil, nil
+        elseif rt.leg and not x.search and rt.cum[#rt.cells] - rt.cum[k] < P.ROUTE_RENEW then
+            startSearch(x, p, q, w)             -- the next leg, while I walk on this one
+        elseif not x.sa or straight(x.sa, x.sb, p.a, p.b) > P.ROUTE_STALL_YD or now < x.st then
+            x.sa, x.sb, x.st, x.stalled = p.a, p.b, now, nil
+        elseif now - x.st > P.ROUTE_STALL and not x.stalled and not x.search then
+            -- I stand still next to the route (a wall the route slipped past, a ledge): once a route from right here
+            x.stalled = true
+            startSearch(x, p, q, w)
+        end
+    end
+    if not rt then
+        if not x.search then
+            local tr = x.tries
+            local again = not x.failed or not tr or now - tr.t > P.ROUTE_RETRY or now < tr.t
+                or straight(tr.a, tr.b, p.a, p.b) > 50
+            if again then startSearch(x, p, q, w) end
+            if x.search and x.search.ended then adopt(x) end
+            rt = x.cur
+            if rt then progress(rt, p.a, p.b) end
+        end
+        if not rt then return nil end
+    end
+    local a, b = routeCarrot(p.inst, rt, p.a, p.b)
+    local k = rt.k
+    local mine = straight(p.a, p.b, center(rt.cells[k][1], rt.cells[k][2]))
+    local s = straight(p.a, p.b, q.a, q.b)
+    local left = rt.cum[#rt.cells] - rt.cum[k] + mine
+    if not rt.flight and not rt.leg then left = left + straight(rt.ga, rt.gb, q.a, q.b) end
+    local cost = left + (rt.tail or 0)
+    if not rt.flight then cost = math.max(cost, s) end
+    return { cost = cost, straight = s, a = a, b = b, via = true, route = true, flight = rt.flight }
+end
+
+-- the driver: running searches get a slice every frame, so a route is ready soon also when the arrows ask seldom
+local driver = CreateFrame("Frame")
+if driver.SetScript then
+    driver:SetScript("OnUpdate", function()
+        local k = 1
+        while pending[k] do
+            local x = pending[k]
+            if not x.search then
+                table.remove(pending, k)
+            else
+                local ok, ended = pcall(stepSearch, x.search, P.ROUTE_MS)
+                if not ok then x.search, x.failed = nil, true; table.remove(pending, k)
+                elseif ended then adopt(x); table.remove(pending, k)
+                else k = k + 1 end
+                break                           -- one search per frame
+            end
+        end
+    end)
+end
+P._Drive = function()
+    for _ = 1, 100000 do
+        local x = pending[1]
+        if not x then return end
+        if x.search and stepSearch(x.search, 1000) then adopt(x) end
+        if not x.search then table.remove(pending, 1) end
+    end
+end
+
 function P.Way(p, q)
     local w = coarseWay(p, q)
+    if w and not (OMQDB and OMQDB.pathFineOff) and num(p.a) and num(q.a) and p.inst == q.inst then
+        local ok, r = pcall(P.RouteWay, p, q, w)
+        if ok and r then return r end
+    end
     -- the gliding point first, then the fine way to it: a wall between me and the gliding point is walked round
     local ka, kb = w and w.a, w and w.b
     if w and w.via then P.Carrot(p, w) end
     if w and OMQ.PathRaster and not (OMQDB and OMQDB.pathFineOff) then steer(p, w, ka, kb) end
     return w
 end
-function P._ResetWay() wayCache, fineCache = {}, {} end
+function P._ResetWay()
+    wayCache, fineCache = {}, {}
+    for k in pairs(routes) do routes[k] = nil end
+    for k in pairs(pending) do pending[k] = nil end
+end
 function P._Reset()
+    for k in pairs(routes) do routes[k] = nil end
+    for k in pairs(pending) do pending[k] = nil end
     graphs, taxiCache, wayCache, fineCache = {}, {}, {}, {}
     rasterTiles, rasterOrder = {}, {}
     for k in pairs(memo) do memo[k] = nil end
@@ -936,7 +1276,16 @@ function P.Diag()
                 w.flight and (", fly from " .. w.flight) or "")
         end
     end
+    local rt = routes[1] and routes[1].cur
+    if rt then
+        out[#out + 1] = string.format("route of the last arrow target: %.0f yd, %d%% walked%s%s", rt.cum[#rt.cells],
+            math.floor(100 * rt.cum[rt.k] / math.max(1, rt.cum[#rt.cells])), rt.leg and ", a leg (the next is searched on the way)" or "",
+            rt.flight and (", to the flight master " .. rt.flight) or "")
+    elseif routes[1] and routes[1].search then
+        out[#out + 1] = "route of the last arrow target: searching"
+    end
     out[#out + 1] = "searches so far: " .. P.stats.searches .. ", fine searches: " .. (P.stats.fine or 0)
+        .. ", routes: " .. (P.stats.routes or 0) .. (P.stats.routeCells and (" (last " .. P.stats.routeCells .. " cells)") or "")
     if OMQ.PathLog and OMQ.PathLog.Summary then out[#out + 1] = OMQ.PathLog:Summary() end
     return out
 end
