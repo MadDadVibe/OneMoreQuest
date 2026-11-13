@@ -32,8 +32,12 @@ local function call(fn, ...)
     if ok then return a, b end
 end
 
--- writes the row of the character I play; level from PLAYER_LEVEL_UP (UnitLevel can lag one event)
-function A.Save(level)
+-- writes the row of the character I play; level from PLAYER_LEVEL_UP (UnitLevel can lag one event).
+-- src: the event. Gold is only taken while the game knows it (fix 587): at PLAYER_LOGOUT and before the first
+-- PLAYER_ENTERING_WORLD GetMoney can say 0, which wrote over the gold of every character that logged out.
+-- A 0 is only believed from PLAYER_MONEY (gold really spent) or when the row has no gold yet.
+A.moneyKnown = false
+function A.Save(level, src)
     local store = A.Store()
     if not store then return nil end
     local guid = UnitGUID("player")
@@ -47,8 +51,12 @@ function A.Save(level)
     e.realm = text(call(GetRealmName)) or e.realm
     local lvl = level or call(UnitLevel, "player")
     if type(lvl) == "number" and not secret(lvl) and lvl > 0 then e.level = lvl end
-    local money = call(GetMoney)
-    if type(money) == "number" and not secret(money) then e.money = money end
+    if src == "PLAYER_ENTERING_WORLD" or src == "PLAYER_MONEY" then A.moneyKnown = true end
+    if A.moneyKnown and src ~= "PLAYER_LOGOUT" then
+        local money = call(GetMoney)
+        if type(money) == "number" and not secret(money)
+           and (money > 0 or src == "PLAYER_MONEY" or type(e.money) ~= "number") then e.money = money end
+    end
     local zone = text(call(GetRealZoneText)) or text(call(GetZoneText))
     if zone then
         e.zone = zone
@@ -323,7 +331,7 @@ ev:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 ev:RegisterEvent("PLAYER_LOGOUT")
 ev:SetScript("OnEvent", function(_, event, a1)
     if event == "PLAYER_ENTERING_WORLD" then A.Hook() end
-    if event == "PLAYER_LEVEL_UP" then A.Save(type(a1) == "number" and not secret(a1) and a1 or nil)
-    else A.Save() end
+    if event == "PLAYER_LEVEL_UP" then A.Save(type(a1) == "number" and not secret(a1) and a1 or nil, event)
+    else A.Save(nil, event) end
 end)
 OMQ:On("READY", function() A.Hook(); A.Save() end)
