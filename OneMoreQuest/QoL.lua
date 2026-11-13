@@ -119,7 +119,9 @@ function Q:SellJunk()
             local info = C.GetContainerItemInfo(bag, slot)
             local ahLow = info and info.itemID and OMQ.AuctionHelper and OMQ.AuctionHelper.VendorIt(info.itemID)   -- decision 259
             local back = info and OMQ.Vendor and OMQ.Vendor.BoughtBack and OMQ.Vendor.BoughtBack(info.itemID)   -- fix 559
-            if info and not back and not isSecret(info.quality) and (info.quality == 0 or ahLow) and not info.hasNoValue then
+            -- crafting materials and reagents never go by themselves, not even grey ones (fix 589)
+            local mat = info and info.itemID and OMQ.AuctionHelper and OMQ.AuctionHelper.Material and OMQ.AuctionHelper.Material(info.itemID)
+            if info and not back and not mat and not isSecret(info.quality) and (info.quality == 0 or ahLow) and not info.hasNoValue then
                 local per = info.hyperlink and sellPrice(info.hyperlink) or 0
                 C.UseContainerItem(bag, slot)
                 sold = sold + 1

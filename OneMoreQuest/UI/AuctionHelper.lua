@@ -358,10 +358,22 @@ end)
 -- they stay on the vendor helper's list, sold only with a click.
 -- Never a buff item OMQ knows either (Data/BuyList.lua, buff food): WoW Forever lists the wizard oils as trade
 -- goods, not as consumables (fix 534).
+-- Never a crafting material or reagent either (fix 589): trade goods (cloth, herbs, ore, leather, meat, spices),
+-- reagents, misc reagents and everything the game flags as a crafting reagent. The vendor helper only suggests them.
+function AH.Material(itemID)
+    if not itemID then return false end
+    local _, _, _, _, _, classID, subID = instant(itemID)
+    if classID == 5 or classID == 7 then return true end
+    if classID == 15 and subID == 1 then return true end
+    if select(17, info(itemID)) then return true end
+    return false
+end
+
 function AH.VendorIt(itemID)
     local ah = OMQDB and OMQDB.ah
     if not ah then return false end
     if select(6, instant(itemID)) == 0 then return false end
+    if AH.Material(itemID) then return false end                  -- fix 589
     if OMQ.BuyKind and OMQ.BuyKind(itemID) then return false end
     if AH.Crafted(itemID) then return false end
     if OMQ.Vendor and OMQ.Vendor.BoughtBack and OMQ.Vendor.BoughtBack(itemID) then return false end   -- fix 559
