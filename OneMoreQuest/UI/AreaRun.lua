@@ -230,7 +230,10 @@ function UI:Render()
         end
         local info = plan.info or {}
         local lines = {}
-        if #rws > 0 then lines[#lines + 1] = string.format("Way: about %d min on foot", minutes(plan.length)) end
+        if #rws > 0 then
+            lines[#lines + 1] = string.format("Way: about %d min on foot", minutes(plan.length)) ..
+                (plan.busy and "  |cff9d9d9d(looking for a shorter way...)|r" or "")
+        end
         if info.logFull then
             lines[#lines + 1] = string.format("|cffffd040Your quest log has room for %d new quest%s - the next pick-up waits for a turn-in.|r",
                 info.free or 0, info.free == 1 and "" or "s")
@@ -456,3 +459,5 @@ OMQ:On("READY", function()
     C_Timer.NewTicker(1, function() if hintUntil and GetTime() >= hintUntil then UI:HideHint() end end)
 end)
 OMQ:On("QUEST_RUN_END", function() UI:HideHint() end)
+-- the better order of the preview is ready (decision 584)
+OMQ:On("AREA_RUN_PLAN", function() if win and win:IsShown() and mode == "preview" then UI:Render() end end)
