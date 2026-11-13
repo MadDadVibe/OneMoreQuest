@@ -387,7 +387,7 @@ function B.Build()
     for _, g in ipairs((R.Groups(class, role, {}))) do all[#all + 1] = g.line end
     local excluded = B.Excluded(class, all)
     local groups, prof = R.Groups(class, role, { stones = B.MyStones(), kitSlots = B.KitSlots(),
-        spike = B.ShieldWithoutSpike(), excluded = excluded })
+        spike = B.ShieldWithoutSpike(), excluded = excluded, level = lvl })
     B.pending = 0
     for _, g in ipairs(groups) do
         local ids = {}
@@ -406,7 +406,7 @@ function B.Build()
     -- the class food alone when it costs at most 50% more
     for _, f in ipairs(foods) do f.xp = nil end
     local xp = B.CheapestFood(lvl)
-    local fg = { line = R.FoodLine(prof), kind = "food", cap = R.CAP.food }
+    local fg = { line = R.FoodLine(prof), kind = "food", cap = R.CapFor("food", lvl) }
     local fids = {}
     for _, id in ipairs(R.Candidates(fg, lvl)) do
         if not never[id] then

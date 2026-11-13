@@ -5,11 +5,15 @@
 --     in hand): at most 2s per use - an oil has 5 uses, so 10s per oil.
 --   Scrolls: per category that fits the class, only the highest one under 3s.
 --   Elixirs: per stat that makes sense for the class, the highest one under 3s, its rank does not matter.
+--     WoW Forever's new elixirs: Intellect, Strength and Fortitude join their lines; Spirit (casters and healers),
+--     Mageblood (mana per 5 seconds, every class with mana) and Cleric's Elixir (healing, healers) are new groups.
 --     WoW Forever's Elixir of Minor Force (+1 physical damage) for every class with physical damage (also hunters,
 --     feral druids and tanks) up to level 30.
 --   Health and mana potions: at most 5s; a weaker one when needed, but none that needs 20 levels less than mine.
 --   Buff food: the cheapest food with Well Fed (+5% XP on WoW Forever), and a food for the class under 3s.
 --     When the class food costs at most 50% more than the cheapest one, only the class food is shown.
+--   From level 30 on the consumables there cost more (decision 590): every limit doubles, the oil goes to 5s per use
+--     (25s per oil); armor kits and shield spikes keep theirs.
 --   Armor kits and shield spikes stay, at most 15s each. WoW Forever's new kits from level 15 on: casters and
 --     healers the Mystic kits, damage dealers with weapons (also hunters) the Forceful kits, tanks the old ones.
 -- Pure functions: the buy mode (UI/AuctionBuy.lua) feeds them the live prices.
@@ -20,10 +24,19 @@ local R = {}
 OMQ.BuyRules = R
 
 R.CAP = { oil = 200, stone = 200, scroll = 300, elixir = 300, potion = 500, food = 300, kit = 1500, spike = 1500 }   -- copper per use
+-- from level 30 on (decision 590): twice the limit, oil 5s per use so Lesser Wizard Oil (about 22s) fits
+R.HIGH_LEVEL = 30
+R.CAP_HIGH = { oil = 500, stone = 400, scroll = 600, elixir = 600, potion = 1000, food = 600 }
 R.USES = { oil = 5 }                  -- uses per item; everything else 1
 R.POTION_LEVELS = 20                  -- a potion that needs this many levels less than mine is not shown
 R.FOOD_CLOSE = 1.5                    -- the class food costs at most this times the cheapest food: only the class food
 R.LINE_MAX_LEVEL = { e_phys = 30 }    -- lines only worth buying up to this level (Elixir of Minor Force: +1 damage)
+
+-- the limit per use of a kind at my level
+function R.CapFor(kind, lvl)
+    if (lvl or 1) >= R.HIGH_LEVEL and R.CAP_HIGH[kind] then return R.CAP_HIGH[kind] end
+    return R.CAP[kind]
+end
 
 -- what a class and role is: caster (spell damage), healer, melee (weapon stones), tank, strength, agility, mana
 function R.Profile(class, role)
@@ -40,7 +53,8 @@ function R.Profile(class, role)
 end
 
 -- the groups for me: { key, line, kind, cap = copper per item, target } in the order of the list.
--- ctx: { stones = { "stone_sharp", ... } (the kinds my weapons take), kitSlots, spike = true, excluded = { line = true } }
+-- ctx: { stones = { "stone_sharp", ... } (the kinds my weapons take), kitSlots, spike = true, excluded = { line = true },
+--        level = my level (the limits rise from R.HIGH_LEVEL on) }
 function R.Groups(class, role, ctx)
     ctx = ctx or {}
     local p = R.Profile(class, role)
@@ -49,14 +63,16 @@ function R.Groups(class, role, ctx)
     local function add(line, kind, target)
         if ex[line] or not (OMQ.BuyLines and OMQ.BuyLines[line]) then return end
         local uses = R.USES[kind] or 1
-        out[#out + 1] = { key = line, line = line, kind = kind, cap = R.CAP[kind] * uses, target = target }
+        out[#out + 1] = { key = line, line = line, kind = kind, cap = R.CapFor(kind, ctx.level) * uses, target = target }
     end
     add("heal", "potion", 5)
     if p.mana then add("mana", "potion", 5) end
     if p.str then add("e_str", "elixir", 10) end
     if p.agi then add("e_agi", "elixir", 10) end
     if p.phys then add("e_phys", "elixir", 10) end
-    if p.caster or p.healer then add("e_int", "elixir", 10); add("e_spell", "elixir", 10) end
+    if p.caster or p.healer then add("e_int", "elixir", 10); add("e_spell", "elixir", 10); add("e_spi", "elixir", 10) end
+    if p.mana then add("e_mp5", "elixir", 10) end
+    if p.healer then add("e_heal", "elixir", 10) end
     if p.tank then add("e_def", "elixir", 10); add("e_fort", "elixir", 10) end
     add("s_sta", "scroll", 5); add("s_prot", "scroll", 5)
     if p.str then add("s_str", "scroll", 5) end

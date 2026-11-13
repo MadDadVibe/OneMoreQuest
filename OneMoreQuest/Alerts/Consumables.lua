@@ -259,7 +259,7 @@ C.CLASS_BUFF = {
 C.CLASS_BUFF.e_int = C.CLASS_BUFF.s_int
 C.SCROLL_STAT = { s_int = { 4, 8, 12, 16 }, s_sta = { 4, 8, 12, 16 }, s_spi = { 3, 7, 11, 15 },
                   s_str = { 5, 9, 13, 17 },                        -- only against the camp buff (no class buff here)
-                  e_int = { 6, 25 } }                                -- Elixir of Wisdom, Elixir of Greater Intellect
+                  e_int = { 6, 6, 10, 25 } }     -- Elixir of Wisdom, WoW Forever's Lesser Intellect and Intellect, Greater Intellect
 -- the pure Intellect elixirs do not help with any rank of Arcane Intellect on (fix 487, seen in game):
 -- no reminder whatever rank the mage cast, also a weaker one
 C.ANY_RANK = { e_int = true }
