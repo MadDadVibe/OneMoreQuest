@@ -174,11 +174,12 @@ end
 B.CLASS_BUFFS = {
     MAGE   = { { lines = { "s_int" }, spells = { 1459, 1460, 1461, 10156, 10157 } } },     -- elixirs stay: Greater Intellect beats ranks 1-4
     PRIEST = { { lines = { "s_sta" }, spells = { 1243, 1244, 1245, 2791, 10937, 10938 } },
-               { lines = { "s_spi" }, spells = { 14752, 14818, 14819, 27841 } } },
+               { lines = { "s_spi", "e_spi" }, spells = { 14752, 14818, 14819, 27841 } } },   -- e_spi: decision 591
 }
 -- 2. consumables that do not stack with each other: once one of them is in stock (or bought and on
 --    its way), the others are not suggested
-B.EXCLUSIVE = { { "e_def", "s_prot" } }
+-- (decision 591, the same value does not stack: the scroll and the elixir of one stat)
+B.EXCLUSIVE = { { "e_def", "s_prot" }, { "e_int", "s_int" }, { "e_spi", "s_spi" }, { "e_str", "s_str" }, { "e_agi", "s_agi" } }
 local function knowsSpell(id)
     if IsPlayerSpell then local ok, k = pcall(IsPlayerSpell, id); if ok and k then return true end end
     if IsSpellKnown then local ok, k = pcall(IsSpellKnown, id); if ok and k then return true end end

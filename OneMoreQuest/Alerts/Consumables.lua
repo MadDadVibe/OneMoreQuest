@@ -72,7 +72,7 @@ end
 -- same aura is on. Stat names come from the client (SPELL_STAT1-5_NAME), so German and English both work.
 C.CAMP_SPELL = 1229741
 C.CAMP_NAMES = { ["Camp Benefits"] = true, ["Lagervorteile"] = true }
-C.STAT_OF = { s_str = 1, s_sta = 3, s_int = 4, e_int = 4, s_spi = 5 }
+C.STAT_OF = { s_str = 1, s_sta = 3, s_int = 4, e_int = 4, s_spi = 5, e_spi = 5, e_str = 1 }
 C.STAT_EN = { "Strength", "Agility", "Stamina", "Intellect", "Spirit" }
 local campCache = nil                 -- { id = auraInstanceID, stats = { [stat] = amount }, lines = {...} }
 function C.IsCamp(a)
@@ -257,9 +257,16 @@ C.CLASS_BUFF = {
     s_spi = { [14752] = 17, [14818] = 23, [14819] = 33, [27841] = 40, [27681] = 40 },              -- Divine Spirit, Prayer of Spirit
 }
 C.CLASS_BUFF.e_int = C.CLASS_BUFF.s_int
+C.CLASS_BUFF.e_spi = C.CLASS_BUFF.s_spi          -- WoW Forever's Spirit elixirs vs Divine Spirit (decision 591)
+-- amounts by place in the buy line (weakest first); also compare a scroll with the elixir of the same stat (C.FAMILY)
 C.SCROLL_STAT = { s_int = { 4, 8, 12, 16 }, s_sta = { 4, 8, 12, 16 }, s_spi = { 3, 7, 11, 15 },
                   s_str = { 5, 9, 13, 17 },                        -- only against the camp buff (no class buff here)
-                  e_int = { 6, 6, 10, 25 } }     -- Elixir of Wisdom, WoW Forever's Lesser Intellect and Intellect, Greater Intellect
+                  s_agi = { 5, 9, 13, 17 }, s_prot = { 60, 120, 180, 240 },                  -- armor
+                  e_int = { 6, 6, 10, 25 },      -- Elixir of Wisdom, WoW Forever's Lesser Intellect and Intellect, Greater Intellect
+                  e_spi = { 3, 6, 10, 18 },      -- WoW Forever's Minor, Lesser, normal and Greater Spirit elixirs
+                  e_str = { 4, 8, 10, 25 },      -- Lion's, Ogre's, WoW Forever's Elixir of Strength, Giants
+                  e_agi = { 4, 8, 15, 25, 25 },  -- Minor, Lesser, normal, Greater Agility, Mongoose
+                  e_def = { 50, 150, 250, 450 } }                  -- armor: Minor, normal, Greater, Superior Defense
 -- the pure Intellect elixirs do not help with any rank of Arcane Intellect on (fix 487, seen in game):
 -- no reminder whatever rank the mage cast, also a weaker one
 C.ANY_RANK = { e_int = true }
@@ -305,9 +312,15 @@ function C.BetterBuff(id, auras)
     return nil
 end
 
--- elixirs of one buy line do not stack (Minor, Lesser, Arcane and Greater Arcane Elixir, seen in game, fix 503):
--- one card for the strongest one I can use, none while the buff of any of them is on
-C.ONE_PER_LINE = { e_spell = true }
+-- the same value does not stack (MadDadVibe's rule, decision 591; the Arcane Elixirs were seen in game, fix 503):
+-- the elixirs and scrolls of one buy line, and the scroll and elixir lines that give the same stat (C.FAMILY),
+-- get one card for the strongest one I can use, none while the buff of any of them is on. Within a line the
+-- place decides (weakest first), between the lines of a family the amount of C.SCROLL_STAT.
+C.ONE_PER_LINE = { e_str = true, e_agi = true, e_def = true, e_fort = true, e_int = true, e_spell = true, e_spi = true,
+                   e_mp5 = true, e_heal = true, s_str = true, s_agi = true, s_int = true, s_spi = true, s_sta = true, s_prot = true }
+C.FAMILY = { s_int = { "s_int", "e_int" }, e_int = { "s_int", "e_int" }, s_spi = { "s_spi", "e_spi" }, e_spi = { "s_spi", "e_spi" },
+             s_str = { "s_str", "e_str" }, e_str = { "s_str", "e_str" }, s_agi = { "s_agi", "e_agi" }, e_agi = { "s_agi", "e_agi" },
+             s_prot = { "s_prot", "e_def" }, e_def = { "s_prot", "e_def" } }
 local lineOf
 local function bagSet()
     local have, Ct = {}, C_Container
@@ -319,26 +332,37 @@ local function bagSet()
     end
     return have
 end
--- why this item gets no card because of another one of its line, or nil
+-- the amount of an item of a line by its place, or nil
+local function amount(key, i) local t = C.SCROLL_STAT[key]; return t and t[i] end
+-- why this item gets no card because of another one of its line or family, or nil
 function C.SameLine(id, auras, have, level)
     if not lineOf then
         lineOf = {}
         for key in pairs(C.ONE_PER_LINE) do
             local L = OMQ.BuyLines and OMQ.BuyLines[key]
-            for i, it in ipairs(L and L[2] or {}) do lineOf[it[1]] = { key, i } end
+            for i, it in ipairs(L and L[2] or {}) do lineOf[it[1]] = lineOf[it[1]] or { key, i } end
         end
     end
     local me = lineOf[id]
     if not me then return nil end
-    local L = OMQ.BuyLines[me[1]]
-    for j, it in ipairs(L[2]) do
-        local other = it[1]
-        if other ~= id then
-            local name = info(other) or "a stronger elixir"
-            if j > me[2] and have and have[other] and (it[2] or 0) <= (level or 1) then
-                return name .. " is stronger (does not stack)"
+    local mine = amount(me[1], me[2])
+    for _, key in ipairs(C.FAMILY[me[1]] or { me[1] }) do
+        local L = OMQ.BuyLines[key]
+        for j, it in ipairs(L and L[2] or {}) do
+            local other = it[1]
+            if other ~= id then
+                local name = info(other) or "a stronger one"
+                local stronger
+                if key == me[1] then stronger = j > me[2]
+                else
+                    local theirs = amount(key, j)
+                    stronger = theirs and mine and theirs > mine or false
+                end
+                if stronger and have and have[other] and (it[2] or 0) <= (level or 1) then
+                    return name .. " is stronger (does not stack)"
+                end
+                if C.Active(other, L[1], auras) == true then return name .. " is on (does not stack)" end
             end
-            if C.Active(other, L[1], auras) == true then return name .. " is on (does not stack)" end
         end
     end
     return nil
