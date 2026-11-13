@@ -92,3 +92,53 @@ OMQ.DungeonEntrances.rfk = OMQ.DungeonEntrances.rfk or { { 1413, 42.9, 90.2 } }
 OMQ.DungeonEntranceNotes.rfk = "Southern Barrens, at the end of the thorny corridor"
 OMQ.DungeonEntrances.dm = OMQ.DungeonEntrances.dm or { { 1436, 42.5, 71.7 } }
 OMQ.DungeonEntranceNotes.dm = "Dungeon entrance in Moonbrook"
+
+-- The Drowned City (decision 594). Quest givers, chains and creature ids: Factoruide's WoW Forever data of 2026-11-13
+-- (GPL-3.0, https://github.com/brouznouf/factoruide). Boss loot: item ids as published on mmonster.co and the Warcraft Wiki
+-- (unverified in the game). Every quest of the chains gets its own giver, so the Dungeon Run has a stop for each.
+S[95748] = { 95748, "The Gurubashi Legends of Old", "Kin'weelay", nil, 1434, 32.3, 27.7, "npc" }
+S[95770] = { 95770, "Locating the Lost City", "Kin'weelay", nil, 1434, 32.3, 27.7, "npc" }
+S[95773] = { 95773, "Enemies in the Water", "Commander Aggro'gosh", "Kommandant Aggro'gosh", 1434, 32.2, 28.9, "npc" }
+S[95775] = { 95775, "The Drowned City", "Kin'weelay", nil, 1434, 32.3, 27.7, "npc" }
+S[95776] = { 95776, "The Only Good Brinescale...", "Commander Aggro'gosh", "Kommandant Aggro'gosh", 1434, 32.2, 28.9, "npc" }
+S[96774] = { 96774, "Ancient Gurubashi Idol", "Mazu'kon", nil, 1412, 32.5, 20.7, "npc" }
+S[95786] = { 95786, "An Acquaintance in Southshore", "Brother Nimetz", "Bruder Nimetz", 1434, 37.8, 3.6, "npc" }
+S[95787] = { 95787, "Take Two With Water", "Loremaster Dibbs", "Meister der Lehren Dibbs", 1424, 50.0, 58.0, "npc" }
+S[95788] = { 95788, "Magics of the Drowned City", "Loremaster Dibbs", "Meister der Lehren Dibbs", 1424, 50.0, 58.0, "npc" }
+S[97130] = { 97130, "Ancient Gurubashi Secrets", "Archmage Timear", nil, 1416, 15.4, 74.1, "npc" }
+S[95789] = { 95789, "Shady Saltseers", "Krazek", nil, 1434, 27.0, 77.2, "npc" }
+S[95791] = { 95791, "The Saltseer Captain", "Krazek", nil, 1434, 27.0, 77.2, "npc" }
+OMQ.DungeonEntrances.drown = OMQ.DungeonEntrances.drown or { { 1434, 21.4, 27.9 } }
+OMQ.DungeonEntranceNotes.drown = "Under water off the west coast of Stranglethorn, west of Grom'gol: swim past the Vile Reef to the Sunken Hollow cave with a large stone tablet; its portal takes you inside"
+-- bosses in their usual order, then the Primeval Elemental (only some runs), then the rares Gill and Umbra
+OMQ.DungeonLoot.drown = {
+    { 258905, 274598, 274599, 274600 },           -- Zul'Alai
+    { 258924, 274601, 274602, 274613 },           -- Var'Taka
+    { 260042, 274603, 274604, 274605 },           -- Captain Dreadrise
+    { 260202, 274606, 274607, 274614 },           -- Deathless Marrow
+    { 260243, 274608, 274609, 274610 },           -- Min'loth the Serpent
+    { 270887, 274611, 274612, 274615 },           -- Primeval Elemental
+    { 264177, 286646, 286649 },                   -- Gill
+    { 264172, 286662, 286658 },                   -- Umbra
+}
+OMQ.QuestRewards = OMQ.QuestRewards or {}
+OMQ.QuestRewards[95776] = { 279888, 279889 }
+OMQ.QuestRewards[95789] = { 279882, 279930 }
+OMQ.QuestRewards[95791] = { 279883, 279884 }
+-- extra facts for the dungeon window and the boss kills (Stats/DungeonWin.lua, Stats/Tally.lua)
+-- names: English boss names; rare: rares (not needed for a full clear); opt: bosses only some runs meet (not needed either);
+-- alias: further creature ids the game has for a boss (staging copies, a second form) -> the id of the loot list
+OMQ.DungeonWinExtra = {
+    names = { [258905] = "Zul'Alai", [258924] = "Var'Taka", [260042] = "Captain Dreadrise", [260202] = "Deathless Marrow",
+              [260243] = "Min'loth the Serpent", [270887] = "Primeval Elemental", [264177] = "Gill", [264172] = "Umbra" },
+    rare = { [264177] = true, [264172] = true },
+    opt = { [270887] = true },
+    alias = { [270882] = 258905, [270883] = 258924, [270884] = 260042, [270885] = 260202, [269586] = 260202,
+              [260274] = 260243, [267852] = 260243, [269466] = 260243, [270886] = 260243,
+              [263886] = 270887, [273738] = 270887, [270888] = 264177 },
+}
+-- the creature id a boss is counted under (its alias resolved)
+function OMQ.BossNpc(id)
+    local a = OMQ.DungeonWinExtra and OMQ.DungeonWinExtra.alias
+    return a and id and a[id] or id
+end

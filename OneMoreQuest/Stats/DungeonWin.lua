@@ -31,6 +31,9 @@ local function plain(v) return v ~= nil and not (issecretvalue and issecretvalue
 local function num(v) return type(v) == "number" and plain(v) end
 local function str(v) return type(v) == "string" and plain(v) and v ~= "" end
 local function data() return OMQ.DungeonWinData or {} end
+-- hand-kept facts of the newer Forever dungeons (Data/ForeverDungeons.lua, decision 594): names, rare, opt, alias
+local function extra() return OMQ.DungeonWinExtra or {} end
+local function canon(npc) return OMQ.BossNpc and OMQ.BossNpc(npc) or npc end
 
 function W.Saved()
     if not OMQDB then return nil end
@@ -68,9 +71,10 @@ function W.Title(key)
     return nil
 end
 
--- the boss entries of a dungeon: { npc, items = { id, ... }, rare = true|nil }, bosses first then rares
+-- the boss entries of a dungeon: { npc, items = { id, ... }, rare = true|nil, opt = true|nil }, bosses first then rares;
+-- opt = a boss only some runs meet (not needed for a full clear)
 function W.Bosses(key)
-    local D, rares = data(), {}
+    local D, X, rares = data(), extra(), {}
     local bosses = {}
     local seen = {}
     for _, b in ipairs((OMQ.DungeonLoot or {})[key] or {}) do
@@ -79,8 +83,8 @@ function W.Bosses(key)
             seen[npc] = true
             local items = {}
             for i = 2, #b do items[#items + 1] = b[i] end
-            local e = { npc = npc, items = items }
-            if D.rare and D.rare[npc] then e.rare = true; rares[#rares + 1] = e else bosses[#bosses + 1] = e end
+            local e = { npc = npc, items = items, opt = X.opt and X.opt[npc] or nil }
+            if (D.rare and D.rare[npc]) or (X.rare and X.rare[npc]) then e.rare = true; rares[#rares + 1] = e else bosses[#bosses + 1] = e end
         end
     end
     for _, npc in ipairs(D.extra and D.extra[key] or {}) do
@@ -92,6 +96,7 @@ end
 -- which key owns this npc (for learning an unknown instance); keys = only these
 local function keyOfNpc(npc, keys)
     local D = data()
+    npc = canon(npc)
     local function owns(k)
         for _, b in ipairs((OMQ.DungeonLoot or {})[k] or {}) do if b[1] == npc then return true end end
         for _, n in ipairs(D.extra and D.extra[k] or {}) do if n == npc then return true end end
@@ -109,7 +114,8 @@ W.KeyOfNpc = keyOfNpc
 function W.Name(npc)
     local s = W.Saved()
     local D = data()
-    return (s and s.names[npc]) or (D.names and D.names[npc]) or (D.rare and D.rare[npc]) or nil
+    local X = extra()
+    return (s and s.names[npc]) or (D.names and D.names[npc]) or (D.rare and D.rare[npc]) or (X.names and X.names[npc]) or nil
 end
 
 ----------------------------------------------------------------------
@@ -185,7 +191,7 @@ function W.Left(v)
     local bosses = W.Bosses(v.key)
     if #bosses == 0 then return nil end
     local n = 0
-    for _, b in ipairs(bosses) do if not v.dead[b.npc] then n = n + 1 end end
+    for _, b in ipairs(bosses) do if not v.dead[b.npc] and not b.opt then n = n + 1 end end
     return n
 end
 
@@ -332,6 +338,7 @@ end
 function W.Dead(npc, share, name)
     local v = W.Inside()
     if not (v and num(npc) and npc > 0) then return false end
+    npc = canon(npc)
     if str(name) then local s = W.Saved(); if s then s.names[npc] = name end end
     learnKey(v, npc)
     if not v.key then return false end
@@ -362,7 +369,12 @@ function W.OnEncounterEnd(_, name, _, _, success, units)
             local id = type(u) == "table" and u.creatureID
             if num(id) then
                 any = true
-                W.Dead(id, true, type(u) == "table" and u.creatureName or nil)
+                local nm = u.creatureName
+                if not W.Dead(id, true, nm) then
+                    -- a creature id the data does not know: the boss of the same name (decision 594)
+                    local npc = str(nm) and byName(nm)
+                    if npc and npc ~= canon(id) then W.Dead(npc, true) end
+                end
             end
         end
     end

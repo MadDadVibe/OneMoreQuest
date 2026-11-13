@@ -268,6 +268,7 @@ local function isBoss(id)
             for _, boss in ipairs(list) do if boss[1] then bossSet[boss[1]] = true end end
         end
     end
+    if id and OMQ.BossNpc then id = OMQ.BossNpc(id) end     -- further creature ids of a boss (decision 594)
     return id and bossSet[id] or false
 end
 T.IsBoss = isBoss
@@ -405,6 +406,7 @@ end
 -- count one boss kill; visit = the dungeon visit it belongs to (nil: only when the boss is still unknown)
 local function bossKill(b, id, name, at, visit, dads, how)
     if not (b and num(id) and id > 0) then return false end
+    if OMQ.BossNpc then id = OMQ.BossNpc(id) end
     local k = b.kills
     if visit then
         visit.boss = visit.boss or {}

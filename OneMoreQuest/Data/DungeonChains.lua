@@ -658,13 +658,6 @@ local EXTRA = {
     { id = 8970, level = 60, name = "I See Alcaz Island In Your Future..." },
     { id = 8996, level = 60, name = "Return to Bodley" },
   },
-  drown = {
-    { id = 95789, level = 35 },
-    { id = 95791, level = 35 },
-    { id = 95799, level = 35, faction = "A" },
-    { id = 95798, level = 35, faction = "A" },
-    { id = 97130, level = 35, faction = "A" },
-  },
   gnom = {
     { id = 2952, level = 30, name = "The Sparklematic 5200!" },
   },

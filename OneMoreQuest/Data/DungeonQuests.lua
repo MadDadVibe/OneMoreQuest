@@ -6,7 +6,8 @@
 --   "-" = both (no faction field). Never derived from a quest giver's zone (v0.25.1). Dungeons the page does not
 --   cover keep the faction of the earlier sources.
 --   Not listed here: class-only quests (paladin, mage, warlock).
--- Dungeons that the page does not cover (Drowned City, Krol'dok, Alcaz, Blackmaw Hold, Shaper's Terrace, Stratholme, Upper
+-- The Drowned City: all eight quests from the Factoruide Forever data of 2026-11-13 (decision 594).
+-- Dungeons that the page does not cover (Krol'dok, Alcaz, Blackmaw Hold, Shaper's Terrace, Stratholme, Upper
 -- Blackrock Spire) keep their earlier values (decision 143: in-game dungeon browser).
 -- Quest: { id, name, level, faction } faction "A" Alliance only, "H" Horde only, nil = both.
 --   alt = further ids of the same quest (the game has one id per faction version); a dad has it with any of them.
@@ -276,6 +277,11 @@ OMQ.Dungeons = {
         { id = 95776, name = "The Only Good Brinescale...", level = 38, faction = "H" },
         { id = 96774, name = "Ancient Gurubashi Idol", level = 40, faction = "H" },
         { id = 95775, name = "The Drowned City", level = 40, faction = "H" },
+        { id = 95787, name = "Take Two With Water", level = 40, faction = "A" },
+        { id = 95788, name = "Magics of the Drowned City", level = 40, faction = "A" },
+        { id = 97130, name = "Ancient Gurubashi Secrets", level = 40, faction = "A" },
+        { id = 95789, name = "Shady Saltseers", level = 40 },
+        { id = 95791, name = "The Saltseer Captain", level = 40 },
     } },
     { key = "kro", abbr = "Kro", name = "Krol'dok Stronghold", min = 40, max = 45, quests = {
     } },
