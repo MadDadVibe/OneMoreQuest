@@ -601,6 +601,7 @@ end
 
 function P.Start(manual)
     if scan then return false, "a scan is running" end
+    if OMQ.PriceProbe and OMQ.PriceProbe.Running() then return false, "the probe is running" end   -- fix 587
     local H = helper()
     if not (H and H.open) then return false, "open the auction house first" end
     local api = A()
@@ -825,6 +826,12 @@ OMQ:RegisterCommand("prices", function(arg)
         return
     end
     if arg == "cancel" then P.Cancel(); OMQ:Print("prices: scan stopped"); return end
+    if arg == "probe" then                                   -- fix 587: measure the browse search, log in OMQDB.priceProbe
+        local ok, why = false, "not loaded"
+        if OMQ.PriceProbe then ok, why = OMQ.PriceProbe.Start() end
+        if not ok then OMQ:Print("prices probe: " .. tostring(why)) end
+        return
+    end
     if arg == "sub" then                                     -- fix 579: test switch for the subcategory searches
         OMQDB.priceScanSub = not OMQDB.priceScanSub or nil
         OMQ:Print("prices: consumables and trade goods by subcategory " .. (OMQDB.priceScanSub and "ON (test)" or "off"))
@@ -867,5 +874,5 @@ OMQ:RegisterCommand("prices", function(arg)
     local line = string.format("prices: %d auction items %s, %d vendor prices learned", P.Count(), at and ("scanned " .. ago(at)) or "- not scanned yet", nv)
     if scan then line = line .. string.format("; scan running: %d lines on %d pages", scan.results, scan.pages or 0) end
     if P.last then line = line .. string.format("; last scan %s: %d lines, %d items, %.0f s%s", P.last.ok and "complete" or (P.last.partial and "partial" or "failed"), P.last.results, P.last.items, P.last.secs, P.last.why and (" (" .. P.last.why .. ")") or "") end
-    OMQ:Print(line .. ".  /omq prices scan | cancel | check | <item id>")
-end, "auction prices: /omq prices | scan | cancel | check | <item id>")
+    OMQ:Print(line .. ".  /omq prices scan | cancel | check | probe | <item id>")
+end, "auction prices: /omq prices | scan | cancel | check | probe | <item id>")
