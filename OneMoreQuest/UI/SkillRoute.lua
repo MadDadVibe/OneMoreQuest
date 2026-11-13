@@ -21,6 +21,7 @@ SR.TAB_LEVEL = 30                -- frame levels above the window, so its border
 SR.GAP = 70                      -- the panel: right of the profession tabs on the window's right edge (fix 565)
 SR.ROW_H, SR.SUB_H, SR.HEAD_H = 16, 14, 20
 SR.NOTE_TIME = 4
+SR.CHEAP_N = { 5, 10, 20, "major" }   -- decision 592
 SR.DISENCHANT = 13262          -- the Disenchant spell: its name in the client's language for the enchanting step 2-20
 SR.LEARN = { T = "trainer", V = "vendor recipe", Q = "special trainer (quest)" }
 
@@ -330,9 +331,10 @@ local function paintRow(b, l, route)
     if l.kind == "head" then
         b:SetHeight(SR.HEAD_H)
         b.range:SetWidth(120)
-        b.range:SetText(string.format("%d - %d", l.from, l.to))
+        b.range:SetText(l.label or string.format("%d - %d", l.from, l.to))
         b.range:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-        if l.done then b.count:SetText("done"); b.count:SetTextColor(GREY[1], GREY[2], GREY[3])
+        if l.label then b.range:SetWidth(200); b.count:SetText(l.right or "")
+        elseif l.done then b.count:SetText("done"); b.count:SetTextColor(GREY[1], GREY[2], GREY[3])
         else b.cart.col = l.col; b.cart:Show() end
     elseif l.kind == "step" then
         local st = l.st
@@ -355,13 +357,13 @@ local function paintRow(b, l, route)
             if (l.extraNow or 0) > 0 then t = t .. string.format(" (+%d later)", l.extraNow) end
             b.count:SetText(t)
         elseif st[5] ~= "D" then
-            local t = string.format("%dx", math.floor(st[4] + 0.5))
+            local t = string.format("%dx", math.max(1, math.floor(st[4] + 0.5)))
             if l.later and l.later.extra > 0 and l.state ~= "done" then t = t .. string.format(" +%d later", l.later.extra) end
             b.count:SetText(t)
         end
     elseif l.kind == "learn" then
         b:SetHeight(SR.SUB_H)
-        b.name:SetText("Learn: " .. (SR.LEARN[l.how] or "trainer"))
+        b.name:SetText(l.text or ("Learn: " .. (SR.LEARN[l.how] or "trainer")))
         b.name:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
     elseif l.kind == "mat" then
         b:SetHeight(SR.SUB_H)
@@ -382,7 +384,7 @@ local function display(lines)
     local out = {}
     for _, l in ipairs(lines) do
         out[#out + 1] = l
-        if l.kind == "step" and l.learn then out[#out + 1] = { kind = "learn", how = l.learn } end
+        if l.kind == "step" and l.learn then out[#out + 1] = { kind = "learn", how = l.learn, text = l.learnText } end
     end
     return out
 end
@@ -394,7 +396,9 @@ function SR.Refresh()
     current.route, current.skill, current.max = route, skill, max
     panel.title:SetText("Skill Route - " .. OMQ.ProfCheck.ProfName(route))
     panel.skill:SetText(skill .. " / 300")
-    local lines = display((SR.Lines(route, skill)))
+    local cheap = SR.Mode() == "cheap" and OMQ.SkillPlan
+    SR.PaintModes(cheap)
+    local lines = display(cheap and SR.CheapLines(route, skill, max) or (SR.Lines(route, skill)))
     current.lines = lines
     local y, curY = 0, nil
     for i, l in ipairs(lines) do
@@ -410,7 +414,9 @@ function SR.Refresh()
     for i = #lines + 1, #rows do rows[i]:Hide() end
     content:SetHeight(math.max(1, y))
     current.curY = curY
-    if not current.noteUntil or GetTime() >= current.noteUntil then panel.foot:SetText(SR.Footer(skill, max)) end
+    if not current.noteUntil or GetTime() >= current.noteUntil then
+        panel.foot:SetText(cheap and SR.CheapFooter(current.plan) or SR.Footer(skill, max))
+    end
     return lines
 end
 
@@ -563,7 +569,33 @@ local function build(pf)
     panel.foot:SetPoint("RIGHT", -10, 0)
     panel.foot:SetWordWrap(true)
     scroll = CreateFrame("ScrollFrame", "OneMoreQuestSkillRouteScroll", panel, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", 4, -30)
+    -- decision 592: Route | Cheapest, and in Cheapest the shopping list buttons
+    panel.modes = {}
+    local function small(label, w, x, fn)
+        local b = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+        b:SetSize(w, 18)
+        b:SetPoint("TOPLEFT", x, -30)
+        b:SetText(label)
+        b:SetScript("OnClick", fn)
+        return b
+    end
+    panel.modes.route = small("Route", 56, 8, function() SR.SetMode("route") end)
+    panel.modes.cheap = small("Cheapest", 70, 66, function() SR.SetMode("cheap") end)
+    panel.buy = {}
+    for i, n in ipairs(SR.CHEAP_N) do
+        local b = small(n == "major" and "to 150" or ("+" .. n), n == "major" and 52 or 36, 146 + (i - 1) * 38, function() SR.MakeCheapList(n) end)
+        b.n = n
+        b:SetScript("OnEnter", function(self)
+            if not GameTooltip then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine("Shopping list: cheapest " .. (self.n == "major" and ("skill-ups to " .. (self.to or "")) or (self.n .. " skill-ups")))
+            GameTooltip:AddLine("Materials of the cheapest plan, +40% for green and +20% for yellow crafts so one trip to the auction house is enough.", 1, 1, 1, true)
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+        panel.buy[i] = b
+    end
+    scroll:SetPoint("TOPLEFT", 4, -52)
     scroll:SetPoint("BOTTOMRIGHT", -26, 34)
     content = CreateFrame("Frame", nil, scroll)
     content:SetSize(SR.W - 30, 1)
@@ -571,6 +603,83 @@ local function build(pf)
     panel:SetScript("OnShow", function() if tab then tab.lit:Show() end end)
     panel:SetScript("OnHide", function() if tab then tab.lit:Hide() end; SR.Reanchor() end)
     panel:Hide()
+end
+
+----------------------------------------------------------------------
+-- Cheapest plan (decision 592, UI/SkillPlan.lua)
+----------------------------------------------------------------------
+local function modeStore()
+    OMQDB = OMQDB or {}
+    OMQDB.skillRouteMode = OMQDB.skillRouteMode or {}
+    return OMQDB.skillRouteMode
+end
+function SR.Mode() return modeStore()[me()] == "cheap" and "cheap" or "route" end
+function SR.SetMode(m)
+    modeStore()[me()] = (m == "cheap") and "cheap" or nil
+    current.scrolled = nil
+    SR.Refresh()
+    if C_Timer and C_Timer.After then C_Timer.After(0, SR.ScrollToCurrent) end
+end
+function SR.PaintModes(cheap)
+    if not panel.modes then return end
+    panel.modes.route:SetEnabled(cheap and true or false)
+    panel.modes.cheap:SetEnabled(not cheap)
+    local to = OMQ.SkillPlan and OMQ.SkillPlan.NextMajor(current.skill or 0, current.max)
+    for _, b in ipairs(panel.buy) do
+        if cheap then b:Show() else b:Hide() end
+        if b.n == "major" and to then b.to = to; b:SetText("to " .. to) end
+    end
+end
+
+-- the plan to the next major step as panel lines
+function SR.CheapLines(route, skill, max)
+    local SP = OMQ.SkillPlan
+    local to = SP.NextMajor(skill, max)
+    local plan = SP.Plan(route.id, skill, to, max)
+    current.plan = plan
+    local out = { { kind = "head", label = string.format("Cheapest %d - %d", skill, to),
+                    right = plan.total > 0 and ("~" .. OMQ.ProfCheck.Money(plan.total)) or "" } }
+    for i, ps in ipairs(plan.steps) do
+        local st = { ps[1], ps[2], ps[3], ps[4], "T" }
+        local line = { kind = "step", st = st, state = i == 1 and "cur" or "todo", cheap = true }
+        if ps.learn then
+            line.learn = "T"
+            line.learnText = string.format("Learn at the trainer at %d%s", ps.learn[2],
+                ps.learn[1] and (" (" .. OMQ.ProfCheck.Money(ps.learn[1]) .. ")") or "")
+        end
+        out[#out + 1] = line
+        if i == 1 then
+            line.left = ps[4]
+            local r = (OMQ.ProfSkillUp or {})[ps[3]]
+            local n = math.ceil(ps[4] - 1e-6)
+            if r then
+                for k = 1, #r[4], 2 do
+                    local item = r[4][k]
+                    local _, from = OMQ.ProfCheck.Price(item)
+                    out[#out + 1] = { kind = "mat", item = item, need = r[4][k + 1] * n, have = bagCount(item),
+                                      vendor = (from == "vendor") or nil }
+                end
+            end
+        end
+    end
+    if #plan.steps == 0 then out[#out + 1] = { kind = "learn", text = "No priced recipe for the next skill-up." } end
+    return out
+end
+function SR.CheapFooter(plan)
+    if not plan then return "" end
+    local t = {}
+    if plan.stop == "cap" then t[#t + 1] = "|cffff9933Rank up at the trainer at " .. plan.reached .. ".|r" end
+    if plan.missing > 0 then t[#t + 1] = plan.missing .. " recipes without a price left out." end
+    t[#t + 1] = "Prices: auction scan and vendors. Click the gold step to craft it."
+    return table.concat(t, " ")
+end
+function SR.MakeCheapList(n)
+    local route, S = current.route, OMQ.Shopping
+    if not (route and S and OMQ.SkillPlan) then return nil end
+    local list = OMQ.SkillPlan.ShoppingList(route, current.skill or 0, current.max, n)
+    local l = S.Add(list)
+    SR.Note("Shopping list created: " .. l.title)
+    return l
 end
 
 -- the "who has the materials" panel moves right of the route while it is open
