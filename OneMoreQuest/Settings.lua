@@ -31,6 +31,7 @@ local LABEL = {
     upgrade = "Upgrade in your bags: put it on",
     buffback = "Buff back a player who buffed you",
     soulstone = "Healer in a dungeon: ask the warlock for a Soulstone",
+    ghostwolf = "Shaman: Ghost Wolf while running (instant wolf)",
 }
 
 local function alertItems()
@@ -74,6 +75,15 @@ local function alertItems()
                 tip = "Checked: missing buffs are shown for every group member. Unchecked: only for players with the addon.",
                 get = function() return not OMQ.db.options.buffOnlyAddon end,
                 set = function(v) OMQ.db.options.buffOnlyAddon = not v; OMQ.Alerts:Evaluate() end }
+        elseif id == "ghostwolf" and OMQ.GhostWolf then
+            -- decision 582: both limits of the Ghost Wolf card
+            local G = OMQ.GhostWolf
+            out[#out + 1] = { type = "step", indent = true, label = "Distance to the next dad",
+                min = G.MIN_DIST, max = G.MAX_DIST, by = 5, unit = "yd",
+                get = G.Distance, set = function(v) G.SetDistance(v); OMQ.Alerts:Evaluate() end }
+            out[#out + 1] = { type = "step", indent = true, label = "Running without a fight",
+                min = G.MIN_RUN, max = G.MAX_RUN, by = 1, unit = "s",
+                get = G.RunSeconds, set = function(v) G.SetRunSeconds(v); OMQ.Alerts:Evaluate() end }
         end
         end
     end
