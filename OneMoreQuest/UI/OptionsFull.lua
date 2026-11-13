@@ -407,22 +407,32 @@ local function build()
     e[4]:SetPoint("TOPRIGHT"); e[4]:SetPoint("BOTTOMRIGHT"); e[4]:SetWidth(1)
 
     local width = PAD * 2 + COL_W * 2 + GAP
-    local sections = OMQ.Settings:Sections()
+    local _, myClass = UnitClass("player")
+    local sections = OMQ.Settings:Sections(myClass)        -- decision 586: the class tab shows only my class
 
     -- the tab strip, right at the top; the close button at its right end
     local CLOSE_W = 34
     local strip = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
     strip:SetPoint("TOPLEFT", 1, -1); strip:SetPoint("TOPRIGHT", -1, -1); strip:SetHeight(TAB_H)
     strip:SetColorTexture(STRIP[1], STRIP[2], STRIP[3], 1)
-    local tabW = math.floor((width - 2 - CLOSE_W) / #sections)
-    local tabs = {}
+    -- decision 586: with seven tabs every tab gets a width by the length of its name (and its dot)
+    local room = width - 2 - CLOSE_W
+    local weight, total = {}, 0
     for i, sec in ipairs(sections) do
+        weight[i] = #sec.title + (sec.master and 2 or 0) + 4
+        total = total + weight[i]
+    end
+    local tabs = {}
+    local x = 0
+    for i, sec in ipairs(sections) do
+        local tabW = math.floor(room * weight[i] / total)
         local t = makeTab(frame, i, sec, tabW)
-        t:SetPoint("TOPLEFT", 1 + (i - 1) * tabW, -1)
+        t:SetPoint("TOPLEFT", 1 + x, -1)
         tabs[i] = t
+        x = x + tabW
     end
     local closeLine = frame:CreateTexture(nil, "BORDER")
-    closeLine:SetPoint("TOPLEFT", 1 + #sections * tabW, -1 - TAB_H + 1); closeLine:SetPoint("TOPRIGHT", -1, -1 - TAB_H + 1)
+    closeLine:SetPoint("TOPLEFT", 1 + x, -1 - TAB_H + 1); closeLine:SetPoint("TOPRIGHT", -1, -1 - TAB_H + 1)
     closeLine:SetHeight(1); closeLine:SetColorTexture(DIM_GOLD[1], DIM_GOLD[2], DIM_GOLD[3], 1)
     local close = CreateFrame("Button", nil, frame)
     close:SetSize(CLOSE_W, TAB_H)

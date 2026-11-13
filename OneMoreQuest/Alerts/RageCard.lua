@@ -3,7 +3,7 @@
 -- Like the mana card, the card's transparency follows a step curve on the rage percentage
 -- (UnitPowerPercent with a curve): invisible below 15 percent (15 of 100 rage), visible above.
 -- Everything readable gates the card: Battle Shout learned, not on the warrior (auras are readable
--- out of combat), not in combat, buff alerts on, no snooze.
+-- out of combat), not in combat, alerts and the option rageCard on (decision 586), no snooze.
 -- Like the mana card it only reminds and takes no clicks (fix 569): its alpha is a secret number, so nobody
 -- can tell whether it can be seen, and an invisible card must not swallow clicks.
 local ADDON, OMQ = ...
@@ -70,7 +70,8 @@ end
 function RC.Wanted()
     local _, class = UnitClass("player")
     if class ~= "WARRIOR" then return nil end
-    if M:IsSnoozed() or not M:IsRuleEnabled("buff") then return nil end
+    -- decision 586: its own switch in the class tab (before: the switch of the buff alerts)
+    if M:IsSnoozed() or not OMQ:Master("alerts") or OMQ.db.options.rageCard == false then return nil end
     if UnitIsDeadOrGhost("player") or (IsMounted and IsMounted()) or (UnitOnTaxi and UnitOnTaxi("player")) then return nil end
     local g = group()
     if not g then return nil end

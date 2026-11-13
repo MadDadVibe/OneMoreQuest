@@ -31,14 +31,28 @@ local LABEL = {
     upgrade = "Upgrade in your bags: put it on",
     buffback = "Buff back a player who buffed you",
     soulstone = "Healer in a dungeon: ask the warlock for a Soulstone",
-    ghostwolf = "Shaman: Ghost Wolf while running (instant wolf)",
+    ghostwolf = "Ghost Wolf while running (instant wolf)",
 }
 
-local function alertItems()
+-- decision 586: the class tab. These alert rules live there instead of the alerts tab, and every item of the
+-- tab names the classes it is shown to (the options window shows only the items of the class you play).
+local HEALERS = { "PRIEST", "PALADIN", "DRUID", "SHAMAN" }
+local CLASS_RULES = {
+    pet = { "HUNTER", "WARLOCK" },
+    ammo = { "HUNTER" },
+    ghostwolf = { "SHAMAN" },
+    soulstone = HEALERS,
+    buffback = { "PRIEST", "MAGE", "DRUID", "PALADIN" },
+}
+S.CLASS_RULES = CLASS_RULES
+
+local function alertItems(classTab)
     local out = {}
     for _, id in ipairs(OMQ.Alerts.ruleOrder) do
         local rule = OMQ.Alerts.rules[id]
-        if id == "consumable" then
+        if (classTab and id ~= classTab) or (not classTab and CLASS_RULES[id]) then
+            -- decision 586: a class rule only in the class tab, the class tab only its own rule
+        elseif id == "consumable" then
             -- decision 266: when to remind of the bought buff items, and a reset for the cards clicked away
             out[#out + 1] = { type = "segment", label = "Consumable reminders",
                 tip = "Never: no reminders. Always: whenever you are out in the world (not in a city or an inn) and in dungeons. Dungeons: only in dungeons. A right click hides a reminder for good; in dungeons that counts separately, for every future dungeon.",
@@ -92,6 +106,87 @@ end
 
 S._AlertItems = function() return alertItems() end
 
+local function append(dst, src) for _, v in ipairs(src) do dst[#dst + 1] = v end end
+
+-- the items of one alert rule of the class tab, each marked with its classes
+local function ruleItems(id)
+    local items = alertItems(id)
+    for _, it in ipairs(items) do it.classes = CLASS_RULES[id] end
+    return items
+end
+
+local function mark(classes, items)
+    for _, it in ipairs(items) do it.classes = classes end
+    return items
+end
+
+-- decision 586: everything that only matters to some classes, in one tab
+local function classItems()
+    local out = {}
+    local function add(list) append(out, list) end
+    add(mark({ "WARRIOR" }, {
+        { type = "check", label = "Battle Shout card at enough rage",
+          tip = "Warriors: a card reminds you of Battle Shout when it is missing and you have at least 15 rage, out of a fight. It only reminds and takes no clicks. Follows the master switch of the alerts.",
+          get = function() return OMQ.db.options.rageCard ~= false end,
+          set = function(v) OMQ.db.options.rageCard = v and true or false; OMQ.Alerts:Evaluate() end },
+    }))
+    add(ruleItems("pet"))
+    add(ruleItems("ammo"))
+    add(mark({ "HUNTER" }, {
+        { type = "check", label = "Buy ammo (hunters)", get = qolGet("ammo"), set = qolSet("ammo"),
+          tip = "Fills the free room of the quiver or ammo pouch: arrows for a bow or crossbow, bullets for a gun. Never more than fits. Follows the master switch of the automations." },
+    }))
+    add(ruleItems("ghostwolf"))
+    -- decision 520: the target's nameplate glows when Shadow Word: Death would kill it
+    add(mark({ "PRIEST" }, {
+        { type = "check", label = "Shadow Word: Death kill glow",
+          tip = "Priests: the target's nameplate glows purple with the Shadow Word: Death icon when the spell would kill it (low end of its damage, Shadowform counted). Enemy nameplates must be switched on. /omq swd test shows a sample.",
+          get = function() return OMQ.db.options.killGlow ~= false end,
+          set = function(v) if OMQ.KillGlow then OMQ.KillGlow.SetEnabled(v) else OMQ.db.options.killGlow = v and true or false end end },
+    }))
+    add(mark(HEALERS, {
+        -- decision 226: Shift-click heals in the game's click casting (healing classes)
+        { type = "check", label = "Shift-click heals on unit frames",
+          tip = "Healers only (priest, paladin, druid, shaman): Shift + left click on a party, player or target frame casts the emergency heal, Shift + right click the comfortable heal, always the best one you know. Bindings you made yourself are never changed, they only move up when you learn a new rank of their spell (a lower rank you picked on purpose stays).",
+          get = function() return OMQ.db.options.clickHeals ~= false end,
+          set = function(v)
+              OMQ.db.options.clickHeals = v and true or false
+              if OMQ.ClickHeals then OMQ.ClickHeals.Soon() end
+          end },
+        -- fix 492: set the Shift-click heals again by hand (after a disconnect, or bindings changed by hand)
+        { type = "button", indent = true, label = "Apply Shift-click heals again",
+          tip = "Sets Shift + left and Shift + right click on the unit frames to the OMQ heals again, as defined above. Whatever is bound to these two clicks now is replaced; all other click casting bindings stay. Out of a fight only, otherwise right after it.",
+          done = "Done - Shift-click heals set again",
+          click = function()
+              local line = OMQ.ClickHeals and OMQ.ClickHeals.Reapply()
+              if line then OMQ:Print(line) end
+          end },
+        -- decision 250: an invisible unit button over the personal resource display
+        { type = "check", indent = true, label = "Click casting on your resource display",
+          tip = "Shift-click heals (and every click casting binding) also work on the health and mana bars under your character - also solo. Shows only when the resource display shows.",
+          get = function() return OMQ.db.options.selfCast ~= false end,
+          set = function(v)
+              OMQ.db.options.selfCast = v and true or false
+              if OMQ.SelfCastProbe then OMQ.SelfCastProbe.Apply() end
+          end },
+        -- decision 423: a dad at low life calls the healer, a click on the card heals him
+        { type = "check", label = "Low life calls for healers",
+          tip = "When a dad's screen flashes red at low life, the healers of the group (preferred role Healer, or the healer role in the group) get a small red card LOW LIFE / HEAL under his party frame and a warning sound, also in a fight; at your own low life the card shows under your own frame. Left click on the card targets him and casts your emergency heal. In a fight the empty card places under the party frames take no clicks.",
+          get = function() return OMQ.db.options.healCall ~= false end,
+          set = function(v) OMQ.db.options.healCall = v and true or false end },
+    }))
+    add(ruleItems("soulstone"))
+    add(ruleItems("buffback"))
+    return out
+end
+
+-- is the item shown to this class (class token such as "PRIEST")?
+function S.ForClass(item, class)
+    if not item.classes then return true end
+    for _, c in ipairs(item.classes) do if c == class then return true end end
+    return false
+end
+
 -- Master switches: one per category, they override the fine grained options.
 S.masters = {
     { id = "alerts", label = "Alerts" },
@@ -126,7 +221,6 @@ function S:SnoozeLabel(idle)
     return idle
 end
 
-local function append(dst, src) for _, v in ipairs(src) do dst[#dst + 1] = v end end
 
 local function allSections()
     local alerts = alertItems()
@@ -178,35 +272,6 @@ local function allSections()
               set = function(i)
                   local f = OMQ.QTrackFrame
                   if f and f.BACKGROUNDS[i] then f:SetBackground(f.BACKGROUNDS[i]) end
-              end },
-            -- decision 226: Shift-click heals in the game's click casting (healing classes)
-            { type = "check", label = "Shift-click heals on unit frames",
-              tip = "Healers only (priest, paladin, druid, shaman): Shift + left click on a party, player or target frame casts the emergency heal, Shift + right click the comfortable heal, always the best one you know. Bindings you made yourself are never changed, they only move up when you learn a new rank of their spell (a lower rank you picked on purpose stays).",
-              get = function() return OMQ.db.options.clickHeals ~= false end,
-              set = function(v)
-                  OMQ.db.options.clickHeals = v and true or false
-                  if OMQ.ClickHeals then OMQ.ClickHeals.Soon() end
-              end },
-            -- fix 492: set the Shift-click heals again by hand (after a disconnect, or bindings changed by hand)
-            { type = "button", indent = true, label = "Apply Shift-click heals again",
-              tip = "Sets Shift + left and Shift + right click on the unit frames to the OMQ heals again, as defined above. Whatever is bound to these two clicks now is replaced; all other click casting bindings stay. Out of a fight only, otherwise right after it.",
-              done = "Done - Shift-click heals set again",
-              click = function()
-                  local line = OMQ.ClickHeals and OMQ.ClickHeals.Reapply()
-                  if line then OMQ:Print(line) end
-              end },
-            -- decision 423: a dad at low life calls the healer, a click on the card heals him
-            { type = "check", label = "Low life calls for healers",
-              tip = "When a dad's screen flashes red at low life, the healers of the group (preferred role Healer, or the healer role in the group) get a small red card LOW LIFE / HEAL under his party frame and a warning sound, also in a fight; at your own low life the card shows under your own frame. Left click on the card targets him and casts your emergency heal. In a fight the empty card places under the party frames take no clicks.",
-              get = function() return OMQ.db.options.healCall ~= false end,
-              set = function(v) OMQ.db.options.healCall = v and true or false end },
-            -- decision 250: an invisible unit button over the personal resource display
-            { type = "check", indent = true, label = "Click casting on your resource display",
-              tip = "Shift-click heals (and every click casting binding) also work on the health and mana bars under your character - also solo. Shows only when the resource display shows.",
-              get = function() return OMQ.db.options.selfCast ~= false end,
-              set = function(v)
-                  OMQ.db.options.selfCast = v and true or false
-                  if OMQ.SelfCastProbe then OMQ.SelfCastProbe.Apply() end
               end },
             -- decision 493: XP of a dungeon visit against XP outside
             { type = "check", label = "Dungeon XP card",
@@ -304,11 +369,6 @@ local function allSections()
               options = (OMQ.NodeGlow and OMQ.NodeGlow.LABELS) or { "Glow", "Sparkle", "Beam", "Off" },
               get = function() return OMQ.NodeGlow and OMQ.NodeGlow.StyleIndex() or 1 end,
               set = function(i) if OMQ.NodeGlow then OMQ.NodeGlow.SetStyle(i) end end },
-            -- decision 520: the target's nameplate glows when Shadow Word: Death would kill it
-            { type = "check", label = "Shadow Word: Death kill glow",
-              tip = "Priests: the target's nameplate glows purple with the Shadow Word: Death icon when the spell would kill it (low end of its damage, Shadowform counted). Enemy nameplates must be switched on. /omq swd test shows a sample.",
-              get = function() return OMQ.db.options.killGlow ~= false end,
-              set = function(v) if OMQ.KillGlow then OMQ.KillGlow.SetEnabled(v) else OMQ.db.options.killGlow = v and true or false end end },
             -- decision 523: players of the other faction nearby
             { type = "check", label = "Warn about enemy players nearby",
               tip = "A card at the top of the screen when a player of the other faction shows up (his nameplate, your target, the mouse or a group member's target): name, level and class, red with a skull when he is 5 or more levels above you. Left click: target him (cards that appear in a fight only after the fight); right click closes the card. The same player warns again after 5 minutes at the earliest. A red number on the minimap icon counts the enemies nearby, its tooltip names them. Quiet in major cities, sanctuaries, dungeons and battlegrounds. Turns the game's enemy nameplates on. /omq enemy test shows a sample.",
@@ -362,8 +422,6 @@ local function allSections()
               get = qolGet("rewardHint"), set = qolSet("rewardHint") },
             { type = "check", label = "Buy water (mana classes)", get = qolGet("water"), set = qolSet("water"),
               tip = "From level 10: tops the bags up to 20 of the best water the merchant sells. Before level 10 it costs too much." },
-            { type = "check", label = "Buy ammo (hunters)", get = qolGet("ammo"), set = qolSet("ammo"),
-              tip = "Fills the free room of the quiver or ammo pouch: arrows for a bow or crossbow, bullets for a gun. Never more than fits." },
             { type = "check", label = "Open all mail at the mailbox",
               tip = "When you open a mailbox, money and items of every mail are taken (not cash on delivery). Switched off, only the One More Quest bet mails are opened. Bet mails are always deleted once empty.",
               get = qolGet("openmail"), set = qolSet("openmail") },
@@ -381,6 +439,7 @@ local function allSections()
               closeOptions = true,          -- decision 252: the options window closes
               click = function() OMQ.ChatWindow:Toggle() end },
         } },
+        { title = "CLASS", col = 2, class = true, items = classItems() },
         { title = "INTERFACE", col = 2, items = {
             { type = "check", label = "Minimap icon",
               tip = "If hidden: /omq options opens the quick options, /omq minimap brings the icon back.",
@@ -408,18 +467,20 @@ local function allSections()
     }
 end
 
--- the options of a feature that is not open yet stay hidden (UI/Unlock.lua)
-function S:Sections()
+-- the options of a feature that is not open yet stay hidden (UI/Unlock.lua). With a class token only the
+-- class items of that class are left, and a class tab without items is left out (decision 586).
+function S:Sections(class)
     local out = {}
     for _, sec in ipairs(allSections()) do
         local items = {}
         for _, it in ipairs(sec.items) do
-            if not (it.unlock and OMQ.Unlock and not OMQ.Unlock:Has(it.unlock)) then items[#items + 1] = it end
+            if not (it.unlock and OMQ.Unlock and not OMQ.Unlock:Has(it.unlock))
+                and not (class and not S.ForClass(it, class)) then items[#items + 1] = it end
         end
         local copy = {}
         for k, v in pairs(sec) do copy[k] = v end
         copy.items = items
-        out[#out + 1] = copy
+        if not (class and sec.class and #items == 0) then out[#out + 1] = copy end
     end
     return out
 end
