@@ -1341,7 +1341,54 @@ local function login()
     backfill(b)
 end
 
+----------------------------------------------------------------------
+-- /omq played: the game's /played time minus the AFK time OMQ counted
+----------------------------------------------------------------------
+local PLAYED_WAIT = 10          -- seconds an answer to our own /played request is taken
+local playedAsked
+
+-- 266,400 -> "3d 2h 0m", 3,000 -> "50m"
+function T.Dur(secs)
+    secs = math.max(0, math.floor(secs or 0))
+    local d, h, m = math.floor(secs / 86400), math.floor(secs % 86400 / 3600), math.floor(secs % 3600 / 60)
+    if d > 0 then return string.format("%dd %dh %dm", d, h, m) end
+    if h > 0 then return string.format("%dh %dm", h, m) end
+    return string.format("%dm", m)
+end
+
+-- the lines for /omq played; total = the game's played seconds
+function T.PlayedLines(total, b)
+    local afk = math.min(b.afk or 0, total)
+    local pct = total > 0 and math.floor(afk / total * 100 + 0.5) or 0
+    local lines = { string.format("played %s - AFK %s (%d %%) = without AFK %s",
+        T.Dur(total), T.Dur(afk), pct, T.Dur(total - afk)) }
+    local since = b.since or {}
+    if (since.lvl or 1) > 1 then
+        lines[#lines + 1] = string.format("  AFK is counted since level %d (%s); AFK time before that is not taken off",
+            since.lvl, since.t and dateFn and dateFn("%d.%m.%Y", since.t) or "?")
+    end
+    return lines
+end
+
+local function onPlayed(total)
+    if not playedAsked or GetTime() - playedAsked > PLAYED_WAIT then return end
+    playedAsked = nil
+    local b = book()
+    if not b or not num(total) then OMQ:Print("played time not available"); return end
+    local lines = T.PlayedLines(total, b)
+    OMQ:Print(lines[1])
+    for i = 2, #lines do print(lines[i]) end
+end
+T._Played = onPlayed
+
+function T:Played()
+    if not book() or type(RequestTimePlayed) ~= "function" then OMQ:Print("played time not available"); return end
+    playedAsked = GetTime()
+    RequestTimePlayed()
+end
+
 local EVENTS = {
+    TIME_PLAYED_MSG = onPlayed,
     PARTY_KILL = onPartyKill,
     ENCOUNTER_END = onEncounterEnd,
     BOSS_KILL = function() note("boss.event") end,
@@ -1500,3 +1547,4 @@ function T:Report(part)
 end
 
 OMQ:RegisterCommand("tally", function(arg) T:Report(arg) end, nil, true)
+OMQ:RegisterCommand("played", function() T:Played() end, "your /played time without the AFK time One More Quest counted")
