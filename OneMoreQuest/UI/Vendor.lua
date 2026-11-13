@@ -231,6 +231,13 @@ function V.Reason(it, extra, ctx)
             if worth == false then return "low", "not worth the auction house" end
             return nil
         end
+        -- not gear: judged fresh at the vendor with what I carry now and the newest known auction price (fix 593);
+        -- the stored verdict of the last auction house visit is only used when no price is known
+        local fresh = V.AuctionVerdict(id, q, classID, vendor, (ctx.counts and ctx.counts[id]) or it.stackCount or 1)
+        if fresh == "low" then
+            return "low", (classID == 7 or q == 2) and "not worth the auction house" or "no more at the auction house than here"
+        end
+        if fresh then return nil end
         if q == 1 and worth == false then return "low", "no more at the auction house than here" end
         -- trade goods and green items under +30% at the auction house (decision 431)
         if worth == false and (classID == 7 or q == 2) then return "low", "not worth the auction house" end
@@ -258,6 +265,22 @@ function V.Reason(it, extra, ctx)
     local ok, g = pcall(LP.Gain, link, equipLoc)
     if ok and g and g < 0 then return "worse", "worse than what you wear (" .. g .. ")" end
     return nil
+end
+
+-- the auction house against the vendor for qty pieces, by the newest known price of one piece (fix 593):
+-- "low" = the auction house brings less than the vendor plus the margin, "ah" = better there (also when the gain is
+-- still under the minimum: such a rest waits in the bags for more), nil = no price known
+function V.AuctionVerdict(id, quality, classID, vendor, qty)
+    local P, AH = OMQ.Prices, OMQ.AuctionHelper
+    if not (P and P.Auction and AH and AH.MarginFor) or not vendor or vendor <= 0 then return nil end
+    local p = P.Auction(id)
+    if type(p) ~= "number" or isSecret(p) or p <= 0 then return nil end
+    qty = math.max(1, qty or 1)
+    local net = p * qty * (1 - (AH.CUT or 0.05))
+    local vend = vendor * qty
+    local margin = AH.MarginFor({ quality = quality, classID = classID })
+    if net >= vend * margin and net > vend then return "ah" end
+    return "low"
 end
 
 ----------------------------------------------------------------------
@@ -318,7 +341,15 @@ function V.Scan()
     for i = #list, 1, -1 do list[i] = nil end
     local C = C_Container
     if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return list end
-    local ctx = { sets = setItems(), food = V.BestFood(), profs = V.MyProfs(), potions = V.BestPotions() }
+    local ctx = { sets = setItems(), food = V.BestFood(), profs = V.MyProfs(), potions = V.BestPotions(), counts = {} }
+    for bag = 0, OMQ.LastBag() do                         -- how many of each I carry (fix 593)
+        for slot = 1, C.GetContainerNumSlots(bag) or 0 do
+            local it = C.GetContainerItemInfo(bag, slot)
+            if it and it.itemID and not isSecret(it.itemID) then
+                ctx.counts[it.itemID] = (ctx.counts[it.itemID] or 0) + (tonumber(it.stackCount) or 1)
+            end
+        end
+    end
     for bag = 0, OMQ.LastBag() do
         for slot = 1, C.GetContainerNumSlots(bag) or 0 do
             local it = C.GetContainerItemInfo(bag, slot)
