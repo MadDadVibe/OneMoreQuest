@@ -20,6 +20,7 @@ M.SIZE = 22               -- a run marker (the first stop 26)
 M.FIRST = 26
 M.ICON = 24               -- the search symbol
 M.MAX = 40                -- markers at most
+M.MERGE = 15              -- yards: stops this close share one marker ("1-2"), fix 598
 M.ARRIVE = 12             -- yards: the search symbol goes away there
 M.REFRESH = 0.5           -- seconds between two looks at the runs while the map is open
 M.LEVEL = 2000            -- frame levels above the canvas (over Blizzard's pins)
@@ -168,7 +169,18 @@ function M.Collect()
     for _, m in ipairs(runs) do
         n = n + 1                                         -- a hidden marker keeps its number: the order stays
         m.n = n
-        if not hidden[m.key] and #out < M.MAX then out[#out + 1] = m end
+        if not hidden[m.key] then
+            -- fix 598: stops at (nearly) the same place share one marker, else the later one covers the earlier
+            local host
+            for _, o in ipairs(out) do
+                if o.place.inst == m.place.inst and math.abs(o.place.a - m.place.a) <= M.MERGE
+                   and math.abs(o.place.b - m.place.b) <= M.MERGE then host = o; break end
+            end
+            if host then
+                host.also = host.also or {}
+                host.also[#host.also + 1] = m
+            elseif #out < M.MAX then out[#out + 1] = m end
+        end
     end
     local G = OMQ.Guide
     local s = G and G.SearchMark and G:SearchMark()
@@ -206,6 +218,7 @@ function M.Remove(m)
         if OMQ.Guide and OMQ.Guide.ForgetSearchMark then OMQ.Guide:ForgetSearchMark() end
     else
         hidden[m.key] = true
+        for _, o in ipairs(m.also or {}) do hidden[o.key] = true end
     end
     M.Refresh(true)
 end
@@ -254,6 +267,10 @@ local function tooltip(pin)
         GameTooltip:SetText(string.format("%d. %s", m.n or 0, tostring(m.title)), c[1], c[2], c[3])
         GameTooltip:AddLine(M.RUN_NAMES[m.run] or "Run", 0.6, 0.63, 0.68)
         if m.what then GameTooltip:AddLine(m.what, 1, 1, 1, true) end
+        for _, o in ipairs(m.also or {}) do
+            GameTooltip:AddLine(string.format("%d. %s", o.n or 0, tostring(o.title)), c[1], c[2], c[3])
+            if o.what then GameTooltip:AddLine(o.what, 1, 1, 1, true) end
+        end
     end
     local d = straight(m.place, myPos())
     GameTooltip:AddLine(d and string.format("%d yards", math.floor(d + 0.5)) or "other continent", 0.8, 0.8, 0.8)
@@ -267,12 +284,11 @@ local function newPin()
     b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     b.ring = b:CreateTexture(nil, "ARTWORK")
     b.ring:SetAllPoints()
-    b.ring:SetColorTexture(1, 1, 1, 1)
-    if b.ring.SetMask then pcall(b.ring.SetMask, b.ring, MASK) end
+    b.ring:SetTexture(MASK)                               -- a white disc (fix 598: masks on colour textures were square)
     b.inner = b:CreateTexture(nil, "ARTWORK", nil, 1)
     b.inner:SetPoint("TOPLEFT", 2, -2); b.inner:SetPoint("BOTTOMRIGHT", -2, 2)
-    b.inner:SetColorTexture(0.08, 0.086, 0.114, 0.95)
-    if b.inner.SetMask then pcall(b.inner.SetMask, b.inner, MASK) end
+    b.inner:SetTexture(MASK)
+    b.inner:SetVertexColor(0.08, 0.086, 0.114, 0.95)
     b.icon = b:CreateTexture(nil, "OVERLAY")
     b.icon:SetAllPoints()
     b.num = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -296,10 +312,20 @@ local function style(pin, m)
         local c = M.COLORS[m.run] or M.COLORS.quest
         pin.icon:Hide()
         pin.ring:SetVertexColor(c[1], c[2], c[3], 1); pin.ring:Show(); pin.inner:Show()
-        pin.num:SetText(tostring(m.n)); pin.num:SetTextColor(c[1], c[2], c[3]); pin.num:Show()
-        pin.size = (m.n == 1) and M.FIRST or M.SIZE
+        pin.num:SetText(M.Label(m)); pin.num:SetTextColor(c[1], c[2], c[3]); pin.num:Show()
+        pin.size = (m.n == 1 or m.also) and M.FIRST or M.SIZE
     end
     pin:SetSize(pin.size, pin.size)
+end
+
+-- the number on a marker: "2", or "1-2" / "1+" when stops share it (fix 598)
+function M.Label(m)
+    if not m.also then return tostring(m.n) end
+    local last, row = m.n, true
+    for _, o in ipairs(m.also) do
+        if o.n == last + 1 then last = o.n else row = false end
+    end
+    return row and (m.n .. "-" .. last) or (m.n .. "+")
 end
 
 -- puts the markers on the shown map
@@ -320,6 +346,7 @@ function M.Place()
                 local pin = pins[shown] or newPin()
                 pins[shown] = pin
                 style(pin, m)
+                pin:SetFrameLevel((layer:GetFrameLevel() or 1) + (m.search and M.MAX + 2 or math.max(1, M.MAX + 1 - (m.n or M.MAX))))
                 pin:SetScale(scale)
                 pin:ClearAllPoints()
                 pin:SetPoint("CENTER", canvas, "TOPLEFT", w * x / scale, -h * y / scale)
