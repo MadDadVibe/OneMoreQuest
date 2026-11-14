@@ -241,7 +241,42 @@ function G:Start(spec)
     end
     sortByDistance(list, mine)
     dest = { kind = kind, arg = arg, label = info.label, cands = list, idx = 1, manual = false }
+    G.MarkSearch(dest, list[1])
     OMQ:Fire("GUIDE_CHANGED", kind)
+    return true
+end
+
+-- The map marker of a search from the bar (decision 596): the place the arrow points at. It stays when the arrow
+-- is clicked away (left click on the marker brings the arrow back) and goes on arrival or right click on it.
+-- The map pin and the corpse get none (the game shows them).
+local searchMark = nil    -- { spec, label, name, a, b, inst }
+local NO_MARK = { pin = true, corpse = true }
+function G.MarkSearch(d, c)
+    if not (d and c) or NO_MARK[d.kind] or d.kind == "point" or d.kind == "group" then return end
+    local spec = d.arg and (d.kind .. ":" .. d.arg) or d.kind
+    local m = searchMark
+    if m and m.spec == spec and m.a == c.a and m.b == c.b and m.inst == c.inst then return end
+    searchMark = { spec = spec, label = d.label, name = c.name, a = c.a, b = c.b, inst = c.inst }
+end
+function G:SearchMark() return searchMark end
+function G:ForgetSearchMark() searchMark = nil end
+
+-- left click on a search marker: that search again, on exactly that place
+function G:StartSearchAt(spec, a, b, inst)
+    if not spec then return false end
+    local keep = searchMark
+    if not self:Start(spec) then
+        if keep then self:StartAt(keep.label or "Destination", a, b, inst, "search", nil, { name = keep.name }) end
+        return keep ~= nil
+    end
+    for i, c in ipairs(dest.cands) do
+        if c.a == a and c.b == b and c.inst == inst then
+            dest.idx, dest.manual = i, true
+            G.MarkSearch(dest, c)
+            OMQ:Fire("GUIDE_CHANGED", dest.kind)
+            break
+        end
+    end
     return true
 end
 
@@ -370,9 +405,11 @@ function G:Current()
         if G.QuestDone(dest.qid) then self:Clear(); return nil end
         there = G.InsideArea(dest.qid) or (c.d ~= nil and c.d <= (dest.radius or ARRIVE_YARDS))
     elseif c.d and c.d <= (dest.radius or ARRIVE_YARDS) then
+        if searchMark and dest.kind ~= "point" then searchMark = nil end      -- arrived: the map marker goes (596)
         self:Clear()
         return nil
     end
+    G.MarkSearch(dest, c)
     -- the NPC's function in brackets after the name (decision 188): from the data, else the kind
     local shownName = c.name or dest.label
     local title = c.title or (c.name and dest.kind ~= "point" and dest.kind ~= "pin" and dest.kind ~= "corpse" and dest.label) or nil

@@ -361,6 +361,19 @@ local function allSections()
               options = (OMQ.Arrow and OMQ.Arrow.StyleChoices) and OMQ.Arrow:StyleChoices() or {},
               get = function() return OMQ.Arrow and OMQ.Arrow:Style() or 1 end,
               set = function(v) if OMQ.Arrow then OMQ.Arrow:SetStyle(v) end end },
+            -- decision 596: own markers on the world map
+            { type = "check", label = "Markers on the world map",
+              tip = "Runs: every open stop gets a numbered marker (1, 2, 3 in the order of the way) in the run's colour. A search from the icon bar (auction house, trainer, ...) gets one symbol. Left click on a marker: the arrow points there again. Right click: the marker goes away.",
+              get = function() return OMQ.db.guide.mapMarkers ~= false end,
+              set = function(v)
+                  OMQ.db.guide.mapMarkers = v and true or false
+                  if OMQ.MapMarkers then OMQ.MapMarkers.Refresh(true) end
+              end },
+            { type = "choice", label = "Map symbol for searches",
+              tip = "The symbol on the world map for a destination of the icon bar: star, diamond or circle.",
+              options = (OMQ.MapMarkers and OMQ.MapMarkers.IconChoices) and OMQ.MapMarkers.IconChoices() or {},
+              get = function() return OMQ.MapMarkers and OMQ.MapMarkers.IconIndex() or 1 end,
+              set = function(v) if OMQ.MapMarkers then OMQ.MapMarkers.SetIcon(v) end end },
             { type = "button", label = "Recalibrate arrow", done = "Run in a few directions",
               click = function() OMQ:RunCommand("arrow", "recalibrate") end },
             -- decision 495: the light on the nearest ore vein or herb
