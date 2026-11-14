@@ -32,6 +32,8 @@ local ITEMS = {
       icon = MEDIA .. "Icon_Grind", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("grind") end },
     { id = "chain", label = "Chain Run", tip = "Click: quest chains every dad should do (the Cozy Sleeping Bag, the Night Watchman's Torch) - OMQ leads you step by step",   -- decision 595
       icon = MEDIA .. "Icon_Chain" },
+    { id = "old", label = "Old Quest Check", tip = "Click: the grey quests in your log - abandon them with one click",   -- decision 601
+      icon = MEDIA .. "Icon_Old" },
     { id = "bet", label = "Bet Check", tip = "Click: start a bet with the dads",          -- decision 170, from level 5
       icon = MEDIA .. "Icon_Bet", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("bets") end },
     { id = "prof", label = "Profession Check", tip = "Click: what each crafting profession costs to skill to 75, 150, 225 and 300, with the auction prices",   -- decision 535
@@ -45,6 +47,7 @@ local ITEMS = {
 }
 
 local pendingLevel
+local badges = {}                     -- small numbers on an icon: badges.old = grey quests in the log (601)
 local function currentItems()
     local list = {}
     for _, it in ipairs(ITEMS) do if not it.show or it.show() then list[#list + 1] = it end end
@@ -120,6 +123,8 @@ local function click(item)
         if OMQ.GrindUI then OMQ.GrindUI:Toggle() end
     elseif item.id == "chain" then
         if OMQ.ChainRunUI then OMQ.ChainRunUI:Toggle() end
+    elseif item.id == "old" then
+        if OMQ.OldQuests then OMQ.OldQuests:Toggle() end
     elseif item.id == "bet" then
         if OMQ.BetUI then OMQ.BetUI:ToggleCreate() end
     elseif item.id == "duel" then
@@ -172,6 +177,12 @@ function makeButton(item)
     b.dot:SetPoint("TOPRIGHT", 1, 1)
     b.dot:SetColorTexture(0.66, 0.33, 0.94, 1)
     b.dot:Hide()
+    if item.id == "old" then                                   -- the number of grey quests (decision 601)
+        b.count = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        b.count:SetPoint("BOTTOMRIGHT", -2, 2)
+        b.count:SetTextColor(1, 1, 1)
+        b.count:SetText(badges.old and badges.old > 0 and tostring(badges.old) or "")
+    end
     b.item = item
     b:SetScript("OnClick", function(self) click(self.item) end)
     b:SetScript("OnEnter", function(self)
@@ -224,6 +235,12 @@ end
 function CB:Items() return items end
 function CB:Refresh() layout() end
 function CB:Button(id) return buttons[id] end
+function CB:SetBadge(id, n)
+    badges[id] = n
+    local b = buttons[id]
+    if b and b.count then b.count:SetText(n and n > 0 and tostring(n) or "") end
+end
+function CB:Badge(id) return badges[id] end
 
 local lvl = CreateFrame("Frame")
 for _, e in ipairs({ "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do pcall(lvl.RegisterEvent, lvl, e) end
