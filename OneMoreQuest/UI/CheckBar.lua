@@ -30,6 +30,8 @@ local ITEMS = {
       icon = MEDIA .. "Icon_Area", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("area") end },
     { id = "grind", label = "Grind Run", tip = "Click: pick a zone or grind right here - the arrow leads you to a spot full of mobs, then 30 or 60 minutes",   -- decision 518, from level 10
       icon = MEDIA .. "Icon_Grind", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("grind") end },
+    { id = "chain", label = "Chain Run", tip = "Click: quest chains every dad should do (the Cozy Sleeping Bag, the Night Watchman's Torch) - OMQ leads you step by step",   -- decision 595
+      icon = MEDIA .. "Icon_Chain" },
     { id = "bet", label = "Bet Check", tip = "Click: start a bet with the dads",          -- decision 170, from level 5
       icon = MEDIA .. "Icon_Bet", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("bets") end },
     { id = "prof", label = "Profession Check", tip = "Click: what each crafting profession costs to skill to 75, 150, 225 and 300, with the auction prices",   -- decision 535
@@ -91,6 +93,16 @@ local function layout()
         end
     end
     for id, b in pairs(buttons) do if not used[id] then b:Hide() end end
+    -- a purple dot: a chain became ready for me (595, K4); on the Group Check while the bar is closed
+    local new = OMQ.ChainRun and OMQ.ChainRun.NewForMe and OMQ.ChainRun.NewForMe() or false
+    CB._dot = new
+    for i, it in ipairs(items) do
+        local b = buttons[it.id]
+        if b and b.dot then
+            local on = new and ((it.id == "chain" and expanded) or (i == 1 and not expanded))
+            if on then b.dot:Show() else b.dot:Hide() end
+        end
+    end
 end
 
 local function click(item)
@@ -106,6 +118,8 @@ local function click(item)
         if OMQ.AreaRunUI then OMQ.AreaRunUI:Toggle() end
     elseif item.id == "grind" then
         if OMQ.GrindUI then OMQ.GrindUI:Toggle() end
+    elseif item.id == "chain" then
+        if OMQ.ChainRunUI then OMQ.ChainRunUI:Toggle() end
     elseif item.id == "bet" then
         if OMQ.BetUI then OMQ.BetUI:ToggleCreate() end
     elseif item.id == "duel" then
@@ -153,6 +167,11 @@ function makeButton(item)
         b.label:SetTextColor(0.94, 0.78, 0.38)
     end
     b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    b.dot = b:CreateTexture(nil, "OVERLAY")
+    b.dot:SetSize(9, 9)
+    b.dot:SetPoint("TOPRIGHT", 1, 1)
+    b.dot:SetColorTexture(0.66, 0.33, 0.94, 1)
+    b.dot:Hide()
     b.item = item
     b:SetScript("OnClick", function(self) click(self.item) end)
     b:SetScript("OnEnter", function(self)

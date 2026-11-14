@@ -359,6 +359,7 @@ function G:Start(spot, minutes, opts)
                 t0 = clock(), pauseSum = 0, xp = 0, pct = 0, kills = 0, gold = 0, items = {}, samples = 0, inside = 0,
                 lvl0 = lvl or 1, xpLast = cur, maxLast = max, lvlLast = lvl, moneyLast = money(),
                 group = opts.id ~= nil or (OMQ:GetChannel() ~= nil), starter = opts.starter }
+    if OMQ.ChainRun and OMQ.ChainRun:Active() then OMQ.ChainRun:End("replaced") end   -- one run at a time (595)
     db().runs[guid()] = r
     G.target = nil
     G.pending, G.quests, G.moneyPend = {}, {}, nil

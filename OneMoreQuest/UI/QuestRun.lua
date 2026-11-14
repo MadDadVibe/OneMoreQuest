@@ -22,6 +22,7 @@ local GREEN = { 0.49, 0.78, 0.44 }
 local BLUE = { 0.30, 0.62, 1.00 }       -- the Dungeon Run (476)
 local AREA = { 0.33, 0.84, 0.40 }       -- the Area Run (491)
 local GREY = { 0.6, 0.63, 0.68 }
+local PURPLE = { 0.66, 0.33, 0.94 }     -- the Chain Run (595), same as UI/ChainRun.lua
 local W, ROWS, ROW_H = 360, 10, 30
 local TWO_PI = math.pi * 2
 local ARROW = 35                     -- the main arrow is 58
@@ -33,7 +34,10 @@ local mode = "choose"               -- choose | preview | list | dungeon (the Du
 local winBorder, barEdge
 local function isDungeon() local r = OMQ.QuestRun and OMQ.QuestRun:Run(); return r ~= nil and r.kind == "dungeon" end
 local function isArea() local r = OMQ.QuestRun and OMQ.QuestRun:Run(); return r ~= nil and r.kind == "area" end
-local function runName() return isDungeon() and "Dungeon Run" or isArea() and "Area Run" or "Quest Run" end
+-- the Chain Run (595) uses the same bar, small arrow and done card in purple; it is its own module (ChainRun.lua)
+local function chainRun() local c = OMQ.ChainRun; return (c and c:Active()) and c or nil end
+UI.ChainActive = function() return chainRun() ~= nil end
+local function runName() return chainRun() and "Chain Run" or isDungeon() and "Dungeon Run" or isArea() and "Area Run" or "Quest Run" end
 UI.AREA = AREA
 local function D() return OMQ.DungeonRun end
 UI._view = {}
@@ -532,13 +536,17 @@ local function buildBar()
     barText:SetPoint("LEFT", 8, 0)
     barText:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
     bar:SetScript("OnClick", function(_, button)
+        if chainRun() and OMQ.ChainRunUI then           -- Chain Run (595): its own window and end question
+            if button == "RightButton" then OMQ.ChainRunUI:AskEnd() else OMQ.ChainRunUI:Toggle() end
+            return
+        end
         if button == "RightButton" then askEnd() else UI:Toggle() end
     end)
     bar:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:SetText(runName())
-        for _, e in ipairs(R():List()) do
+        for _, e in ipairs((chainRun() or R()):List()) do
             if e.done then GameTooltip:AddLine("done: " .. e.title, GREEN[1], GREEN[2], GREEN[3])
             else GameTooltip:AddLine((e.current and "next: " or "") .. e.title, 1, 1, 1) end
         end
@@ -571,6 +579,8 @@ local function buildBar()
             if OMQ.Arrow and OMQ.Arrow.ToggleWays then OMQ.Arrow.ToggleWays() end
             smoothHeading = nil
             UI:RenderBar()
+        elseif chainRun() then                           -- Chain Run (595)
+            if button == "RightButton" then if OMQ.ChainRunUI then OMQ.ChainRunUI:AskEnd() end else chainRun():MainArrow() end
         elseif button == "RightButton" then askEnd() else R():MainArrow() end
     end)
     arrowFrame:SetScript("OnEnter", function(self)
@@ -591,7 +601,8 @@ end
 -- the bar, the small arrow and their texts (every 0.1 s and on changes)
 function UI:RenderBar()
     if not bar then return end
-    local Q = R()
+    local Q = chainRun() or R()
+    local chain = Q ~= R()
     local st = { shown = false }
     UI._bar = st
     if not Q:Active() then
@@ -600,13 +611,16 @@ function UI:RenderBar()
     end
     anchor()
     local done, all = Q:ShownCounts()             -- Area Run: fulfilled counts already (516)
-    local blue = isDungeon()
-    local area = isArea()
-    local col = blue and BLUE or area and AREA or GOLD
+    local blue = not chain and isDungeon()
+    local area = not chain and isArea()
+    local col = chain and PURPLE or blue and BLUE or area and AREA or GOLD
     barEdge:SetColorTexture(col[1], col[2], col[3], 1)
     barText:SetTextColor(col[1], col[2], col[3])
-    st.blue, st.area = blue, area
-    if area then
+    st.blue, st.area, st.chain = blue, area, chain
+    if chain then
+        local c = Q:Chain()
+        st.text = string.format("Chain Run: %s  %d/%d", c and c.name or "?", done, all)
+    elseif area then
         st.text = string.format("Area Run: %d/%d", done, all)
     elseif blue then
         st.text = string.format("Dungeon Run: %d/%d", done, all)
@@ -616,7 +630,7 @@ function UI:RenderBar()
     else
         st.text = string.format("Quest Run: %d/%d done", done, all)
     end
-    bar:SetWidth(blue and 300 or area and 200 or 230)
+    bar:SetWidth(chain and 300 or blue and 300 or area and 200 or 230)
     barText:SetText(st.text)
     st.shown = true
     bar:Show()
@@ -625,7 +639,12 @@ function UI:RenderBar()
     st.title = t.title
     arrowName:SetText(t.title)
     local alpha = 1
-    if t.kind == "w" and not t.distance then
+    if t.paused then                                  -- Chain Run (595): the next step needs a higher level (K4)
+        st.dist = t.what
+        arrowDist:SetText(t.what)
+        wantHeading = nil
+        arrowTex:SetVertexColor(GREY[1], GREY[2], GREY[3])
+    elseif t.kind == "w" and not t.distance then
         st.dist = t.what
         arrowDist:SetText(t.what)
         wantHeading = nil
@@ -642,7 +661,8 @@ function UI:RenderBar()
         if not t.near and OMQ.Arrow and OMQ.Arrow.StraightTag then st.dist = st.dist .. OMQ.Arrow.StraightTag() end
         arrowDist:SetText(st.dist)
         wantHeading = t.heading
-        if blue then arrowTex:SetVertexColor(BLUE[1], BLUE[2], BLUE[3])
+        if chain then arrowTex:SetVertexColor(PURPLE[1], PURPLE[2], PURPLE[3])
+        elseif blue then arrowTex:SetVertexColor(BLUE[1], BLUE[2], BLUE[3])
         elseif area then arrowTex:SetVertexColor(AREA[1], AREA[2], AREA[3])
         else arrowTex:SetVertexColor(1, 0.82, 0.25) end
         if t.near and OMQ.Arrow and OMQ.Arrow.NearAlpha then alpha = OMQ.Arrow.NearAlpha(t.straight) end
@@ -687,7 +707,10 @@ local function buildCard()
     cardText:SetPoint("TOP", 0, -50)
     cardMore = button(card, "One more?", 120, 24)
     cardMore:SetPoint("BOTTOMLEFT", 24, 12)
-    cardMore:SetScript("OnClick", function() UI:HideCard(); UI:Open() end)
+    cardMore:SetScript("OnClick", function()
+        UI:HideCard()
+        if UI._card and UI._card.chain and OMQ.ChainRunUI then OMQ.ChainRunUI:Open() else UI:Open() end   -- "Next chain" (595)
+    end)
     local close = button(card, "Close", 100, 24)
     close:SetPoint("BOTTOMRIGHT", -24, 12)
     close:SetScript("OnClick", function() UI:HideCard() end)
@@ -706,13 +729,19 @@ function UI:ShowCard(done, secs, r)
     if not card then buildCard() end
     local dungeon = r and r.kind == "dungeon"
     local area = r and r.kind == "area"
-    local col = dungeon and BLUE or area and AREA or GOLD
+    local chain = r and r.kind == "chain"
+    local col = chain and PURPLE or dungeon and BLUE or area and AREA or GOLD
     card.border:SetColorTexture(col[1], col[2], col[3], 1)
     cardTitle:SetTextColor(col[1], col[2], col[3])
-    card.head:SetText(dungeon and "DUNGEON RUN" or area and "AREA RUN" or "QUEST RUN")
+    card.head:SetText(chain and "CHAIN RUN" or dungeon and "DUNGEON RUN" or area and "AREA RUN" or "QUEST RUN")
     local text = string.format("%d quest%s in %s", done, done == 1 and "" or "s", UI.FormatTime(secs))
-    local head = dungeon and "All dungeon quests collected!" or area and "Zone done!" or "Quest Run done!"
-    if area then
+    local head = chain and "Chain done!" or dungeon and "All dungeon quests collected!" or area and "Zone done!" or "Quest Run done!"
+    if chain then                                    -- Chain Run (595): the rewards and the time, "Next chain" (K8)
+        cardTitle:SetText(head)
+        text = (r.name or "?") .. " - " .. text .. ((r.rewards and r.rewards ~= "") and ("\n" .. r.rewards) or "")
+        if cardMore.SetText then cardMore:SetText("Next chain") end
+        cardMore:Show()
+    elseif area then
         cardTitle:SetText(head)
         text = (OMQ.AreaRun and OMQ.AreaRun.ZoneName(r.zone) or "?") .. " - " .. text
         cardMore:Hide()
@@ -722,10 +751,11 @@ function UI:ShowCard(done, secs, r)
         cardMore:Hide()
     else
         cardTitle:SetText("Quest Run done!")
+        if cardMore.SetText then cardMore:SetText("One more?") end
         cardMore:Show()
     end
     cardText:SetText(text)
-    UI._card = { text = text, title = head, dungeon = dungeon, area = area }
+    UI._card = { text = text, title = head, dungeon = dungeon, area = area, chain = chain }
     card:Show()
     cardUntil = GetTime() + 30
     if OMQ.Unlock and OMQ.Unlock.Fanfare then pcall(OMQ.Unlock.Fanfare)
@@ -753,4 +783,5 @@ OMQ:On("QUEST_RUN_CHANGED", function()
 end)
 OMQ:On("QUEST_RUN_PREP", function() if UI:IsOpen() and mode == "choose" then UI:Render() end end)
 OMQ:On("QUEST_RUN_DONE", function(done, secs, r) UI:Close(); UI:ShowCard(done, secs, r) end)
+OMQ:On("CHAIN_RUN_CHANGED", function() UI:RenderBar() end)
 OMQ:On("SETTINGS_CHANGED", function() applyStyle() end)

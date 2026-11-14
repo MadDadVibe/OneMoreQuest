@@ -749,6 +749,7 @@ function R:Start(plan)
         return false
     end
     if run then closeRun("replaced") end      -- one run at a time (476)
+    if OMQ.ChainRun and OMQ.ChainRun:Active() then OMQ.ChainRun:End("replaced") end   -- the Chain Run too (595)
     local g = myGuid() or "?"
     run = newRun(tostring(math.random(100000, 999999)), g)
     run.pool = prep and prep.pool or {}

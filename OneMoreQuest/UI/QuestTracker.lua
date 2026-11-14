@@ -253,7 +253,28 @@ local DEMO = {
 
 -- during a Quest Run or a Dungeon Run the card stays on the screen the whole time (481): without a quest
 -- card of the group it shows the run's current stop, so the run bar and the arrow have their place
+-- the Chain Run (595): its card shows the step, what to do there and the steps of the other dads
+function U.ChainView()
+    local C = OMQ.ChainRun
+    if moveMode or not (C and C:Active()) then return nil end
+    local ok, t = pcall(C.Target, C)
+    if not ok then t = nil end
+    local rows = { { text = t and t.what or "all steps done", cells = {} } }
+    if t and t.enemy then rows[#rows + 1] = { text = "|cffff8a6aenemy zone - watch out|r", cells = {} } end
+    local others = C:Others()
+    if #others > 0 then
+        local parts = {}
+        for _, o in ipairs(others) do parts[#parts + 1] = string.format("%s %d/%d", o.name, o.done, o.n) end
+        rows[#rows + 1] = { text = "Dads: " .. table.concat(parts, ", "), cells = {} }
+    end
+    local title = t and t.title or ""
+    return { run = "CHAIN RUN", title = title, level = t and string.format("%d/%d", t.step, t.n) or nil,
+             showNav = false, stamp = false, cols = {}, rows = rows }
+end
+
 function U.RunView()
+    local cv = U.ChainView()
+    if cv then return cv end
     local R = OMQ.QuestRun
     if moveMode or not (R and R:Active()) then return nil end
     local r = R:Run()
@@ -283,6 +304,8 @@ function U:Render()
     for _, t in ipairs(texs) do t:Hide() end
 
     if view.run then header:SetText(view.run) else header:SetText("GROUP QUEST") end
+    local tc = (view.run == "CHAIN RUN") and (OMQ.ChainRunUI and OMQ.ChainRunUI.TEXT) or GOLD   -- purple title (595)
+    title:SetTextColor(tc[1], tc[2], tc[3])
     title:SetText(view.title or "")
     level:SetText(view.level and ("[" .. view.level .. "]") or "")
     local cols = moveMode and {} or view.cols
@@ -346,18 +369,21 @@ function U:Render()
         y = y - ROW_H
     end
     frame:SetSize(width, -y + 10)
-    local running = (grind ~= nil) or (OMQ.QuestRun and OMQ.QuestRun:Active() and not moveMode)
+    local chain = not moveMode and not grind and OMQ.ChainRun and OMQ.ChainRun:Active() or false
+    local running = (grind ~= nil) or chain or (OMQ.QuestRun and OMQ.QuestRun:Active() and not moveMode)
     for _, e in ipairs(runEdges) do if running then e:Show() else e:Hide() end end
     U.runFrame = running and true or false
     -- the Dungeon Run's frame is blue instead of gold (476)
     local r = running and not grind and OMQ.QuestRun:Run()
     local blue = r and r.kind == "dungeon" or false
     local area = r and r.kind == "area" or false          -- the Area Run's frame is green (491)
-    local col = grind and OMQ.GrindUI.RED or blue and BLUE or area and (OMQ.QuestRunUI and OMQ.QuestRunUI.AREA or { 0.33, 0.84, 0.40 }) or GOLD
+    if chain then r, blue, area = nil, false, false end
+    local col = grind and OMQ.GrindUI.RED or chain and (OMQ.ChainRunUI and OMQ.ChainRunUI.PURPLE or { 0.66, 0.33, 0.94 }) or blue and BLUE or area and (OMQ.QuestRunUI and OMQ.QuestRunUI.AREA or { 0.33, 0.84, 0.40 }) or GOLD
     U.runGrind = grind ~= nil
     for _, e in ipairs(runEdges) do e:SetColorTexture(col[1], col[2], col[3], 1) end
     if topEdge then topEdge:SetColorTexture(col[1], col[2], col[3], 1) end
     U.runBlue = blue
+    U.runChain = chain
     U.runArea = area
 
     if view.stamp then
@@ -385,6 +411,7 @@ OMQ:On("QTRACK_CHANGED", function() U:Render() end)
 OMQ:On("SETTINGS_CHANGED", function() U:Render() end)
 OMQ:On("QUEST_RUN_CHANGED", function() U:Render() end)
 OMQ:On("GRIND_CHANGED", function() U:Render() end)
+OMQ:On("CHAIN_RUN_CHANGED", function() U:Render() end)
 OMQ:On("MOVE_MODE", function(on)
     moveMode = on and true or false
     if not frame then return end
