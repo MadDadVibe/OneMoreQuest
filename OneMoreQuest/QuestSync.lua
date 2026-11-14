@@ -7,6 +7,10 @@
 -- Inside a dungeon or raid nothing is shared automatically (decision 409): quests accepted there are
 -- not pushed, and a round that falls inside (a dad reloads or reconnects) waits until I am outside
 -- again. In combat a waiting push is held until the fight is over.
+-- Zone sync (decision 600): when every member of the group has been in the same zone for 10 s, a round
+-- runs for that zone only: quests under the zone's header in the quest log, quests with objectives there
+-- (QuestPlaces) and quests the game marks on the zone's map. Once per gathering; again only after the group
+-- was apart and met there again, at most every 10 minutes per zone. Same rules as the round by hand.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -19,11 +23,18 @@ local CHANGE_DELAY = 0.2        -- seconds to wait after the quest log changed
 local HANDOFF_AFTER = 3         -- seconds after the last push until the next player starts
 local HANDOFF_TIMEOUT = 60      -- the next player starts anyway after this long
 local ASK_WAIT = 2              -- seconds to wait for the answers "which of these can you take" (decision 297)
+local ZONE_STABLE = 10          -- the whole group must be in one zone this long (decision 600)
+local ZONE_AGAIN = 600          -- at most one zone round per zone in this many seconds
+local ZONE_CHECK = 1            -- seconds between two checks of the group's zone
+local POS_FRESH = 15            -- a position message of a dad counts this long
 
 local Q = {}
 OMQ.QuestSync = Q
 
 local myIds, myTitles = {}, {}        -- questID -> true / title
+local myHeaders = {}                  -- questID -> quest log header above it (decision 600)
+local readHeaders = {}
+local zone = { at = nil, since = nil, done = nil, last = {}, checkAt = 0 }   -- zone sync state (decision 600)
 local lastIds                         -- ids of the last list we sent
 local pushQueue = {}
 local armed = {}                      -- questID -> expires at (GetTime)
@@ -55,14 +66,19 @@ end
 -- Own quest log
 ----------------------------------------------------------------------
 function Q:ReadLog()
-    local ids, titles = {}, {}
+    local ids, titles, headers = {}, {}, {}
+    readHeaders = headers                 -- the headers of the last read (decision 600; ReadLog keeps two results)
     if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetInfo) then return ids, titles end
     local num = C_QuestLog.GetNumQuestLogEntries()
+    local header
     for i = 1, num do
         local info = C_QuestLog.GetInfo(i)
-        if info and not info.isHeader and not info.isHidden and info.questID and info.questID > 0 then
+        if info and info.isHeader then
+            header = type(info.title) == "string" and not (issecretvalue and issecretvalue(info.title)) and info.title or nil
+        elseif info and not info.isHidden and info.questID and info.questID > 0 then
             ids[info.questID] = true
             titles[info.questID] = info.title
+            headers[info.questID] = header
         end
     end
     return ids, titles
@@ -189,13 +205,14 @@ end
 ----------------------------------------------------------------------
 function Q:Refresh(force)
     local ids, titles = self:ReadLog()
+    local headers = readHeaders
     local added
     if lastIds then
         for id in pairs(ids) do
             if not lastIds[id] then added = added or {}; added[#added + 1] = id end
         end
     end
-    myIds, myTitles = ids, titles
+    myIds, myTitles, myHeaders = ids, titles, headers or {}
     if force or not sameSet(ids, lastIds) then
         lastIds = ids
         sendList()
@@ -248,7 +265,7 @@ function Q:ShareNow()
     return true
 end
 
-function Q:StartRound()
+function Q:StartRound(zoneID)
     round = nil
     if not OMQ:QuestSyncOn() or not OMQ:GetChannel() then return end
     local me = OMQ:GetSelf()
@@ -258,11 +275,115 @@ function Q:StartRound()
     local mine
     for i, guid in ipairs(order) do if guid == me.guid then mine = i end end
     round = { started = false, waitFor = mine and mine > 1 and order[mine - 1] or nil,
-              deadline = GetTime() + HANDOFF_TIMEOUT }
+              deadline = GetTime() + HANDOFF_TIMEOUT, zone = zoneID }
     -- the player before me may have finished already
     local heard = round.waitFor and doneAt[round.waitFor]
     if not round.waitFor or (heard and GetTime() - heard < HANDOFF_TIMEOUT) then self:BeginTurn() end
 end
+
+----------------------------------------------------------------------
+-- Zone sync (decision 600): the whole group in one zone -> a round for that zone's quests
+----------------------------------------------------------------------
+local function num(v) return type(v) == "number" and not (issecretvalue and issecretvalue(v)) end
+
+local function mapInfo(map)
+    if not (map and C_Map and C_Map.GetMapInfo) then return nil end
+    local ok, i = pcall(C_Map.GetMapInfo, map)
+    return ok and type(i) == "table" and i or nil
+end
+
+-- the zone (or capital city) a map belongs to; a cave or a part of a zone counts as the zone
+function Q.ZoneOf(map)
+    if not num(map) or map == 0 then return nil end
+    if OMQ.AreaRun and OMQ.AreaRun.ZoneOf then return OMQ.AreaRun.ZoneOf(map) end
+    local zoneType = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
+    local m, guard = map, 0
+    while m and guard < 6 do
+        local i = mapInfo(m)
+        if not i then break end
+        if i.mapType == zoneType then return m end
+        local p = i.parentMapID
+        if not num(p) or p == 0 or p == m then break end
+        m, guard = p, guard + 1
+    end
+    return map
+end
+
+local function zoneName(z)
+    local i = mapInfo(z)
+    if i and type(i.name) == "string" and i.name ~= "" and not (issecretvalue and issecretvalue(i.name)) then return i.name end
+    return nil
+end
+Q.ZoneName = zoneName
+
+-- the map of a group member: his unit, else his last position message
+local function unitMap(unit)
+    local map = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit(unit)
+    if num(map) and map > 0 then return map end
+    local guid = UnitGUID and UnitGUID(unit)
+    local u = guid and OMQ.users[guid]
+    if u and u.pos and num(u.pos.map) and u.pos.map > 0 and GetTime() - (u.pos.at or 0) <= POS_FRESH then
+        return u.pos.map
+    end
+    return nil
+end
+
+-- The zone every online member of my party is in, or nil (apart, unknown, alone, in a raid).
+-- Members without the addon count too; at least one other dad with the addon must be there.
+function Q.GroupZone()
+    if IsInRaid and IsInRaid() then return nil end
+    local n = GetNumGroupMembers and GetNumGroupMembers() or 0
+    if n < 2 then return nil end
+    local z = Q.ZoneOf(unitMap("player"))
+    if not z then return nil end
+    for i = 1, n - 1 do
+        local unit = "party" .. i
+        if UnitExists and UnitExists(unit) and not (UnitIsConnected and UnitIsConnected(unit) == false) then
+            if Q.ZoneOf(unitMap(unit)) ~= z then return nil end
+        end
+    end
+    local me = OMQ:GetSelf()
+    for guid, u in pairs(OMQ.users) do
+        if guid ~= (me and me.guid) and u.quests and OMQ:IsOnline(u) then return z end
+    end
+    return nil
+end
+
+-- Does this quest of my log belong to the zone? Header in the quest log, objectives there (QuestPlaces),
+-- or the game marks it on the zone's map (new Forever quests the data does not know).
+function Q.ZoneQuest(id, z)
+    local name = zoneName(z)
+    if name and myHeaders[id] == name then return true end
+    local d = OMQ.QuestPlaces and OMQ.QuestPlaces[id]
+    for _, spot in ipairs(d and d[9] or {}) do
+        if spot[1] == z or Q.ZoneOf(spot[1]) == z then return true end
+    end
+    if C_QuestLog and C_QuestLog.GetQuestsOnMap then
+        local ok, list = pcall(C_QuestLog.GetQuestsOnMap, z)
+        if ok and type(list) == "table" then
+            for _, q in ipairs(list) do
+                if type(q) == "table" and q.questID == id then return true end
+            end
+        end
+    end
+    return false
+end
+
+-- Once a second: is the whole group gathered in one zone for 10 s? Then one round for that zone. Again only
+-- after the group was apart, and at most every 10 minutes per zone (a gathering within that time is skipped).
+function Q:CheckZone(now)
+    if not OMQ:QuestSyncOn() or not OMQ:GetChannel() then zone.at, zone.since, zone.done = nil, nil, nil; return end
+    local z = Q.GroupZone()
+    if z ~= zone.at then zone.at, zone.since = z, now end
+    if z ~= zone.done then zone.done = nil end
+    if not z or zone.done or round or now - zone.since < ZONE_STABLE then return end
+    zone.done = z
+    local last = zone.last[z]
+    if last and now - last < ZONE_AGAIN then return end
+    zone.last[z], zone.lastZone, zone.lastAt = now, z, now
+    self:StartRound(z)
+end
+Q._zone = zone
 
 -- My turn: every quest of mine that a dad lacks AND can take is shared once (decision 297).
 -- First I ask the dads which of these quests they can take (not done before, pre-quests done, level,
@@ -274,7 +395,9 @@ function Q:BeginTurn()
     if OMQ:QuestShareOn() then
         local ids = {}
         for id in pairs(myIds) do
-            if pushable(id) and somebodyLacks(id) then ids[#ids + 1] = id end
+            if pushable(id) and somebodyLacks(id) and (not round.zone or Q.ZoneQuest(id, round.zone)) then
+                ids[#ids + 1] = id
+            end
         end
         table.sort(ids)
         if #ids == 0 then return end
@@ -367,10 +490,17 @@ local function processQueues()
     local inside = inInstance()
     if inside then
         if #pushQueue > 0 then pushQueue = {} end
-        if round then round = nil; roundAfterInstance = true end
+        if round then                                             -- a zone round is simply dropped (600)
+            if not round.zone then roundAfterInstance = true end
+            round = nil
+        end
     elseif roundAfterInstance then                                -- asked for inside: now, outside (decision 412)
         roundAfterInstance = nil
         Q:ShareNow()
+    end
+    if not inside and now >= zone.checkAt then
+        zone.checkAt = now + ZONE_CHECK
+        Q:CheckZone(now)
     end
     -- pushes: announce first, push SHARE_WAIT seconds later; held during a fight
     local item = pushQueue[1]
@@ -485,6 +615,12 @@ OMQ:RegisterCommand("quests", function(arg)
     OMQ:Print(string.format("quest sync %s, %d quests in your log", OMQ.db.options.questSync and "on" or "off", n))
     print("  automatic sharing " .. (OMQ.db.options.autoShare ~= false and "on" or "off")
         .. (inInstance() and " (paused in this dungeon)" or ""))
+    if zone.lastZone then
+        print(string.format("  last zone sync: %s, %d min ago", zoneName(zone.lastZone) or ("zone " .. zone.lastZone),
+            math.floor((GetTime() - zone.lastAt) / 60)))
+    else
+        print("  last zone sync: none yet (the whole group in one zone for 10 s)")
+    end
     for guid, u in pairs(OMQ.users) do
         local count = 0
         for _ in pairs(u.quests or {}) do count = count + 1 end
