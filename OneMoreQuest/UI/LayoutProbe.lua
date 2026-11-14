@@ -15,6 +15,7 @@ LP.FRAMES = {
     { key = "alerts",   label = "Alert cards",             frame = "OneMoreQuestAlerts",       saved = function() return OMQ.db.alerts.point end },
     { key = "bar",      label = "Guidance bar",            frame = "OneMoreQuestGuideBar",     saved = function() return OMQ.db.guide.point end },
     { key = "checkbar", label = "Check bar (follows the guidance bar)", frame = "OneMoreQuestCheckBar", saved = function() return nil end },
+    { key = "runbar",   label = "Run bar (sits on the check bar)", frame = "OneMoreQuestRunBar", saved = function() return nil end },
     { key = "qtrack",   label = "Quest tracker",           frame = "OneMoreQuestQuestTracker", saved = function() return OMQ.db.qtrack and OMQ.db.qtrack.point end },
     { key = "chat",     label = "Hidden chat messages",    frame = "OneMoreQuestChatWindow",   saved = function() local p = OMQDB.chatPos; return p and { p.point, p.relPoint, p.x, p.y } end },
     { key = "lifetime", label = "Lifetime statistics",     frame = "OneMoreQuestLifetime",     saved = function() return OMQ.db.lifetimeWindow end },

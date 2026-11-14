@@ -10,10 +10,11 @@ local SIZE, GAP, PAD = 34, 3, 4        -- 20 % larger than before (decision 193)
 
 local CB = {}
 OMQ.CheckBar = CB
+CB.HEIGHT = SIZE + PAD * 2              -- the run bar sits on top of it (decision 602)
 CB.COLLAPSED = 1                       -- only the Group Check is always shown (decision 302: no One more quest icon)
 
 local frame, buttons = nil, {}       -- buttons[id] = button (created once)
-local items = {}                      -- the items shown now: fixed ones, then the dungeons for my level
+local items = {}                      -- the items shown now (the runs and dungeons are in the run bar, 602)
 local expanded, suppressed = false, false
 local flipped = false
 
@@ -24,14 +25,6 @@ local ITEMS = {
       icon = MEDIA .. "Icon_Check" },
     { id = "vote", label = "Group vote (/omq)", tip = "Click: start a vote - One more quest! (the arrow then leads the group to the next quest) or Bed time",
       icon = MEDIA .. "Icon_Vote" },
-    { id = "run", label = "Quest Run", tip = "Click: pick 1, 3, 5 or 7 quests - OMQ plans the shortest way and a small arrow above the quest tracker leads you",   -- decision 465
-      icon = MEDIA .. "Icon_Run" },
-    { id = "area", label = "Area Run", tip = "Click: pick a zone - OMQ plans one way through all its quests and their follow-ups",   -- decision 491, from level 5
-      icon = MEDIA .. "Icon_Area", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("area") end },
-    { id = "grind", label = "Grind Run", tip = "Click: pick a zone or grind right here - the arrow leads you to a spot full of mobs, then 30 or 60 minutes",   -- decision 518, from level 10
-      icon = MEDIA .. "Icon_Grind", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("grind") end },
-    { id = "chain", label = "Chain Run", tip = "Click: quest chains every dad should do (the Cozy Sleeping Bag, the Night Watchman's Torch) - OMQ leads you step by step",   -- decision 595
-      icon = MEDIA .. "Icon_Chain" },
     { id = "old", label = "Old Quest Check", tip = "Click: the grey quests in your log - abandon them with one click",   -- decision 601
       icon = MEDIA .. "Icon_Old" },
     { id = "bet", label = "Bet Check", tip = "Click: start a bet with the dads",          -- decision 170, from level 5
@@ -46,18 +39,11 @@ local ITEMS = {
       icon = MEDIA .. "Icon_Rhythm", show = function() return OMQ.Rhythm and OMQ.Rhythm:Unlocked() end },
 }
 
-local pendingLevel
 local badges = {}                     -- small numbers on an icon: badges.old = grey quests in the log (601)
 local function currentItems()
     local list = {}
     for _, it in ipairs(ITEMS) do if not it.show or it.show() then list[#list + 1] = it end end
-    local level = math.max(UnitLevel and UnitLevel("player") or 1, pendingLevel or 0)   -- UnitLevel can lag behind PLAYER_LEVEL_UP
-    if OMQ.DungeonsForLevel and (not OMQ.Unlock or OMQ.Unlock:Has("dungeon")) then   -- the dungeon checks from level 13
-        for _, d in ipairs(OMQ:DungeonsForLevel(level)) do
-            list[#list + 1] = { id = "d:" .. d.key, label = d.name, dungeon = d.key, text = d.abbr,
-                tip = "Click: Group Check with the dungeon quests, the entrance and who is how far from it (level " .. d.min .. "-" .. d.max .. ")" }
-        end
-    end
+    -- the runs and the dungeon buttons live in the run bar above (UI/RunBar.lua, decision 602)
     return list
 end
 
@@ -96,33 +82,13 @@ local function layout()
         end
     end
     for id, b in pairs(buttons) do if not used[id] then b:Hide() end end
-    -- a purple dot: a chain became ready for me (595, K4); on the Group Check while the bar is closed
-    local new = OMQ.ChainRun and OMQ.ChainRun.NewForMe and OMQ.ChainRun.NewForMe() or false
-    CB._dot = new
-    for i, it in ipairs(items) do
-        local b = buttons[it.id]
-        if b and b.dot then
-            local on = new and ((it.id == "chain" and expanded) or (i == 1 and not expanded))
-            if on then b.dot:Show() else b.dot:Hide() end
-        end
-    end
 end
 
 local function click(item)
     if item.id == "ready" then
         OMQ.Ready:Toggle()
-    elseif item.dungeon then
-        OMQ.Ready:Toggle(item.dungeon)
     elseif item.id == "vote" then
         if OMQ.Vote then OMQ.Vote:Start() end
-    elseif item.id == "run" then
-        if OMQ.QuestRunUI then OMQ.QuestRunUI:Toggle() end
-    elseif item.id == "area" then
-        if OMQ.AreaRunUI then OMQ.AreaRunUI:Toggle() end
-    elseif item.id == "grind" then
-        if OMQ.GrindUI then OMQ.GrindUI:Toggle() end
-    elseif item.id == "chain" then
-        if OMQ.ChainRunUI then OMQ.ChainRunUI:Toggle() end
     elseif item.id == "old" then
         if OMQ.OldQuests then OMQ.OldQuests:Toggle() end
     elseif item.id == "bet" then
@@ -172,11 +138,6 @@ function makeButton(item)
         b.label:SetTextColor(0.94, 0.78, 0.38)
     end
     b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-    b.dot = b:CreateTexture(nil, "OVERLAY")
-    b.dot:SetSize(9, 9)
-    b.dot:SetPoint("TOPRIGHT", 1, 1)
-    b.dot:SetColorTexture(0.66, 0.33, 0.94, 1)
-    b.dot:Hide()
     if item.id == "old" then                                   -- the number of grey quests (decision 601)
         b.count = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         b.count:SetPoint("BOTTOMRIGHT", -2, 2)
@@ -223,6 +184,7 @@ local function follow(guide)
     if not frame then return end
     if guide and guide:IsShown() then frame:Show() else frame:Hide() end
     layout()
+    if OMQ.RunBar and OMQ.RunBar.Follow then OMQ.RunBar:Follow(guide) end   -- the run bar on top (602)
 end
 
 function CB:IsExpanded() return expanded end
@@ -245,7 +207,6 @@ function CB:Badge(id) return badges[id] end
 local lvl = CreateFrame("Frame")
 for _, e in ipairs({ "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do pcall(lvl.RegisterEvent, lvl, e) end
 lvl:SetScript("OnEvent", function(_, e, newLevel)
-    if e == "PLAYER_LEVEL_UP" then pendingLevel = tonumber(newLevel) end
     if frame then layout() end
 end)
 

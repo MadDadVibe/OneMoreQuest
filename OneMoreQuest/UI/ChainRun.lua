@@ -291,7 +291,7 @@ end)
 
 OMQ:On("CHAIN_RUN_CHANGED", function()
     if UI:IsOpen() then UI:Render() end
-    if OMQ.CheckBar and OMQ.CheckBar.Refresh then OMQ.CheckBar:Refresh() end
+    if OMQ.RunBar and OMQ.RunBar.Refresh then OMQ.RunBar:Refresh() end
 end)
 
 OMQ:On("CHAIN_RUN_DONE", function(chain, n, secs)

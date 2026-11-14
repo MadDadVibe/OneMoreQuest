@@ -436,7 +436,8 @@ function UI:RefreshStrip()
     if not strip then return end
     local list = B():Running()
     if #list == 0 then strip:Hide(); return end
-    local cb = _G.OneMoreQuestCheckBar
+    local cb = _G.OneMoreQuestRunBar                      -- on top of the run bar (602), else the check bar
+    if not (cb and cb.IsShown and cb:IsShown()) then cb = _G.OneMoreQuestCheckBar end
     strip:ClearAllPoints()
     if cb then strip:SetPoint("BOTTOMLEFT", cb, "TOPLEFT", 0, 2)
     else strip:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 160) end
