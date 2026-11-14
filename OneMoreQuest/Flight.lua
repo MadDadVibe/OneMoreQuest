@@ -49,6 +49,10 @@ end
 ----------------------------------------------------------------------
 local lastSent, lastSentAt = nil, 0
 local function onTakeTaxi(slot)
+    if pending then        -- own flight taken (decision 599): the follow is over
+        pending = nil
+        OMQ:Fire("FLIGHT_PENDING")
+    end
     if not enabled() then return end
     local dest = nodeName(slot)
     if not dest then return end
@@ -90,7 +94,7 @@ if OMQ.Alerts then
         return { {
             key = "flight:" .. (p.guid or "") .. ":" .. math.floor(p.at),
             title = p.who .. " flies to " .. p.dest, tag = "FLIGHT",
-            sub = "Click: arrow to the nearest flight master - you follow him there",
+            sub = "Click: arrow to the nearest flight master - Shift + right click him to follow",
             text = p.who .. " flies to " .. p.dest, go = "flight",
             icon = "Interface\\Icons\\Ability_Mount_Gryphon_01", color = { 0.89, 0.71, 0.29 },
             open = function() F:Extend() end,
@@ -140,36 +144,31 @@ local function follow()
     end
 end
 
--- decision 456: holding Shift while talking to the flight master (or while picking its
--- "fly" gossip option) skips the follow-flight; the pending follow is dropped
-local SKIP_SECONDS = 15
-local skipUntil = 0
+-- decision 599 (reverses 456): the follow-flight happens only with Shift. Shift + right click
+-- on the flight master (Shift held at its gossip, kept 15 s until the flight map, or while the
+-- flight map opens, or in the short wait before the flight is taken) flies after the dad. A plain
+-- right click opens the flight map as normal; the pending follow stays, so the dad can close the
+-- map and Shift + right click again. Taking any flight yourself ends the pending follow.
+local ARM_SECONDS = 15
+local armUntil = 0
 local function shiftDown() return IsShiftKeyDown and IsShiftKeyDown() and true or false end
-local function skip()
-    local p = F:Pending()
-    pending = nil
-    skipUntil = 0
-    OMQ:Fire("FLIGHT_PENDING")
-    if OMQ.Alerts then OMQ.Alerts:Evaluate() end
-    if p then OMQ:Print("flight: Shift held, you do not follow " .. p.who) end
-end
-F._skip = skip
 
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("TAXIMAP_OPENED")
 frame:RegisterEvent("TAXIMAP_CLOSED")
 frame:RegisterEvent("GOSSIP_SHOW")
 frame:SetScript("OnEvent", function(_, event)
-    if event == "TAXIMAP_CLOSED" then skipUntil = 0 return end
+    if event == "TAXIMAP_CLOSED" then armUntil = 0 return end
     if not enabled() or not F:Pending() then return end
     if event == "GOSSIP_SHOW" then
-        if shiftDown() then skipUntil = GetTime() + SKIP_SECONDS end
+        armUntil = shiftDown() and (GetTime() + ARM_SECONDS) or 0
         return
     end
-    if shiftDown() or GetTime() < skipUntil then skip() return end
+    local armed = shiftDown() or GetTime() < armUntil
+    armUntil = 0
     -- give the taxi window a moment to fill its node list
     local function run()
-        if shiftDown() then skip() return end
+        if not (armed or shiftDown()) then return end     -- plain right click: normal flight map
         local ok, err = pcall(follow); if not ok then OMQ:Error("flight", err) end
     end
     if C_Timer and C_Timer.After then C_Timer.After(0.3, run) else run() end

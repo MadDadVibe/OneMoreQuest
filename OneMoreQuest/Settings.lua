@@ -308,7 +308,7 @@ local function allSections()
                   if OMQ.ThreatMeter then OMQ.ThreatMeter.Refresh() end
               end },
             { type = "check", label = "Follow group members on flights",
-              tip = "If a member flies somewhere, your flight master picks the same destination. Hold Shift when you talk to the flight master to not follow this time.",
+              tip = "If a member flies somewhere, your flight master picks the same destination. Hold Shift when you talk to the flight master to fly after him; without Shift the flight map opens as normal.",
               get = qolGet("flight"), set = qolSet("flight") },
             -- decision 515
             { type = "check", label = "Bag key opens the reagent bag too",
