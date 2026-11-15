@@ -19,7 +19,8 @@ T.ITEMS_KEPT = 200   -- items kept per run in the saved variables
 T.EV_MAX = 300       -- events kept per run
 T.RUNS_KEPT = 10
 T.HELPER_WAIT = 6    -- a search of the helper still on its way is waited for (as the price scan does, decision 448)
-T.mode = "omq"       -- "omq": the price scan's own search; "game": the search the game's window sends (fix 587)
+T.mode = "omq"       -- "omq": the price scan's own search, the form of the game's window (decision 604);
+                     -- "old": the search without quality filters the scan sent before - the server limits it
 
 T.EVENTS = { "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED", "AUCTION_HOUSE_BROWSE_FAILURE",
              "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED", "AUCTION_HOUSE_THROTTLED_MESSAGE_QUEUED",
@@ -52,13 +53,9 @@ function T.Classes()
     return out
 end
 function T.Subclasses(c)
-    local R = OMQ.PriceProbe
-    local list = R and R.Subclasses and R.Subclasses(c) or {}
+    local list = P() and P().Subclasses and P().Subclasses(c) or {}
     local out = {}
     for _, s in ipairs(list) do if type(s) == "number" then out[#out + 1] = s end end
-    if #out == 0 and P() and P().BY_SUBCLASS and P().BY_SUBCLASS[c] then
-        for _, s in ipairs(P().BY_SUBCLASS[c]) do out[#out + 1] = s end
-    end
     return out
 end
 -- the name of a category in the client's language, or its number
@@ -76,7 +73,7 @@ function T.Name(c, s)
     return (name or "category") .. " (" .. c .. ")"
 end
 function T.Query(c, s, mode)
-    if (mode or T.mode) == "game" and OMQ.PriceProbe and OMQ.PriceProbe.GameQuery then return OMQ.PriceProbe.GameQuery(c, s) end
+    if (mode or T.mode) == "old" and OMQ.PriceProbe and OMQ.PriceProbe.OldQuery then return OMQ.PriceProbe.OldQuery(c, s) end
     if P() and P().QUERY then return P().QUERY({ classID = c, subClassID = s }) end
     return { searchString = "", sorts = {}, itemClassFilters = { { classID = c, subClassID = s } } }
 end
@@ -196,7 +193,7 @@ end
 
 local function report(r)
     local L = {}
-    L[#L + 1] = string.format("%s - %s search - %s", r.label, r.mode == "game" and "game window" or "OMQ", r.why or "running")
+    L[#L + 1] = string.format("%s - %s search - %s", r.label, r.mode == "old" and "old (no quality filters)" or "OMQ", r.why or "running")
     L[#L + 1] = "query: " .. (r.query or "?")
     L[#L + 1] = "SendBrowseQuery returned: " .. (r.ret or "?")
     L[#L + 1] = string.format("first answer after %s, %s in all, %d pages, %d lines, %d items%s, complete: %s",
@@ -408,7 +405,7 @@ local function build()
     mode:SetSize(200, 22)
     mode:SetPoint("TOPLEFT", 12, -30)
     mode:SetScript("OnClick", function()
-        T.mode = (T.mode == "omq") and "game" or "omq"
+        T.mode = (T.mode == "omq") and "old" or "omq"
         T.Paint()
     end)
     f.mode = mode
@@ -455,7 +452,7 @@ end
 
 function T.Paint()
     if not frame or not frame:IsShown() then return end
-    frame.mode:SetText(T.mode == "game" and "Search: like the game window" or "Search: OMQ (price scan)")
+    frame.mode:SetText(T.mode == "old" and "Search: old (no quality filters)" or "Search: OMQ (price scan)")
     if run then
         frame.status:SetText(string.format("searching %s: %.0f s, page %d", run.label, now() - run.t0, run.pages or 0))
     else

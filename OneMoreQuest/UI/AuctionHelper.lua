@@ -675,6 +675,13 @@ end
 function AH._pump()
     local A = CA()
     if not (A and A.SendSearchQuery) or not AH.open then return end
+    -- the price scan of the whole house owns the result list (decision 341). Decision 604: nothing at all is sent
+    -- while it runs - also no search asked again after a timeout, which replaced the scan's list; a search still
+    -- waiting for its answer is asked again when the scan is over.
+    if OMQ.Prices and OMQ.Prices.Busy() then
+        if asking then asking.resend, askedAt = true, now() end
+        return
+    end
     if AH.Manual() then                                -- the dad's own window goes first (decision 427)
         if asking then asking.resend, askedAt = true, now() end   -- his answers are not ours: asked again afterwards
         return
@@ -718,7 +725,6 @@ function AH._pump()
     end
     if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
     if AH.Busy() then return end                       -- a post or a purchase goes first (decision 281)
-    if OMQ.Prices and OMQ.Prices.Busy() then return end   -- the price scan of the whole house owns the result list (decision 341)
     -- a weapon or bag the dad wants to buy is searched again first, also while he clicks (decision 431)
     local cq = OMQ.AuctionBuy and OMQ.AuctionBuy.CheckQuery and OMQ.AuctionBuy.CheckQuery()
     if cq then

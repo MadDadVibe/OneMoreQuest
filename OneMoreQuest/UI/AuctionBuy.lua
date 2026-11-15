@@ -1000,6 +1000,17 @@ end
 
 -- (the dump of the whole house no longer feeds the weapons, bags and stock rows: decision 431)
 
+-- Decision 604: a browse search of the buy mode in the form of the game's own window (all quality filters, one
+-- class filter per subcategory, a level range). The server of Forever limits browse searches without quality
+-- filters: after a few of them it answers with empty lists for a while, and the price scan lost its categories.
+function B.BrowseQuery(class, sub, minLevel, maxLevel, sortOrder)
+    local sorts = { { sortOrder = sortOrder, reverseSort = false } }
+    local PR = OMQ.Prices
+    if PR and PR.GameQuery then return PR.GameQuery(class, sub, minLevel, maxLevel, sorts) end
+    return { searchString = "", sorts = sorts, minLevel = minLevel, maxLevel = maxLevel,
+             itemClassFilters = { { classID = class, subClassID = sub } } }
+end
+
 -- the next search the auction helper's queue should send (after its own price checks)
 -- Decision 432: the weapon and bag searches go first. They are a handful of searches; the consumables can be
 -- dozens, and behind them the weapons and bags did not come for minutes.
@@ -1009,9 +1020,7 @@ function B.NextQuery()
         local lvl = level()
         browse.state = "asking wands"
         return { browse = true, key = "wands", onResult = function() onBrowse() end,
-                 query = { searchString = "", sorts = { { sortOrder = P, reverseSort = false } },
-                           minLevel = math.max(1, lvl - 8), maxLevel = lvl + B.WEAPON_LEVELS,
-                           itemClassFilters = { { classID = 2, subClassID = B.WAND_SUBCLASS } } } }
+                 query = B.BrowseQuery(2, B.WAND_SUBCLASS, math.max(1, lvl - 8), lvl + B.WEAPON_LEVELS, P) }
     end
     if B.want.weapons and browse.state == "idle" then
         local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
@@ -1019,9 +1028,7 @@ function B.NextQuery()
         browse.results = nil
         browse.state = "asking"
         return { browse = true, key = "browse", onResult = function() onBrowse() end,
-                 query = { searchString = "", sorts = { { sortOrder = P, reverseSort = false } },
-                           minLevel = math.max(1, lvl - 8), maxLevel = lvl + B.WEAPON_LEVELS,
-                           itemClassFilters = { { classID = 2 } } } }
+                 query = B.BrowseQuery(2, nil, math.max(1, lvl - 8), lvl + B.WEAPON_LEVELS, P) }
     end
     for _, c in ipairs(candidates) do
         if c.state == "price" then return c end
@@ -1031,8 +1038,7 @@ function B.NextQuery()
         local class = bagBrowse.state == "quivers" and 11 or 1
         bagBrowse.state = class == 1 and "asking" or "asking quivers"
         return { browse = true, key = "bags" .. class, onResult = function(q) onBagBrowse(q) end,
-                 query = { searchString = "", sorts = { { sortOrder = P, reverseSort = false } },
-                           itemClassFilters = { { classID = class } } } }
+                 query = B.BrowseQuery(class, nil, nil, nil, P) }
     end
     for _, c in ipairs(bagCands) do
         if c.state == "price" then return c end

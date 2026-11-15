@@ -3,6 +3,8 @@
 -- into OMQDB.priceProbe. It compares the price scan's own search (one class filter, no quality filters) with the
 -- search the game's own window sends (all quality filters, levels 0, one filter per subcategory), and it shows
 -- whether the server drops searches (AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED). The scan's price list is not touched.
+-- Decision 604: the measurement showed that the server limits the search without quality filters; the price scan
+-- uses the game window's form since then, the "old" steps stay to measure that limit again.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -30,44 +32,22 @@ R.SHORT = { AUCTION_HOUSE_BROWSE_RESULTS_UPDATED = "UPD", AUCTION_HOUSE_BROWSE_R
             AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED = "RESP", AUCTION_HOUSE_THROTTLED_SYSTEM_READY = "READY",
             AUCTION_HOUSE_CLOSED = "CLOSED", SEND = "SEND", MORE = "MORE" }
 
--- all quality filters, as the game's window has them by default
-function R.QualityFilters()
-    local F = Enum and Enum.AuctionHouseFilter
-    if not F then return {} end
-    local out = {}
-    for _, k in ipairs({ "PoorQuality", "CommonQuality", "UncommonQuality", "RareQuality", "EpicQuality", "LegendaryQuality" }) do
-        if F[k] ~= nil then out[#out + 1] = F[k] end
-    end
-    return out
-end
-
-function R.Subclasses(c)
-    local api = A()
-    local ok, list = pcall(function() return api and api.GetAuctionItemSubClasses and { api.GetAuctionItemSubClasses(c) } end)
-    if ok and type(list) == "table" and type(list[1]) == "table" then list = list[1] end
-    return ok and type(list) == "table" and list or {}
-end
+-- the quality filters and the subcategories of the game's window: the price scan's own (decision 604)
+function R.QualityFilters() return OMQ.Prices.QualityFilters() end
+function R.Subclasses(c) return OMQ.Prices.Subclasses(c) end
 
 local function sorts()
     local E = Enum and Enum.AuctionHouseSortOrder
     return { { sortOrder = E and E.Price or 0, reverseSort = false }, { sortOrder = E and E.Name or 1, reverseSort = false } }
 end
 
--- the scan's own search of a whole class (as the price scan asks it)
-function R.OldQuery(c)
-    return { searchString = "", sorts = sorts(), itemClassFilters = { { classID = c } } }
+-- the search without quality filters the price scan sent until decision 604 (the server limits it)
+function R.OldQuery(c, sub)
+    return { searchString = "", sorts = sorts(), itemClassFilters = { { classID = c, subClassID = sub } } }
 end
 
 -- the search the game's window sends for a category: one filter per subcategory, all qualities, levels 0
-function R.GameQuery(c, sub)
-    local f = {}
-    if sub then f[1] = { classID = c, subClassID = sub }
-    else
-        for _, s in ipairs(R.Subclasses(c)) do f[#f + 1] = { classID = c, subClassID = s } end
-        if #f == 0 then f[1] = { classID = c } end
-    end
-    return { searchString = "", minLevel = 0, maxLevel = 0, filters = R.QualityFilters(), sorts = sorts(), itemClassFilters = f }
-end
+function R.GameQuery(c, sub) return OMQ.Prices.GameQuery(c, sub) end
 
 function R.Steps()
     local s = { { name = "0 old", q = R.OldQuery(0) }, { name = "0 game", q = R.GameQuery(0) },
