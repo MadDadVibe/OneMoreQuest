@@ -2,6 +2,8 @@
 -- grey quest of my log (the game's colour: quest level below my level minus the green range), name, level and zone,
 -- each with a tick (all ticked, done ones too). One click on "Abandon N quests" abandons every ticked quest at once,
 -- no second question. The icon carries the number of grey quests. No chat lines: the window says what happened.
+-- Decision 603: when the log fills up to one below the game's maximum or the maximum (39/40, 40/40) the window opens
+-- by itself, only if a grey quest is there, after the fight; again only after the log was below that mark.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -231,16 +233,68 @@ function OQ:Close() if win then win:Hide() end end
 function OQ:IsOpen() return win and win:IsShown() and true or false end
 function OQ:Toggle() if OQ:IsOpen() then OQ:Close() else OQ:Open() end end
 
+-- the quests in my log (no headers, no hidden ones) and the most the game allows
+function OQ.LogCount()
+    local CQ = C_QuestLog
+    if not (CQ and CQ.GetNumQuestLogEntries and CQ.GetInfo) then return 0 end
+    local ok, num = pcall(CQ.GetNumQuestLogEntries)
+    if not ok or type(num) ~= "number" or isSecret(num) then return 0 end
+    local n = 0
+    for i = 1, num do
+        local okI, info = pcall(CQ.GetInfo, i)
+        if okI and type(info) == "table" and not info.isHeader and not info.isHidden then n = n + 1 end
+    end
+    return n
+end
+function OQ.MaxQuests()
+    for _, f in ipairs({ C_QuestLog and C_QuestLog.GetMaxNumQuestsCanAccept, GetMaxNumQuestsCanAccept }) do
+        local ok, m = pcall(f)
+        if ok and type(m) == "number" and not isSecret(m) and m > 1 then return m end
+    end
+    return 40
+end
+local function inCombat()
+    if InCombatLockdown and InCombatLockdown() then return true end
+    return UnitAffectingCombat and UnitAffectingCombat("player") and true or false
+end
+
+-- the log reached max - 1 or max (B1): open the window when a grey quest is there (B3), after the fight (B4)
+local wasFull, waitCombat = nil, false
+function OQ.CheckFull()
+    local n = OQ.LogCount()
+    local full = n >= OQ.MaxQuests() - 1
+    if wasFull == nil then                       -- the first reading after login only remembers the state
+        if n > 0 then wasFull = full end
+        return false
+    end
+    local reached = full and not wasFull
+    wasFull = full
+    if not reached then return false end
+    if OQ.Count() == 0 then return false end
+    if inCombat() then waitCombat = true; return false end
+    if not OQ:IsOpen() then OQ:Open() end
+    return true
+end
+function OQ._resetFull() wasFull, waitCombat = nil, false end
+local function afterCombat()
+    if not waitCombat then return end
+    waitCombat = false
+    if wasFull and OQ.Count() > 0 and not OQ:IsOpen() then OQ:Open() end
+end
+OQ._afterCombat = afterCombat
+
 -- the number on the check bar icon follows the log (at most every 2 s)
 local pending = false
 local function refreshBadge()
     pending = false
     if OMQ.CheckBar and OMQ.CheckBar.SetBadge then OMQ.CheckBar:SetBadge("old", OQ.Count()) end
+    OQ.CheckFull()
 end
 OQ._refreshBadge = refreshBadge
 local ev = CreateFrame("Frame")
-for _, e in ipairs({ "QUEST_LOG_UPDATE", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do pcall(ev.RegisterEvent, ev, e) end
-ev:SetScript("OnEvent", function()
+for _, e in ipairs({ "QUEST_LOG_UPDATE", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED" }) do pcall(ev.RegisterEvent, ev, e) end
+ev:SetScript("OnEvent", function(_, e)
+    if e == "PLAYER_REGEN_ENABLED" then afterCombat(); return end
     if pending then return end
     pending = true
     if C_Timer and C_Timer.After then C_Timer.After(2, refreshBadge) else refreshBadge() end
