@@ -32,6 +32,7 @@ local LABEL = {
     buffback = "Buff back a player who buffed you",
     soulstone = "Healer in a dungeon: ask the warlock for a Soulstone",
     ghostwolf = "Ghost Wolf while running (instant wolf)",
+    shadowform = "Shadowform missing (out of a fight)",
 }
 
 -- decision 586: the class tab. These alert rules live there instead of the alerts tab, and every item of the
@@ -41,6 +42,7 @@ local CLASS_RULES = {
     pet = { "HUNTER", "WARLOCK" },
     ammo = { "HUNTER" },
     ghostwolf = { "SHAMAN" },
+    shadowform = { "PRIEST" },
     soulstone = HEALERS,
     buffback = { "PRIEST", "MAGE", "DRUID", "PALADIN" },
 }
@@ -137,6 +139,7 @@ local function classItems()
           tip = "Fills the free room of the quiver or ammo pouch: arrows for a bow or crossbow, bullets for a gun. Never more than fits. Follows the master switch of the automations." },
     }))
     add(ruleItems("ghostwolf"))
+    add(ruleItems("shadowform"))
     -- decision 520: the target's nameplate glows when Shadow Word: Death would kill it
     add(mark({ "PRIEST" }, {
         { type = "check", label = "Shadow Word: Death kill glow",
