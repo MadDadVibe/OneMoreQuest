@@ -1344,7 +1344,7 @@ local function login()
 end
 
 ----------------------------------------------------------------------
--- /omq played: the game's /played time minus the AFK time OMQ counted
+-- /omq played: the game's /played time minus the AFK time and the capital city time OMQ counted
 ----------------------------------------------------------------------
 local PLAYED_WAIT = 10          -- seconds an answer to our own /played request is taken
 local playedAsked
@@ -1358,15 +1358,31 @@ function T.Dur(secs)
     return string.format("%dm", m)
 end
 
+-- capital cities (Classic map ids on WoW Forever): their active seconds come off /omq played too.
+-- b.maps[id].s holds active seconds only (AFK never lands there), so AFK in a city is taken off once.
+T.CITY_MAPS = { [1453] = true, [1454] = true, [1455] = true, [1456] = true, [1457] = true, [1458] = true }
+
+-- active seconds in capitals, a sub map of a city counts for its city
+function T.CitySecs(b)
+    local n = 0
+    for id, m in pairs(b.maps or {}) do
+        if type(m) == "table" and num(m.s) and m.s > 0 and (T.CITY_MAPS[id] or T.CITY_MAPS[zoneOf(id) or 0]) then
+            n = n + m.s
+        end
+    end
+    return n
+end
+
 -- the lines for /omq played; total = the game's played seconds
 function T.PlayedLines(total, b)
     local afk = math.min(b.afk or 0, total)
-    local pct = total > 0 and math.floor(afk / total * 100 + 0.5) or 0
-    local lines = { string.format("played %s - AFK %s (%d %%) = without AFK %s",
-        T.Dur(total), T.Dur(afk), pct, T.Dur(total - afk)) }
+    local city = math.min(T.CitySecs(b), total - afk)
+    local function pct(v) return total > 0 and math.floor(v / total * 100 + 0.5) or 0 end
+    local lines = { string.format("played %s - AFK %s (%d %%) - cities %s (%d %%) = playing %s",
+        T.Dur(total), T.Dur(afk), pct(afk), T.Dur(city), pct(city), T.Dur(total - afk - city)) }
     local since = b.since or {}
     if (since.lvl or 1) > 1 then
-        lines[#lines + 1] = string.format("  AFK is counted since level %d (%s); AFK time before that is not taken off",
+        lines[#lines + 1] = string.format("  AFK and city time are counted since level %d (%s); time before that is not taken off",
             since.lvl, since.t and dateFn and dateFn("%d.%m.%Y", since.t) or "?")
     end
     return lines
@@ -1549,4 +1565,4 @@ function T:Report(part)
 end
 
 OMQ:RegisterCommand("tally", function(arg) T:Report(arg) end, nil, true)
-OMQ:RegisterCommand("played", function() T:Played() end, "your /played time without the AFK time One More Quest counted")
+OMQ:RegisterCommand("played", function() T:Played() end, "your /played time without AFK time and time in capital cities")
