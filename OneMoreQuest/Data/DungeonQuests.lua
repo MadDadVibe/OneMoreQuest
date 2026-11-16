@@ -7,7 +7,8 @@
 --   cover keep the faction of the earlier sources.
 --   Not listed here: class-only quests (paladin, mage, warlock).
 -- The Drowned City: all eight quests from the Factoruide Forever data of 2026-11-13 (decision 594).
--- Dungeons that the page does not cover (Krol'dok, Alcaz, Blackmaw Hold, Shaper's Terrace, Stratholme, Upper
+-- Krol'dok Stronghold: nine quests from the Factoruide Forever data of 2026-11-16 (escort quests without a known giver left out).
+-- Dungeons that the page does not cover (Alcaz, Blackmaw Hold, Shaper's Terrace, Stratholme, Upper
 -- Blackrock Spire) keep their earlier values (decision 143: in-game dungeon browser).
 -- Quest: { id, name, level, faction } faction "A" Alliance only, "H" Horde only, nil = both.
 --   alt = further ids of the same quest (the game has one id per faction version); a dad has it with any of them.
@@ -284,6 +285,15 @@ OMQ.Dungeons = {
         { id = 95791, name = "The Saltseer Captain", level = 40 },
     } },
     { key = "kro", abbr = "Kro", name = "Krol'dok Stronghold", min = 40, max = 45, quests = {
+        { id = 94968, name = "Eye of Mugg", level = 45, faction = "H" },
+        { id = 94972, name = "Tome of Twilight", level = 44, faction = "H" },
+        { id = 94975, name = "A Token of Vengeance", level = 42, faction = "H" },
+        { id = 94973, name = "Krol'dok Moulding", level = 41, faction = "H" },
+        { id = 94982, name = "Eye of Mugg", level = 45, faction = "A" },
+        { id = 94984, name = "Tome of Twilight", level = 44, faction = "A" },
+        { id = 94983, name = "Twilight Mementos", level = 42, faction = "A" },
+        { id = 96771, name = "Vengeance of the Highborne", level = 45, faction = "A" },
+        { id = 94980, name = "Krol'dok Moulding", level = 41, faction = "A" },
     } },
     { key = "alc", abbr = "Alc", name = "Alcaz Island Prison", min = 48, max = 53, quests = {
     } },

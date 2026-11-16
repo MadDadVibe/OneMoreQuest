@@ -661,15 +661,6 @@ local EXTRA = {
   gnom = {
     { id = 2952, level = 30, name = "The Sparklematic 5200!" },
   },
-  kro = {
-    { id = 94984, level = 40, faction = "A" },
-    { id = 94982, level = 40, faction = "A" },
-    { id = 94983, level = 40, faction = "A" },
-    { id = 96771, level = 40, faction = "A" },
-    { id = 94968, level = 40, faction = "H" },
-    { id = 94972, level = 40, faction = "H" },
-    { id = 94975, level = 40, faction = "H" },
-  },
   lbrs = {
     { id = 4907, level = 60, name = "Tinkee Steamboil" },
     { id = 4734, level = 60, name = "Egg Freezing" },

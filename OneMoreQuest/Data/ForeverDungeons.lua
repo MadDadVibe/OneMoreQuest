@@ -125,14 +125,38 @@ OMQ.QuestRewards = OMQ.QuestRewards or {}
 OMQ.QuestRewards[95776] = { 279888, 279889 }
 OMQ.QuestRewards[95789] = { 279882, 279930 }
 OMQ.QuestRewards[95791] = { 279883, 279884 }
+-- Krol'dok Stronghold (Riverglades). The quests and their chains are in Data/ForeverQuests.lua (Factoruide data,
+-- decision 610); here only what that file does not have: the Dalaran giver, the moulding that Tunk drops inside, the
+-- entrance, quest rewards and boss loot. Boss creature ids: Factoruide; boss loot item ids: method.gg and mmonster.co
+-- guides of 2026-11-15 (unverified in the game). Bossman Toof counts as optional (not on every guide).
+S[96771] = { 96771, "Vengeance of the Highborne", "Ranath Nightstride", nil, 1416, 17.9, 66.0, "npc" }
+S[94973] = { 94973, "Krol'dok Moulding", "Tunk", nil, 0, 0.0, 0.0, "item" }
+S[94980] = { 94980, "Krol'dok Moulding", "Tunk", nil, 0, 0.0, 0.0, "item" }
+OMQ.DungeonEntrances.kro = OMQ.DungeonEntrances.kro or { { 2548, 37.5, 37.5 } }
+OMQ.DungeonEntranceNotes.kro = "North-central Riverglades: the front gates of the fortress stay shut, the way in is the cave west of the large gates"
+OMQ.DungeonLoot.kro = {
+    { 258966, 274995, 274996, 274997 },           -- Slavecrusher Grox
+    { 258972, 274998, 274999, 275000 },           -- Twilight Commander Zarmok
+    { 259281, 275001, 275002, 275003 },           -- War Handler Ashka
+    { 258964, 275004, 275005, 275006 },           -- Nar'gurk
+    { 264773, 286428, 286429, 286430 },           -- Bossman Toof
+    { 258968, 275007, 275008, 275009, 275010 },   -- Overlord Mugg
+}
+OMQ.QuestRewards[94968] = { 279852, 279853, 279480 }
+OMQ.QuestRewards[94982] = { 279852, 279853, 279480 }
+OMQ.QuestRewards[94972] = { 279859, 279860 }
+OMQ.QuestRewards[94984] = { 279854, 279855 }
+OMQ.QuestRewards[94975] = { 267090 }
 -- extra facts for the dungeon window and the boss kills (Stats/DungeonWin.lua, Stats/Tally.lua)
 -- names: English boss names; rare: rares (not needed for a full clear); opt: bosses only some runs meet (not needed either);
 -- alias: further creature ids the game has for a boss (staging copies, a second form) -> the id of the loot list
 OMQ.DungeonWinExtra = {
     names = { [258905] = "Zul'Alai", [258924] = "Var'Taka", [260042] = "Captain Dreadrise", [260202] = "Deathless Marrow",
-              [260243] = "Min'loth the Serpent", [270887] = "Primeval Elemental", [264177] = "Gill", [264172] = "Umbra" },
+              [260243] = "Min'loth the Serpent", [270887] = "Primeval Elemental", [264177] = "Gill", [264172] = "Umbra",
+              [258966] = "Slavecrusher Grox", [258972] = "Twilight Commander Zarmok", [259281] = "War Handler Ashka",
+              [258964] = "Nar'gurk", [264773] = "Bossman Toof", [258968] = "Overlord Mugg" },
     rare = { [264177] = true, [264172] = true },
-    opt = { [270887] = true },
+    opt = { [270887] = true, [264773] = true },
     alias = { [270882] = 258905, [270883] = 258924, [270884] = 260042, [270885] = 260202, [269586] = 260202,
               [260274] = 260243, [267852] = 260243, [269466] = 260243, [270886] = 260243,
               [263886] = 270887, [273738] = 270887, [270888] = 264177 },
