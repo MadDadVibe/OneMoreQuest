@@ -28,6 +28,7 @@ OMQ.QuestZones = {
   { 1428, 50, 58, "C", "Burning Steppes" },
   { 1422, 51, 58, "C", "Western Plaguelands" },
   { 1423, 53, 60, "C", "Eastern Plaguelands" },
+  { 2548, 36, 45, "C", "Riverglades" },             -- new Forever zone; quests in Data/ForeverQuests.lua
   -- Kalimdor
   { 1411, 1, 10, "H", "Durotar" },
   { 1412, 1, 10, "H", "Mulgore" },
