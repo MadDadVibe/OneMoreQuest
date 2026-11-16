@@ -9,11 +9,11 @@
 -- (seconds x SPEED), so a planner that adds yards keeps working.
 --   P.Cost(p, q)  the cost of the way, nil when the network cannot tell (no data, other continent)
 --   P.Way(p, q)   the way for an arrow (Quest Run's small arrow, the main arrow of Guide.lua): { cost, straight, a, b (the point to head for now), via, flight }
--- Fine steering (decision 472): near me the arrow's heading is checked on the 8-yard raster of Data/PathRaster.lua
--- and steered around walls, cliffs and water the coarse network does not see.
--- Routes (decision 585): the whole walk to the arrow's target is searched once on that raster and kept; the arrow
--- follows it (the network and the fine look above are what the arrow uses until the route is found).
--- /omq path [on|off|fine on|fine off|diag|probe|log]   (fine off: neither fine steering nor routes)
+-- The arrow's way (decision 609, before: 472 and 585): Data/PathRaster.lua holds the ground in cells of 8 yards with
+-- all its floors (bridges, tunnels, ramps, safe falls). From the arrow's target the walk to it is searched back
+-- over these once and kept; the arrow follows it from wherever I stand. The network above gives the planner its
+-- costs, the flights, the corridor of that search, and the arrow's way until the search has reached me.
+-- /omq path [on|off|fine on|fine off|diag|probe|log|rec|mark <words>]   (fine off: only the network's way)
 -- Middle click on an arrow: way over the land <-> straight line (decision 505)
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
@@ -38,7 +38,6 @@ P.JOIN_KEEP, P.JOIN_KEEP_YD = 1.03, 20   -- the last join is kept while it costs
 P.PASSED = 15               -- a way point this close counts as reached: the arrow heads for the next one
 P.CUT, P.CUT_YD = 1.12, 25  -- a way point behind me is skipped when the walk on from it is about this straight
 P.CARROT = 40               -- the arrow heads for a point this far ahead on the way: it glides round corners (477)
-P.CARROT_FINE = 30          -- the same on a fine way round a wall
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
 local function num(v) return type(v) == "number" and not isSecret(v) end
@@ -481,7 +480,10 @@ local function coarseWay(p, q)
     if keep and first ~= c.join and keep <= best * P.JOIN_KEEP + P.JOIN_KEEP_YD then best, first = keep, c.join end
     c.join = first
     local flew = srch.flew[first]
-    if not flew and best <= s * P.SLACK + P.SLACK_YD then return { cost = math.max(best, s), straight = s, a = q.a, b = q.b, via = false } end
+    if not flew and best <= s * P.SLACK + P.SLACK_YD then
+        -- (the search and where I join it go along: a far target's leg is found from them, 609)
+        return { cost = math.max(best, s), straight = s, a = q.a, b = q.b, via = false, srch = srch, first = first, best = best }
+    end
     local function xy(n)
         if n <= g.n then return g.x[n], g.y[n] end
         local t = srch.taxis[n - g.n]
@@ -569,44 +571,49 @@ local function coarseWay(p, q)
     return way
 end
 ----------------------------------------------------------------------
--- Fine steering on the 8-yard raster (decision 472)
+-- The ground in cells of 8 yards, with all its floors (decision 609)
 ----------------------------------------------------------------------
--- Data/PathRaster.lua holds the walkable ground in cells of 8.33 yards: per cell which of its 8 neighbours it walks
--- to. The point an arrow heads for (the next point of the way, or the target) is checked in the raster: when the
--- line to it crosses a wall, a cliff or a lake, a small search finds the way around in the cells near me and the
--- arrow heads for the farthest cell of that way I can walk to straight. Only the first floor of a cell is known, so
--- where my cell has more floors (a bridge, a house, a cave, a city under the ground) the arrow stays as it was.
+-- Data/PathRaster.lua holds the walkable ground in cells of 8.33 yards. A NODE is a floor of a cell: floor 0 is the
+-- ground itself, the others are bridges, tunnels, ramps, the storeys of a house (OMQ.PathFloors). Walks between
+-- nodes go both ways; a safe fall (a drop) goes one way. Before (decisions 472 and 585) only floor 0 was known:
+-- no way led over a bridge or through a tunnel, and the top and the foot of a cliff were the same place.
+-- The game does not tell my height (UnitPosition gives 0), so the floor I am on is followed from cell to cell
+-- (P.Stand): the floors I can have walked or dropped to from where I was.
 local CELL = TILE / 64
 P.CELL = CELL
-P.LOOK = 250                    -- yards ahead the fine way is searched
-P.FINE_NODES = 4000             -- cells a fine search looks at at most
-P.FINE_MARGIN = 24              -- cells around me and the point the search may use
-P.FINE_GOAL = 3                 -- cells from a point that is not walkable ground that count as there
-P.FINE_KEEP = 64                -- unpacked tiles kept (a route search crosses many, 585)
-P.FINE_MOVE, P.FINE_AGE = 5, 2  -- the fine way is found again after these yards moved or seconds
-P.FINE_HOLD = 4                 -- seconds a way round is kept against a clear line while I am on it (477)
-P.FINE_NEAR = 10                -- or at once this close to the point it heads for
+P.FINE_KEEP = 96                -- unpacked tiles kept
 P.SWIM = 1.5                    -- a swum cell costs this much more
-P.EDGE = 0.7                    -- a cell next to a wall costs this much more: ways keep off walls, corners get round
-P.FINE_SLACK_YD = 15            -- a way round this little longer (x SLACK) is not steered
+P.EDGE = 0.4                    -- a ground cell next to a wall costs this much more: ways keep off walls
+P.DROP = 0.5                    -- a safe fall costs this many cells more than the step
 local DR = { -1, 1, 0, 0, -1, -1, 1, 1 }    -- N, S, W, E, NW, NE, SW, SE
 local DC = { 0, 0, -1, 1, -1, 1, -1, 1 }
 local BIT = { 1, 2, 4, 8, 16, 32, 64, 128 }
+local OPP = { 2, 1, 4, 3, 8, 7, 6, 5 }
 local DIR = {}                              -- (dr + 1) * 3 + dc + 2 -> direction
 for d = 1, 8 do DIR[(DR[d] + 1) * 3 + DC[d] + 2] = d end
 local SQ2 = math.sqrt(2)
-local SWUM, FLOORS = 256, 512
+local SWUM, MORE = 256, 512
+local floor = math.floor
 local B64 = {}
 do
     local abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     for i = 1, 64 do B64[abc:byte(i)] = i - 1 end
 end
-local function walks(v, d) return math.floor(v / BIT[d]) % 2 == 1 end
-local function rc(a, b) return math.floor((ORIGIN - a) / CELL), math.floor((ORIGIN - b) / CELL) end
+local function walks(v, d) return floor(v / BIT[d]) % 2 == 1 end
+local function rc(a, b) return floor((ORIGIN - a) / CELL), floor((ORIGIN - b) / CELL) end
 local function center(r, c) return ORIGIN - (r + 0.5) * CELL, ORIGIN - (c + 0.5) * CELL end
 P.RC, P.Center = rc, center
+-- a node: (row * 16384 + column) * 8 + floor
+local function nodeOf(r, c, k) return (r * 16384 + c) * 8 + k end
+local function nodeRC(n)
+    local k = n % 8
+    local cc = (n - k) / 8
+    local c = cc % 16384
+    return (cc - c) / 16384, c, k
+end
+P.Node, P.NodeRC = nodeOf, nodeRC
 
-local rasterTiles, rasterOrder = {}, {}
+local rasterTiles, rasterRecs, rasterOrder = {}, {}, {}
 local function unpackTile(str)
     local t, n = {}, 0
     for k = 1, #str - 2, 3 do
@@ -615,6 +622,21 @@ local function unpackTile(str)
         for _ = 0, B64[z] do n = n + 1; t[n] = v end
     end
     return t
+end
+-- the records of a tile: [cell * 8 + floor] = { swum, nw (number of walks), walk codes ..., drop codes ... }
+-- (a code: direction * 7 + floor, direction 0 to 7 = N ... SE, 8 = the same cell)
+local function unpackRecs(str)
+    local recs, k, n = {}, 1, #str
+    while k + 4 <= n do
+        local a, b, c, x, y = str:byte(k, k + 4)
+        local h = B64[a] * 4096 + B64[b] * 64 + B64[c]
+        local nw, nd = B64[x], B64[y]
+        local rec = { swum = floor(h / 4) % 2 == 1, nw = nw }
+        for i = 1, nw + nd do rec[i] = B64[str:byte(k + 4 + i)] end
+        recs[floor(h / 8)] = rec
+        k = k + 5 + nw + nd
+    end
+    return recs
 end
 -- the 4096 cells of a tile (rows from the north), nil without data
 function P.RasterTile(inst, key)
@@ -625,203 +647,758 @@ function P.RasterTile(inst, key)
     local str = r and r[key]
     t = str and unpackTile(str) or false
     rasterTiles[id] = t
+    local f = OMQ.PathFloors and OMQ.PathFloors[inst]
+    rasterRecs[id] = t and f and f[key] and unpackRecs(f[key]) or false
     rasterOrder[#rasterOrder + 1] = id
-    if #rasterOrder > P.FINE_KEEP then rasterTiles[table.remove(rasterOrder, 1)] = nil end
+    if #rasterOrder > P.FINE_KEEP then
+        local old = table.remove(rasterOrder, 1)
+        rasterTiles[old], rasterRecs[old] = nil, nil
+    end
     return t or nil
 end
--- a cell's value: its walk bits, + 256 swum, + 512 more floors; 0 for no walkable ground or no data
+-- a cell's value: the walks of its floor 0 to floor 0 of the neighbours, + 256 swum, + 512 it has records; 0: nothing
 function P.CellAt(inst, r, c)
-    local t = P.RasterTile(inst, math.floor(r / 64) * 128 + math.floor(c / 64))
+    local t = P.RasterTile(inst, floor(r / 64) * 128 + floor(c / 64))
     return t and t[(r % 64) * 64 + c % 64 + 1] or 0
 end
 local cellAt = P.CellAt
+-- the record of floor k of a cell (only cells whose value has 512)
+local function recAt(inst, r, c, k)
+    local key = floor(r / 64) * 128 + floor(c / 64)
+    local id = inst * 16384 + key
+    local recs = rasterRecs[id]
+    if recs == nil then P.RasterTile(inst, key); recs = rasterRecs[id] end
+    return recs and recs[((r % 64) * 64 + c % 64) * 8 + k] or nil
+end
+P.RecAt = recAt
 
--- can I walk straight from cell (r0, c0) to cell (r1, c1)? (the cells of the line, step by step)
--- strict (585): a diagonal step also needs ground in both cells beside it (the data lets a walk cut the corner of a
--- rock; a player walking the straight line then brushes it)
-function P.Sight(inst, r0, c0, r1, c1, strict)
-    local dx, dy = math.abs(c1 - c0), math.abs(r1 - r0)
-    local sc, sr = c1 > c0 and 1 or -1, r1 > r0 and 1 or -1
-    local err = dx - dy
-    local r, c = r0, c0
+-- is floor k of a cell a node?
+local function exists(inst, r, c, k)
     local v = cellAt(inst, r, c)
-    while r ~= r1 or c ~= c1 do
-        local e2, mr, mc = 2 * err, 0, 0
-        if e2 > -dy then err = err - dy; mc = sc end
-        if e2 < dx then err = err + dx; mr = sr end
-        if not walks(v, DIR[(mr + 1) * 3 + mc + 2]) then return false end
-        if strict and mr ~= 0 and mc ~= 0 and (cellAt(inst, r + mr, c) == 0 or cellAt(inst, r, c + mc) == 0) then return false end
-        r, c = r + mr, c + mc
-        v = cellAt(inst, r, c)
+    if v == 0 then return false end
+    if k == 0 and v % MORE ~= 0 then return true end
+    return v >= MORE and recAt(inst, r, c, k) ~= nil
+end
+-- the nodes of a cell: { node, ... }
+function P.Floors(inst, r, c)
+    local v = cellAt(inst, r, c)
+    local out = {}
+    if v == 0 then return out end
+    if v < MORE then out[1] = nodeOf(r, c, 0); return out end
+    for k = 0, 6 do
+        if (k == 0 and v % MORE ~= 0) or recAt(inst, r, c, k) then out[#out + 1] = nodeOf(r, c, k) end
+    end
+    return out
+end
+-- the node I walk to from node n in direction d (1 to 8), nil when there is none; with more than one, the floor
+-- `prefer` when it is among them, else the lowest
+local function stepWalk(inst, n, d, prefer)
+    local r, c, k = nodeRC(n)
+    local v = cellAt(inst, r, c)
+    local best = nil
+    if k == 0 and walks(v, d) then
+        if not prefer or prefer == 0 then return nodeOf(r + DR[d], c + DC[d], 0) end
+        best = 0
+    end
+    if v >= MORE then
+        local rec = recAt(inst, r, c, k)
+        if rec then
+            for i = 1, rec.nw do
+                local code = rec[i]
+                local f = code % 7
+                if (code - f) / 7 == d - 1 then
+                    if f == prefer then return nodeOf(r + DR[d], c + DC[d], f) end
+                    if not best or f < best then best = f end
+                end
+            end
+        end
+    end
+    return best and nodeOf(r + DR[d], c + DC[d], best) or nil
+end
+P.StepWalk = stepWalk
+-- every node I get to from node n in cell (r1, c1), the next cell or my own: walked, or dropped (a safe fall)
+local function stepsInto(inst, n, r1, c1, out)
+    local r, c, k = nodeRC(n)
+    local dr, dc = r1 - r, c1 - c
+    local d = DIR[(dr + 1) * 3 + dc + 2]
+    local v = cellAt(inst, r, c)
+    if d then
+        if k == 0 and walks(v, d) then out[nodeOf(r1, c1, 0)] = true end
+        if v >= MORE then
+            local rec = recAt(inst, r, c, k)
+            if rec then
+                for i = 1, rec.nw do
+                    local code = rec[i]
+                    local f = code % 7
+                    if (code - f) / 7 == d - 1 then out[nodeOf(r1, c1, f)] = true end
+                end
+            end
+        end
+    end
+    -- drops: the records of the floors of that cell name the floors falling onto them
+    if (d or (dr == 0 and dc == 0)) and cellAt(inst, r1, c1) >= MORE then
+        local back = (dr == 0 and dc == 0) and 8 or (OPP[d] - 1)
+        local want = back * 7 + k
+        for f = 0, 6 do
+            local rec = recAt(inst, r1, c1, f)
+            if rec then
+                for i = rec.nw + 1, #rec do
+                    if rec[i] == want then out[nodeOf(r1, c1, f)] = true; break end
+                end
+            end
+        end
+    end
+    return out
+end
+P.StepsInto = stepsInto
+
+----------------------------------------------------------------------
+-- The floor I stand on, followed from cell to cell
+----------------------------------------------------------------------
+P.SNAP = 2                      -- cells around a place without ground that are searched for the nearest ground
+local me = {}                   -- inst, r, c, set = { [node] = true }, n (how many)
+local function count(set) local n = 0; for _ in pairs(set) do n = n + 1 end return n end
+-- the nodes at a place whose own cell is no ground: those of the nearest cells around it
+local function snap(inst, r, c)
+    local set = {}
+    for ring = 0, P.SNAP do
+        for dr = -ring, ring do
+            for dc = -ring, ring do
+                if math.max(math.abs(dr), math.abs(dc)) == ring then
+                    for _, n in ipairs(P.Floors(inst, r + dr, c + dc)) do set[n] = true end
+                end
+            end
+        end
+        if next(set) then break end
+    end
+    return set
+end
+-- where the player at p may stand: { [node] = true } (several while the game cannot tell: under or on a bridge)
+function P.Stand(p)
+    local r, c = rc(p.a, p.b)
+    if me.inst == p.inst and me.r == r and me.c == c and me.set then return me.set end
+    local set = nil
+    if me.inst == p.inst and me.set and me.onGround and math.max(math.abs(me.r - r), math.abs(me.c - c)) <= 3 then
+        -- step by step along the line from the old cell to the new one
+        set = me.set
+        local cr, cc = me.r, me.c
+        while (cr ~= r or cc ~= c) and set do
+            local nr = cr + (r > cr and 1 or r < cr and -1 or 0)
+            local nc = cc + (c > cc and 1 or c < cc and -1 or 0)
+            local nxt = {}
+            -- (also from the floors of my cell I fall onto when I walk off a rock or a ledge)
+            local from = {}
+            for n in pairs(set) do from[n] = true; stepsInto(p.inst, n, cr, cc, from) end
+            for n in pairs(from) do stepsInto(p.inst, n, nr, nc, nxt) end
+            if not next(nxt) and nr ~= cr and nc ~= cc then
+                -- a diagonal the ground does not walk: round the corner, one way or the other
+                for _, via in ipairs({ { nr, cc }, { cr, nc } }) do
+                    local mid = {}
+                    for n in pairs(from) do stepsInto(p.inst, n, via[1], via[2], mid) end
+                    for n in pairs(mid) do stepsInto(p.inst, n, nr, nc, nxt) end
+                end
+            end
+            set = next(nxt) and nxt or nil
+            cr, cc = nr, nc
+        end
+    end
+    local onGround = true
+    if not set then
+        -- a new place (login, a flight, a hearthstone), or a step the data does not know: every floor of the cell
+        set = {}
+        for _, n in ipairs(P.Floors(p.inst, r, c)) do set[n] = true end
+        if not next(set) then set = snap(p.inst, r, c); onGround = false end
+    end
+    me.inst, me.r, me.c, me.set, me.onGround = p.inst, r, c, set, onGround
+    return set
+end
+function P._ResetStand() me = {} end
+
+-- I run but do not get anywhere (a wall, the foot of a cliff; I slide along it a little): the floor the arrow took
+-- me to be on is not mine.
+-- That floor is dropped from the set; was it the only one, the other floors of my cell take its place.
+P.PUSH_S, P.PUSH_YD = 3, 10        -- running for these seconds within these yards: pushing against something
+local push = {}
+function P.Pushing(p, now)
+    local speed = GetUnitSpeed and GetUnitSpeed("player")
+    if not num(speed) or speed <= 0 or not push.t or now < push.t or push.inst ~= p.inst
+        or straight(push.a, push.b, p.a, p.b) > P.PUSH_YD then
+        push.t, push.a, push.b, push.inst = now, p.a, p.b, p.inst
+        return false
+    end
+    return now - push.t >= P.PUSH_S
+end
+function P.Doubt(n)
+    if not (me.set and me.set[n]) then return false end
+    local set = {}
+    for m in pairs(me.set) do if m ~= n then set[m] = true end end
+    if not next(set) then
+        -- the only floor I took myself to be on: I lost my floor on the way - any other floor of this cell
+        for _, m in ipairs(P.Floors(me.inst, me.r, me.c)) do if m ~= n then set[m] = true end end
+    end
+    if not next(set) then return false end
+    me.set = set
+    push.t = nil
+    return true
+end
+
+-- every node I get to from node n going in direction d (1 to 8): walked, fallen onto the next cell (a safe fall),
+-- or fallen off a rock or ledge within my cell and then walked or fallen on
+local function advance(inst, n, d, out)
+    local r, c = nodeRC(n)
+    local nr, nc = r + DR[d], c + DC[d]
+    stepsInto(inst, n, nr, nc, out)
+    if cellAt(inst, r, c) >= MORE then
+        for m in pairs(stepsInto(inst, n, r, c, {})) do stepsInto(inst, m, nr, nc, out) end
+    end
+    return out
+end
+P.Advance = advance
+
+----------------------------------------------------------------------
+-- Line of sight on the nodes
+----------------------------------------------------------------------
+-- do I walk straight from the nodes of `from` at (pa, pb) to (qa, qb)? Every cell the line crosses, in its order,
+-- each a walk (or a safe fall) from a node before; where several floors can be stepped onto, all of them are
+-- followed. Where the line passes the corner of a cell, the cells on both sides of the corner must be walked to as
+-- well (no corner of a rock is cut). With a search st: only over nodes it has finished, and none of them farther
+-- from the target than `glim` (a ledge that leads back is no way on).
+-- Gives the nodes the line can end on { [node] = true }, nil when it is blocked.
+local CORNER = 0.15             -- cells: a line passing a corner this close counts as through it
+local function sightLine(inst, from, pa, pb, qa, qb, st, glim)
+    local x0, y0 = (ORIGIN - pa) / CELL, (ORIGIN - pb) / CELL
+    local x1, y1 = (ORIGIN - qa) / CELL, (ORIGIN - qb) / CELL
+    local r, c, r1, c1 = floor(x0), floor(y0), floor(x1), floor(y1)
+    local dx, dy = x1 - x0, y1 - y0
+    local sr, sc = dx > 0 and 1 or -1, dy > 0 and 1 or -1
+    local tdx = dx ~= 0 and math.abs(1 / dx) or math.huge
+    local tdy = dy ~= 0 and math.abs(1 / dy) or math.huge
+    local tx = dx ~= 0 and (sr > 0 and (r + 1 - x0) or (x0 - r)) * tdx or math.huge
+    local ty = dy ~= 0 and (sc > 0 and (c + 1 - y0) or (y0 - c)) * tdy or math.huge
+    local eps = CORNER / math.max(math.abs(dx), math.abs(dy), 0.001)
+    local cur = from
+    for _ = 1, 400 do
+        if r == r1 and c == c1 then return cur end
+        local mr, mc = 0, 0
+        if r ~= r1 and c ~= c1 and math.abs(tx - ty) < eps then
+            mr, mc = sr, sc
+            tx, ty = tx + tdx, ty + tdy
+        elseif (tx < ty and r ~= r1) or c == c1 then
+            mr = sr; tx = tx + tdx
+        else
+            mc = sc; ty = ty + tdy
+        end
+        local d = DIR[(mr + 1) * 3 + mc + 2]
+        local nxt = {}
+        for n in pairs(cur) do
+            if mr == 0 or mc == 0 or (next(advance(inst, n, DIR[(mr + 1) * 3 + 2], {})) and next(advance(inst, n, DIR[3 + mc + 2], {}))) then
+                advance(inst, n, d, nxt)
+            end
+        end
+        if st then
+            for n in pairs(nxt) do
+                if not (st.closed[n] and st.g[n] <= glim) then nxt[n] = nil end
+            end
+        end
+        if not next(nxt) then return nil end
+        r, c, cur = r + mr, c + mc, nxt
+    end
+    return nil
+end
+P.SightLine = sightLine
+P.SIGHT_WIDE = 0.4              -- the line keeps this many cells off walls on both sides
+-- a wide line of sight from node n0 at (pa, pb) to node n1 at (qa, qb): the line itself must end on n1, and a line
+-- on each side of it must be walkable too (ending on n1 or right next to it), so the walk does not brush a wall
+function P.Sees(inst, n0, pa, pb, n1, qa, qb, st)
+    local glim = st and (st.g[n0] or 0) + 1.5
+    local from = { [n0] = true }
+    local mid = sightLine(inst, from, pa, pb, qa, qb, st, glim)
+    if not (mid and mid[n1]) then return false end
+    local d = straight(pa, pb, qa, qb)
+    if d < CELL then return true end
+    local ua, ub = -(qb - pb) / d * CELL * P.SIGHT_WIDE, (qa - pa) / d * CELL * P.SIGHT_WIDE
+    local r0, c0 = rc(pa, pb)
+    local r1, c1 = rc(qa, qb)
+    for o = -1, 1, 2 do
+        local sa, sb = pa + ua * o, pb + ub * o
+        local sr, sc = rc(sa, sb)
+        local start = from
+        if sr ~= r0 or sc ~= c0 then
+            local dd = DIR[(sr - r0 + 1) * 3 + (sc - c0) + 2]
+            start = dd and advance(inst, n0, dd, {})
+            if not (start and next(start)) then start, sa, sb = from, pa, pb end      -- I stand right at a wall
+        end
+        local ea, eb = qa + ua * o, qb + ub * o
+        local er, ec = rc(ea, eb)
+        local ends = sightLine(inst, start, sa, sb, ea, eb, st, glim)
+        if not ends then return false end
+        if not ends[n1] then
+            local dd = DIR[(r1 - er + 1) * 3 + (c1 - ec) + 2]
+            local ok = false
+            if dd then
+                for n in pairs(ends) do
+                    if advance(inst, n, dd, {})[n1] then ok = true; break end
+                end
+            end
+            if not ok then return false end
+        end
     end
     return true
 end
 
--- the cheapest walk from cell (r0, c0) to (r1, c1) in a box around both (A*, bounded): the cells { {r, c}, ... }
--- from me on, its yards, and whether it reached the point (else it ends at the cell closest to it)
-function P.FineSearch(inst, r0, c0, r1, c1)
-    local m = P.FINE_MARGIN
-    local rmin, rmax = math.min(r0, r1) - m, math.max(r0, r1) + m
-    local cmin, cmax = math.min(c0, c1) - m, math.max(c0, c1) + m
-    local W = cmax - cmin + 1
-    local open = cellAt(inst, r1, c1) ~= 0
-    local function h(r, c)
-        local a, b = math.abs(r - r1), math.abs(c - c1)
-        if a > b then return a + (SQ2 - 1) * b end
-        return b + (SQ2 - 1) * a
+----------------------------------------------------------------------
+-- The way to a target: one search back from it, kept (decision 609)
+----------------------------------------------------------------------
+-- From the target the cheapest walk TO it is searched over the nodes, outward, toward me (A*); every node the
+-- search has finished knows its yards to the target and the next node on the way there. The arrow follows these
+-- from whatever node I stand on: there is no single route to fall off. When I leave the searched ground the same
+-- search simply goes on toward my new place. The search stays in a corridor around the coarse network's way (wider
+-- when it finds nothing); far targets get the way to a point about ROUTE_LEG yards along the network first.
+-- It runs in small slices (ROUTE_MS per frame); until it has reached me the arrow uses the network's way.
+P.ROUTES = true
+P.ROUTE_NODES = 150000          -- nodes a search finishes at most
+P.ROUTE_MS = 3                  -- milliseconds of search per frame
+P.ROUTE_SLICE = 400             -- nodes per slice without a clock
+P.ROUTE_FIRST_MS, P.ROUTE_FIRST_SLICE = 8, 3000   -- the first slice of a search, right when it starts
+P.ROUTE_FAR = 2600              -- yards: farther targets get a part of the way (a leg) at a time
+P.ROUTE_LEG = 2000              -- yards along the coarse network a leg goes
+P.ROUTE_RENEW = 500             -- yards before the end of a leg the next one is searched
+P.ROUTE_RETRY, P.ROUTE_RETRY_YD = 15, 60    -- a failed search is tried again after these seconds (doubled each time) and yards moved
+P.ROUTE_GOAL = 3                -- cells round a target that is no ground that count as there
+P.ROUTE_BLOCK = 16              -- cells: the corridor is made of blocks of this size
+P.ROUTE_WIDTH = 3               -- blocks on each side of the network's way the search may use; then 3 times that
+P.ROUTE_MARGIN = 6              -- cells the search goes on past me, so a few steps aside stay on searched ground
+P.LOOK = 40                     -- nodes ahead on the way the arrow may head for (when it sees them)
+P.CARROT_MOVE, P.CARROT_AGE = 2, 0.3   -- the arrow's point is found again after these yards moved or seconds
+
+local function clockMs() return debugprofilestop and debugprofilestop() or nil end
+
+-- a heap of nodes by key, in two arrays
+local function hpush(hk, hv, key, val)
+    local n = #hk + 1
+    while n > 1 do
+        local p = floor(n / 2)
+        if hk[p] <= key then break end
+        hk[n], hv[n] = hk[p], hv[p]
+        n = p
     end
-    local s = (r0 - rmin) * W + (c0 - cmin)
-    local g, prev, done = { [s] = 0 }, {}, {}
-    local heap = {}
-    push(heap, h(r0, c0), s)
-    local count, found, closest, closestH = 0, nil, s, h(r0, c0)
-    while heap[1] and count < P.FINE_NODES do
-        local i = pop(heap)[2]
-        if not done[i] then
-            done[i] = true
-            count = count + 1
-            local r, c = rmin + math.floor(i / W), cmin + i % W
-            local hi = h(r, c)
-            if hi < closestH then closest, closestH = i, hi end
-            if (r == r1 and c == c1) or (not open and math.max(math.abs(r - r1), math.abs(c - c1)) <= P.FINE_GOAL) then
-                found = i
-                break
+    hk[n], hv[n] = key, val
+end
+local function hpop(hk, hv)
+    local n = #hk
+    local key, val = hk[1], hv[1]
+    local lk, lv = hk[n], hv[n]
+    hk[n], hv[n] = nil, nil
+    n = n - 1
+    if n > 0 then
+        local i = 1
+        while true do
+            local l = 2 * i
+            if l > n then break end
+            if l < n and hk[l + 1] < hk[l] then l = l + 1 end
+            if hk[l] >= lk then break end
+            hk[i], hv[i] = hk[l], hv[l]
+            i = l
+        end
+        hk[i], hv[i] = lk, lv
+    end
+    return key, val
+end
+
+local function blockOf(r, c) return floor(r / P.ROUTE_BLOCK) * 4096 + floor(c / P.ROUTE_BLOCK) end
+-- the blocks within `width` blocks of the line of points { {a, b}, ... }
+local function corridor(pts, width)
+    local set = {}
+    local function mark(a, b)
+        local r, c = rc(a, b)
+        local br, bc = floor(r / P.ROUTE_BLOCK), floor(c / P.ROUTE_BLOCK)
+        for dr = -width, width do
+            for dc = -width, width do set[(br + dr) * 4096 + bc + dc] = true end
+        end
+    end
+    local step = P.ROUTE_BLOCK * CELL * 0.75
+    for i = 1, #pts do
+        local x = pts[i]
+        mark(x[1], x[2])
+        local y = pts[i + 1]
+        if y then
+            local d = straight(x[1], x[2], y[1], y[2])
+            for k = 1, floor(d / step) do
+                local f = k * step / d
+                mark(x[1] + (y[1] - x[1]) * f, x[2] + (y[2] - x[2]) * f)
             end
-            local v, gi = cellAt(inst, r, c), g[i]
-            for d = 1, 8 do
-                if walks(v, d) then
-                    local nr, nc = r + DR[d], c + DC[d]
-                    if nr >= rmin and nr <= rmax and nc >= cmin and nc <= cmax then
-                        local j = (nr - rmin) * W + (nc - cmin)
-                        if not done[j] then
-                            local step = d > 4 and SQ2 or 1
-                            local nv = cellAt(inst, nr, nc)
-                            if nv % FLOORS >= SWUM then step = step * P.SWIM end
-                            if nv % SWUM ~= 255 then step = step + P.EDGE end   -- next to a wall: keep off it (477)
-                            local ng = gi + step
-                            if g[j] == nil or ng < g[j] then
-                                g[j], prev[j] = ng, i
-                                push(heap, ng + h(nr, nc), j)
-                            end
+        end
+    end
+    return set
+end
+P._Corridor = corridor
+
+-- a new search back from the goal (ga, gb): its state
+local function newSearch(inst, ga, gb, blocks)
+    local st = { inst = inst, ga = ga, gb = gb, g = {}, par = {}, closed = {}, hk = {}, hv = {}, count = 0,
+        blocks = blocks, hr = 0, hc = 0, sources = 0 }
+    local r1, c1 = rc(ga, gb)
+    local at = P.Floors(inst, r1, c1)
+    if #at > 0 then
+        for _, n in ipairs(at) do st.g[n] = 0; st.sources = st.sources + 1 end
+        st.exact = true                              -- the target's own cell: the arrow ends on the target itself
+    else
+        -- a target that is no ground (in a house the data does not know, on a rock): the ground around it
+        for ring = 1, P.ROUTE_GOAL do
+            for dr = -ring, ring do
+                for dc = -ring, ring do
+                    if math.max(math.abs(dr), math.abs(dc)) == ring then
+                        for _, n in ipairs(P.Floors(inst, r1 + dr, c1 + dc)) do
+                            st.g[n] = math.sqrt(dr * dr + dc * dc); st.sources = st.sources + 1
                         end
                     end
                 end
             end
         end
     end
-    P.stats.fine = (P.stats.fine or 0) + 1
-    P.stats.fineCells = count
-    local last = found or closest
-    if last == s then return nil end
-    local back, i = {}, last
-    while i do
-        back[#back + 1] = { rmin + math.floor(i / W), cmin + i % W }
-        i = prev[i]
-    end
-    local path = {}
-    for k = #back, 1, -1 do path[#path + 1] = back[k] end
-    return path, g[last] * CELL, found ~= nil
+    st.fresh = true
+    return st
 end
 
--- the point to head for from (pa, pb) toward (ha, hb): { a, b, clear (the line is walkable), yards, reached }, nil
--- when the raster cannot tell
-function P.Fine(inst, pa, pb, ha, hb)
-    if not (OMQ.PathRaster and OMQ.PathRaster[inst]) then return nil end
-    local d = straight(pa, pb, ha, hb)
-    local ta, tb = ha, hb
-    if d > P.LOOK then
-        local f = P.LOOK / d
-        ta, tb = pa + (ha - pa) * f, pb + (hb - pb) * f
-    end
-    local r0, c0 = rc(pa, pb)
-    local r1, c1 = rc(ta, tb)
-    local v0 = cellAt(inst, r0, c0)
-    if v0 == 0 or v0 >= FLOORS then return nil end
-    if (r0 == r1 and c0 == c1) or P.Sight(inst, r0, c0, r1, c1) then return { a = ha, b = hb, clear = true } end
-    local path, yards, reached = P.FineSearch(inst, r0, c0, r1, c1)
-    if not path then return nil end
-    -- a tree, a rock, a fence: a way round that is hardly longer; the gliding point keeps the arrow almost straight
-    -- (477; before, the arrow then pointed straight through the corner)
-    local minor = reached and yards <= straight(pa, pb, ta, tb) * P.SLACK + P.FINE_SLACK_YD
-    -- the farthest cell of the way I walk to straight
-    local pick = path[2] or path[1]
-    for k = 3, #path do
-        if not P.Sight(inst, r0, c0, path[k][1], path[k][2]) then break end
-        pick = path[k]
-    end
-    local a, b = center(pick[1], pick[2])
-    -- right at the corner: head for the way past it, not for the cell I stand on (fix 474)
-    if straight(pa, pb, a, b) < P.FINE_NEAR then
-        for k = 2, #path do
-            local ka, kb = center(path[k][1], path[k][2])
-            a, b = ka, kb
-            if straight(pa, pb, ka, kb) >= P.FINE_NEAR then break end
+-- point the search at cell (r, c): the keys of the open nodes are made anew (the yards found so far stay true)
+local function aim(st, r, c)
+    st.hr, st.hc = r, c
+    local g, closed = st.g, st.closed
+    local list = {}
+    if st.fresh then
+        for n in pairs(g) do list[#list + 1] = n end
+        st.fresh = nil
+    else
+        local hv, seen = st.hv, {}
+        for i = 1, #hv do
+            local n = hv[i]
+            if not closed[n] and not seen[n] then seen[n] = true; list[#list + 1] = n end
         end
     end
-    return { a = a, b = b, clear = false, yards = yards, reached = reached and d <= P.LOOK, path = path, minor = minor }
+    local hk, hv = {}, {}
+    st.hk, st.hv = hk, hv
+    for i = 1, #list do
+        local n = list[i]
+        local nr, nc = nodeRC(n)
+        local a, b = math.abs(nr - r), math.abs(nc - c)
+        hpush(hk, hv, g[n] + (a > b and a + (SQ2 - 1) * b or b + (SQ2 - 1) * a), n)
+    end
+    st.ended, st.stopAt = nil, nil
 end
 
--- a wide line of sight between two places (477): three lines, the middle one and one on each side a third of a
--- cell off, so that a straight walk does not clip the corner of a wall
-function P.SightWide(inst, pa, pb, qa, qb, wide, strict)
-    local d = straight(pa, pb, qa, qb)
-    if d < 0.01 then return true end
-    wide = wide or 0.35
-    local ua, ub = -(qb - pb) / d * CELL * wide, (qa - pa) / d * CELL * wide
-    for _, o in ipairs({ 0, 1, -1 }) do
-        local r0, c0 = rc(pa + ua * o, pb + ub * o)
-        local r1, c1 = rc(qa + ua * o, qb + ub * o)
-        if o ~= 0 and cellAt(inst, r0, c0) == 0 then r0, c0 = rc(pa, pb) end   -- I stand right at a wall
-        if not P.Sight(inst, r0, c0, r1, c1, strict) then return false end
+-- the node of the set the search has finished with the fewest yards to the target, nil when none yet
+local function reached(st, set)
+    local best, bg = nil, nil
+    for n in pairs(set) do
+        if st.closed[n] and (not bg or st.g[n] < bg) then best, bg = n, st.g[n] end
     end
+    return best
+end
+
+-- run a search for a while toward the nodes of `set`: true when it has ended (they are reached, or it gave up)
+local function stepSearch(st, set, budgetMs, slice)
+    if st.ended then return true end
+    local inst, g, par, closed, hk, hv, blocks = st.inst, st.g, st.par, st.closed, st.hk, st.hv, st.blocks
+    local hr, hc = st.hr, st.hc
+    local t0 = clockMs()
+    local steps = 0
+    local SWIM, EDGE, DROP, BLOCK = P.SWIM, P.EDGE, P.DROP, P.ROUTE_BLOCK
+    while hk[1] do
+        if st.stopAt and hk[1] > st.stopAt then break end
+        if st.count >= P.ROUTE_NODES then st.full = true; break end
+        steps = steps + 1
+        if steps % 64 == 0 then
+            if t0 then
+                if clockMs() - t0 >= (budgetMs or P.ROUTE_MS) then return false end
+            elseif steps >= (slice or P.ROUTE_SLICE) then
+                return false
+            end
+        end
+        local key, n = hpop(hk, hv)
+        if not closed[n] then
+            closed[n] = true
+            st.count = st.count + 1
+            -- I am reached: a little farther still (the ground beside me), then the search rests
+            if not st.stopAt and set[n] then st.stopAt = key + P.ROUTE_MARGIN end
+            local k = n % 8
+            local cc = (n - k) / 8
+            local c = cc % 16384
+            local r = (cc - c) / 16384
+            local v, gi = cellAt(inst, r, c), g[n]
+            local rec = v >= MORE and recAt(inst, r, c, k) or nil
+            local last = rec and #rec or 0
+            -- the nodes that walk (or fall) to this one: its walks (they go both ways), the drops onto it
+            for i = (k == 0 and -7 or 1), last do
+                local d, f, drop, ok = nil, 0, false, true
+                if i <= 0 then
+                    d = i + 8
+                    ok = walks(v, d)
+                else
+                    local code = rec[i]
+                    f = code % 7
+                    d = (code - f) / 7 + 1
+                    drop = i > rec.nw
+                end
+                if ok then
+                    local nr, nc = r, c
+                    if d <= 8 then nr, nc = r + DR[d], c + DC[d] end
+                    local u = (nr * 16384 + nc) * 8 + f
+                    if not closed[u] and (not blocks or blocks[floor(nr / BLOCK) * 4096 + floor(nc / BLOCK)]) then
+                        local stepc = (d > 4 and d <= 8) and SQ2 or 1
+                        if d > 8 then stepc = 0 end
+                        if drop then stepc = stepc + DROP end
+                        local uv = cellAt(inst, nr, nc)
+                        if f == 0 then
+                            if uv % MORE >= SWUM then stepc = stepc * SWIM
+                            elseif uv % SWUM ~= 255 and uv < MORE then stepc = stepc + EDGE end
+                        else
+                            local ur = recAt(inst, nr, nc, f)
+                            if ur and ur.swum then stepc = stepc * SWIM end
+                        end
+                        local ng = gi + stepc
+                        local og = g[u]
+                        if og == nil or ng < og then
+                            g[u], par[u] = ng, n
+                            local a, b = nr - hr, nc - hc
+                            if a < 0 then a = -a end
+                            if b < 0 then b = -b end
+                            hpush(hk, hv, ng + (a > b and a + (SQ2 - 1) * b or b + (SQ2 - 1) * a), u)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    st.ended = true
+    P.stats.routes = (P.stats.routes or 0) + 1
+    P.stats.routeCells = st.count
     return true
 end
+P._NewSearch, P._StepSearch, P._Aim, P._Reached = newSearch, stepSearch, aim, reached
 
--- am I on (within 2 cells of) a fine way, before its last cell?
-function P.OnPath(pa, pb, path)
+-- the goal of a search from p for target q, with the coarse way w: { a, b, tail (yards from the goal on to the
+-- target), leg, flight, pts (the line the corridor follows) }
+local function goalOf(p, q, w)
+    local pts = { { p.a, p.b } }
+    if w and w.flight then
+        local fy = straight(p.a, p.b, w.a, w.b)
+        pts[2] = { w.a, w.b }
+        return { a = w.a, b = w.b, tail = math.max(0, (w.cost or 0) - fy), flight = w.flight, pts = pts }
+    end
+    local s = straight(p.a, p.b, q.a, q.b)
+    if w and w.srch and w.first and w.best then
+        local srch, g = w.srch, w.srch.g
+        local n, steps = w.first, 0
+        local far = s > P.ROUTE_FAR
+        while n and n > 0 and steps < 2000 do
+            steps = steps + 1
+            local a, b
+            if n <= g.n then a, b = g.x[n], g.y[n] else local t = srch.taxis[n - g.n]; a, b = t.a, t.b end
+            local nx = srch.nxt[n]
+            if nx and nx < 0 then break end             -- never past a flight
+            pts[#pts + 1] = { a, b }
+            if far and w.best - srch.dist[n] >= P.ROUTE_LEG and srch.dist[n] > P.ROUTE_RENEW and n <= g.n then
+                return { a = a, b = b, tail = srch.dist[n], leg = true, pts = pts }
+            end
+            if not nx or nx <= 0 then break end
+            n = nx
+        end
+    end
+    pts[#pts + 1] = { q.a, q.b }
+    return { a = q.a, b = q.b, tail = 0, pts = pts }
+end
+P._GoalOf = goalOf
+
+local routes = {}               -- the searches of the last few targets, found by the target's place
+local pending = {}              -- searches still running: stepped by the driver below
+P._routes = routes
+
+local function routeFor(q)
+    for _, x in ipairs(routes) do
+        if x.inst == q.inst and math.abs(x.qa - q.a) < 5 and math.abs(x.qb - q.b) < 5 then return x end
+    end
+    local x = { qa = q.a, qb = q.b, inst = q.inst }
+    table.insert(routes, 1, x)
+    local old = routes[P.WAY_KEEP + 1]
+    routes[P.WAY_KEEP + 1] = nil
+    if old then old.st, old.nx = nil, nil end
+    return x
+end
+
+local function queue(x)
+    for _, y in ipairs(pending) do if y == x then return end end
+    pending[#pending + 1] = x
+end
+
+-- start a search for target record x from p; wide: 1 (the corridor), 2 (three times as wide), 3 (anywhere)
+local function startSearch(x, p, q, w, wide, slot)
+    local goal = goalOf(p, q, w)
+    local blocks = nil
+    if wide < 3 then blocks = corridor(goal.pts, P.ROUTE_WIDTH * (wide == 2 and 3 or 1)) end
+    local st = newSearch(p.inst, goal.a, goal.b, blocks)
+    st.goal, st.wide = goal, wide
+    st.pa, st.pb = p.a, p.b
+    local r, c = rc(p.a, p.b)
+    aim(st, r, c)
+    st.set = P.Stand(p)
+    x[slot or "st"] = st
+    queue(x)
+    -- a short search (most are) ends right here
+    stepSearch(st, st.set, P.ROUTE_FIRST_MS, P.ROUTE_FIRST_SLICE)
+    return st
+end
+
+-- the point the arrow heads for from node n at p: the farthest node ahead on the way that I see
+local function carrot(st, inst, n, pa, pb)
+    local chain, m = { n }, 1
+    local par = st.par
+    while m < P.LOOK do
+        local nx = par[chain[m]]
+        if not nx then break end
+        m = m + 1
+        chain[m] = nx
+    end
+    local atGoal = par[chain[m]] == nil             -- the way ends within what I look at
+    local j = m
+    while j >= 2 do
+        local r, c = nodeRC(chain[j])
+        local a, b = center(r, c)
+        if j == m and atGoal and st.exact then a, b = st.ga, st.gb end
+        if P.Sees(inst, n, pa, pb, chain[j], a, b, st) then return a, b end
+        j = (j > 12) and floor(j * 0.8) or j - 1
+    end
+    -- right at a corner: the next node of the way that is not my own cell (a fall within it) nor right under my feet
     local r0, c0 = rc(pa, pb)
-    for k = 1, #path - 1 do
-        if math.max(math.abs(path[k][1] - r0), math.abs(path[k][2] - c0)) <= 2 then return true end
+    for i = 2, m do
+        local r, c = nodeRC(chain[i])
+        local a, b = center(r, c)
+        if i == m and atGoal and st.exact then a, b = st.ga, st.gb end
+        local mine = r == r0 and c == c0
+        if i == m or (not mine and straight(pa, pb, a, b) >= CELL * 0.6) then return a, b end
+    end
+    return st.ga, st.gb
+end
+
+-- the way for an arrow along the kept search, nil while there is none (the arrow then uses the network's way)
+function P.RouteWay(p, q, w)
+    if not (P.ROUTES and OMQ.PathRaster and OMQ.PathRaster[p.inst]) then return nil end
+    local x = routeFor(q)
+    local now = GetTime and GetTime() or 0
+    local set = P.Stand(p)
+    if not next(set) then return nil end            -- no ground known anywhere near me
+    if x.last and x.last.way.node and P.Pushing(p, now) and P.Doubt(x.last.way.node) then
+        set = me.set
+        x.carrot = nil
+    end
+    local r0, c0 = rc(p.a, p.b)
+    -- a pending search that has reached me takes over
+    local nx = x.nx
+    if nx then
+        nx.set = set
+        if reached(nx, set) then x.st, x.nx = nx, nil
+        elseif nx.ended then x.nx, x.nxFailed = nil, now end
+    end
+    local st = x.st
+    if st and st.blocks and not st.blocks[blockOf(r0, c0)] then st = nil; x.st = nil end     -- I left the corridor
+    local n = st and reached(st, set)
+    if st and not n then
+        st.set = set
+        if st.ended and not st.full and (st.hr ~= r0 or st.hc ~= c0 or st.stopAt) and st.hk[1] then
+            -- I walked off the searched ground: the same search goes on toward me
+            aim(st, r0, c0)
+            queue(x)
+            stepSearch(st, set, P.ROUTE_FIRST_MS, P.ROUTE_FIRST_SLICE)
+        elseif not st.ended then
+            if st.hr ~= r0 or st.hc ~= c0 then
+                if math.max(math.abs(st.hr - r0), math.abs(st.hc - c0)) > 6 then aim(st, r0, c0) end
+            end
+            stepSearch(st, set, 1, 200)
+        end
+        n = reached(st, set)
+        if not n and st.ended then
+            -- nothing in this corridor (or too far): wider, then anywhere, then give up for a while
+            local wide = (st.full or st.sources == 0) and 4 or st.wide + 1
+            x.st, st = nil, nil
+            if wide <= 3 then
+                st = startSearch(x, p, q, w, wide)
+                n = reached(st, set)
+            else
+                -- (each time in a row it waits twice as long, up to 2 minutes: a way the data does not have - an
+                -- elevator, a boat - is not searched for over and over)
+                x.fails = math.min((x.fails or 0) + 1, 4)
+                x.failed = { a = p.a, b = p.b, t = now, wait = P.ROUTE_RETRY * 2 ^ (x.fails - 1) }
+            end
+        end
+    end
+    if not st then
+        local f = x.failed
+        if f and not (now < f.t) and (now - f.t < f.wait or straight(f.a, f.b, p.a, p.b) < P.ROUTE_RETRY_YD) then
+            return nil
+        end
+        x.failed = nil
+        if not x.st then
+            st = startSearch(x, p, q, w, 1)
+            n = reached(st, set)
+        end
+    end
+    if not (st and n) then
+        -- still searching: the last point for a moment, so the arrow does not jump to the network's way and back
+        local l = x.last
+        if l and now - l.t < 1.5 and now >= l.t then return l.way end
+        return nil
+    end
+    x.fails = nil
+    -- the next leg, while I walk on this one
+    local left = st.g[n] * CELL
+    if st.goal.leg and not x.nx and left < P.ROUTE_RENEW
+        and not (x.nxFailed and now >= x.nxFailed and now - x.nxFailed < P.ROUTE_RETRY) then
+        startSearch(x, p, q, w, 1, "nx")
+    end
+    -- the arrow's point (found again only after a few steps: the search for it looks along many cells)
+    local cr = x.carrot
+    if not (cr and cr.st == st and cr.n == n and now - cr.t < P.CARROT_AGE and now >= cr.t
+        and straight(cr.pa, cr.pb, p.a, p.b) < P.CARROT_MOVE) then
+        local a, b = carrot(st, p.inst, n, p.a, p.b)
+        cr = { st = st, n = n, t = now, pa = p.a, pb = p.b, a = a, b = b }
+        x.carrot = cr
+    end
+    local s = straight(p.a, p.b, q.a, q.b)
+    local cost = left + (st.goal.tail or 0)
+    if not st.goal.flight and not st.goal.leg and not st.exact then cost = cost + straight(st.ga, st.gb, q.a, q.b) end
+    if not st.goal.flight then cost = math.max(cost, s) end
+    local way = { cost = cost, straight = s, a = cr.a, b = cr.b, via = true, route = true, flight = st.goal.flight,
+        leg = st.goal.leg or nil, node = n, floors = count(set) }
+    x.last = { t = now, way = way }
+    return way
+end
+
+-- the driver: running searches get a slice every frame, so a way is ready soon also when the arrows ask seldom
+local function drive(budget)
+    local k = 1
+    while pending[k] do
+        local x = pending[k]
+        local busy = false
+        for _, slot in ipairs({ "st", "nx" }) do
+            local st = x[slot]
+            if st and not st.ended and st.set and not busy then
+                busy = true
+                local ok, ended = pcall(stepSearch, st, st.set, budget)
+                if not ok then st.ended, st.full = true, true end
+            end
+        end
+        if not busy then table.remove(pending, k) else return true end      -- one search per frame
     end
     return false
 end
-
--- the gliding point (decision 477): the point CARROT_FINE yards ahead of me on the fine way, as far as I see it
-function P.FineCarrot(inst, pa, pb, path)
-    if not path or #path < 2 then return nil end
-    local r0, c0 = rc(pa, pb)
-    local bi, bd = 1, nil
-    for k = 1, #path do
-        local dr, dc = path[k][1] - r0, path[k][2] - c0
-        local d = dr * dr + dc * dc
-        if not bd or d < bd then bi, bd = k, d end
+local driver = CreateFrame("Frame")
+if driver.SetScript then
+    driver:SetScript("OnUpdate", function() drive(P.ROUTE_MS) end)
+end
+P._DriveOnce = drive
+P._Drive = function()
+    for _ = 1, 100000 do
+        if not drive(1000) then return end
     end
-    -- the way from me: me, then the cell centres after the nearest cell
-    local pts = { { pa, pb } }
-    for k = bi + 1, #path do
-        local a, b = center(path[k][1], path[k][2])
-        pts[#pts + 1] = { a, b }
-    end
-    if #pts < 2 then return nil end
-    local function along(len)
-        for k = 2, #pts do
-            local x, y = pts[k - 1], pts[k]
-            local s = straight(x[1], x[2], y[1], y[2])
-            if s >= len then
-                local f = s > 0 and len / s or 0
-                return x[1] + (y[1] - x[1]) * f, x[2] + (y[2] - x[2]) * f
-            end
-            len = len - s
-        end
-        return pts[#pts][1], pts[#pts][2]
-    end
-    local len = P.CARROT_FINE
-    while len >= CELL do
-        local a, b = along(len)
-        if P.SightWide(inst, pa, pb, a, b) then return a, b end
-        len = len - CELL / 2
-    end
-    return pts[2][1], pts[2][2]
 end
 
 -- the gliding point on the network's way: near the way point the arrow already turns toward the one after it
@@ -848,397 +1425,94 @@ function P.Carrot(p, w)
     return w
 end
 
--- the arrow's heading of a way, steered on the raster; found again after FINE_MOVE yards or FINE_AGE seconds
-local fineCache = {}
-local function steer(p, w, ka, kb)
-    local ha, hb = w.a, w.b
-    ka, kb = ka or ha, kb or hb                     -- the cache key: the way point, not the gliding point (477)
-    local t = GetTime and GetTime() or 0
-    local c = nil
-    for _, x in ipairs(fineCache) do
-        if x.inst == p.inst and math.abs(x.ha - ka) < 5 and math.abs(x.hb - kb) < 5 then c = x; break end
-    end
-    -- found again when I walked on or waited, and at once when I reach the point it heads for or walk past it
-    -- (it would turn round, fix 474)
-    local stale = not c or t - c.t > P.FINE_AGE or t < c.t or straight(c.pa, c.pb, p.a, p.b) > P.FINE_MOVE
-    if not stale and c.f and not c.f.clear then
-        local f = c.f
-        stale = t - c.t > 0.25 and (straight(p.a, p.b, f.a, f.b) < P.FINE_NEAR
-            or (f.a - p.a) * (f.a - c.pa) + (f.b - p.b) * (f.b - c.pb) <= 0)
-    end
-    if stale then
-        local ok, f = pcall(P.Fine, p.inst, p.a, p.b, ha, hb)
-        if not c then
-            c = { inst = p.inst, ha = ka, hb = kb }
-            table.insert(fineCache, 1, c)
-            fineCache[P.WAY_KEEP + 1] = nil
-        end
-        f = ok and f or false
-        -- a fine way round something, then a clear line: keep the way round a little longer while I am still on it
-        -- (at the edge of a wall the line flips between clear and not, the arrow with it, 477)
-        local old = c.f
-        -- (also when the raster cannot tell for a moment: my cell has more floors or no ground, fix 485)
-        if (not f or f.clear) and old and not old.clear and old.path and t - (c.found or 0) < P.FINE_HOLD
-            and P.OnPath(p.a, p.b, old.path) then
-            f = old
-        elseif f and not f.clear then
-            c.found = t
-        end
-        c.pa, c.pb, c.t, c.f = p.a, p.b, t, f
-    end
-    local f = c.f
-    if not f or f.clear then return w end
-    if not w.via and f.reached then w.cost = math.max(w.cost, f.yards) end
-    w.a, w.b, w.via, w.fine = f.a, f.b, true, true
-    local ok, a, b = pcall(P.FineCarrot, p.inst, p.a, p.b, f.path)
-    if ok and a then w.a, w.b = a, b end
-    return w
-end
-
-----------------------------------------------------------------------
--- Routes on the raster (decision 585)
-----------------------------------------------------------------------
--- The whole walk from me to the target is searched once on the 8-yard raster (A*, a little greedy so that it looks
--- at few cells) and then KEPT: the arrow follows it, a point CARROT_ROUTE yards ahead on it. Before, the way was
--- found again every step from the coarse network (anchors on the tile borders) and a fine look 250 yards ahead,
--- and the two disagreed at cliffs, tile borders and towns with more floors: the arrow swung to and fro or led into
--- a dead end. The search runs in small slices (ROUTE_MS per frame), so nothing stutters; until it is done (mostly
--- well under a second) the arrow uses the old way. A new search starts only when I leave the route by ROUTE_OFF
--- yards or the target moves. Far targets: the route goes to a point about ROUTE_LEG yards along the coarse network
--- and the next part is searched before I get there. A flight: the route goes to the flight master.
-P.ROUTES = true
-P.ROUTE_W = 1.4                 -- greed of the search (1: the shortest walk, more: fewer cells looked at)
-P.ROUTE_NODES = 120000          -- cells a search looks at at most
-P.ROUTE_MS = 3                  -- milliseconds of search per slice
-P.ROUTE_SLICE = 400             -- cells per slice without a clock
-P.ROUTE_FIRST_MS, P.ROUTE_FIRST_SLICE = 8, 2000   -- the first slice of a search, right when it starts
-P.ROUTE_OFF = 4                 -- cells (about 33 yd) off the route: search again
-P.ROUTE_FAR = 1500              -- yards: farther targets get a part of the way (a leg) at a time
-P.ROUTE_LEG = 1200              -- yards along the coarse network a leg goes
-P.ROUTE_RENEW = 300             -- yards before the end of a leg the next one is searched
-P.ROUTE_STALL, P.ROUTE_STALL_YD = 3, 10   -- seconds within these yards (stuck or pacing) on the route: searched once again from here
-P.ROUTE_RETRY = 8               -- seconds before a failed search is tried again (or 50 yd moved)
-P.ROUTE_GOAL = 3                -- cells round a target that is not walkable ground that count as there
-P.ROUTE_NEAR_YD = 40            -- a search that ends this close to its goal is good enough
-P.ROUTE_WIDE = 0.6               -- the line to that point keeps this many cells off walls on both sides
-P.CARROT_ROUTE = 35             -- the arrow heads for a point this far ahead on the route
-
-local function clockMs() return debugprofilestop and debugprofilestop() or nil end
-local function cellId(r, c) return r * 16384 + c end
-
--- a new search from p to the goal (ga, gb): the state of an A* that runs in slices
-local function newSearch(inst, pa, pb, ga, gb)
-    local r0, c0 = rc(pa, pb)
-    local r1, c1 = rc(ga, gb)
-    local function h(r, c)
-        local a, b = math.abs(r - r1), math.abs(c - c1)
-        if a > b then return (a + (SQ2 - 1) * b) * P.ROUTE_W end
-        return (b + (SQ2 - 1) * a) * P.ROUTE_W
-    end
-    local s = cellId(r0, c0)
-    local st = { inst = inst, r0 = r0, c0 = c0, r1 = r1, c1 = c1, h = h, g = { [s] = 0 }, prev = {}, done = {},
-        heap = {}, count = 0, closest = s, closestH = h(r0, c0), open = cellAt(inst, r1, c1) ~= 0, start = s,
-        ga = ga, gb = gb, pa = pa, pb = pb }
-    push(st.heap, h(r0, c0), s)
-    return st
-end
-
--- run a search for a while: true when it has ended (found or given up)
-local function stepSearch(st, budgetMs, slice)
-    if st.ended then return true end
-    local inst, heap, g, prev, done, h = st.inst, st.heap, st.g, st.prev, st.done, st.h
-    local r1, c1, open = st.r1, st.c1, st.open
-    local t0 = clockMs()
-    local n = 0
-    while heap[1] do
-        if st.count >= P.ROUTE_NODES then break end
-        n = n + 1
-        if n % 100 == 0 then
-            if t0 then
-                if clockMs() - t0 >= (budgetMs or P.ROUTE_MS) then return false end
-            elseif n >= (slice or P.ROUTE_SLICE) then
-                return false
-            end
-        end
-        local i = pop(heap)[2]
-        if not done[i] then
-            done[i] = true
-            st.count = st.count + 1
-            local r = math.floor(i / 16384)
-            local c = i - r * 16384
-            local hi = h(r, c)
-            if hi < st.closestH then st.closest, st.closestH = i, hi end
-            if (r == r1 and c == c1) or (not open and math.max(math.abs(r - r1), math.abs(c - c1)) <= P.ROUTE_GOAL) then
-                st.found = i
-                break
-            end
-            local v, gi = cellAt(inst, r, c), g[i]
-            -- the walks of the first floor (the ground itself) also in a cell with more floors (a bridge, a roof, a
-            -- cave above); a cell without data (only where I stand): to any neighbour with ground
-            local free = v == 0
-            for d = 1, 8 do
-                local nr, nc = r + DR[d], c + DC[d]
-                local nv = cellAt(inst, nr, nc)
-                -- (a diagonal step only with ground on both sides: no corner of a rock cut, see P.Sight strict)
-                if nv ~= 0 and (free or walks(v, d))
-                    and (d <= 4 or (cellAt(inst, nr, c) ~= 0 and cellAt(inst, r, nc) ~= 0)) then
-                    local j = cellId(nr, nc)
-                    if not done[j] then
-                        local step = d > 4 and SQ2 or 1
-                        if nv % FLOORS >= SWUM then step = step * P.SWIM end
-                        if nv % SWUM ~= 255 and nv < FLOORS then step = step + P.EDGE end
-                        local ng = gi + step
-                        if g[j] == nil or ng < g[j] then
-                            g[j], prev[j] = ng, i
-                            push(heap, ng + h(nr, nc), j)
-                        end
-                    end
-                end
-            end
-        end
-    end
-    st.ended = true
-    P.stats.routes = (P.stats.routes or 0) + 1
-    P.stats.routeCells = st.count
-    return true
-end
-P._NewSearch, P._StepSearch = newSearch, stepSearch
-
--- the route a finished search found: { cells = { {r, c}, ... }, cum = yards along it, ... }, nil when it failed
-local function routeOf(st)
-    local last = st.found
-    if not last then
-        -- not reached: good enough when it ended close to the goal (a target in a house the raster does not know)
-        local r = math.floor(st.closest / 16384)
-        local ca, cb = center(r, st.closest - r * 16384)
-        if straight(ca, cb, st.ga, st.gb) <= P.ROUTE_NEAR_YD then last = st.closest end
-    end
-    if not last then return nil end
-    local back, i = {}, last
-    while i do
-        local r = math.floor(i / 16384)
-        back[#back + 1] = { r, i - r * 16384 }
-        i = st.prev[i]
-    end
-    local cells, cum = {}, {}
-    for k = #back, 1, -1 do cells[#cells + 1] = back[k] end
-    cum[1] = 0
-    for k = 2, #cells do
-        local dr, dc = math.abs(cells[k][1] - cells[k - 1][1]), math.abs(cells[k][2] - cells[k - 1][2])
-        cum[k] = cum[k - 1] + ((dr + dc == 2) and SQ2 or 1) * CELL
-    end
-    return { cells = cells, cum = cum, k = 1, ga = st.ga, gb = st.gb }
-end
-P._RouteOf = routeOf
-
--- where I am on the route: the index of the nearest cell near the last one, and whether I left it
-local function progress(rt, pa, pb)
-    local r0, c0 = rc(pa, pb)
-    local cells = rt.cells
-    local lo, hi = math.max(1, rt.k - 10), math.min(#cells, rt.k + 120)
-    local bk, bd = rt.k, nil
-    for k = lo, hi do
-        local dr, dc = cells[k][1] - r0, cells[k][2] - c0
-        local d = dr * dr + dc * dc
-        if not bd or d < bd or (d == bd and k > bk) then bk, bd = k, d end
-    end
-    rt.k = bk
-    return bk, math.sqrt(bd or 0) > P.ROUTE_OFF
-end
-
--- the point to head for: CARROT_ROUTE yards ahead of my place on the route, as far as I see it
-local function routeCarrot(inst, rt, pa, pb)
-    local cells, cum, k = rt.cells, rt.cum, rt.k
-    local function at(len)
-        local want = cum[k] + len
-        for j = k + 1, #cells do
-            if cum[j] >= want then return center(cells[j][1], cells[j][2]) end
-        end
-        return nil
-    end
-    local len = P.CARROT_ROUTE
-    while len >= CELL do
-        local a, b = at(len)
-        if not a then
-            -- the end of the route is closer than that: its goal, when I see it
-            if P.SightWide(inst, pa, pb, rt.ga, rt.gb, P.ROUTE_WIDE, true) then return rt.ga, rt.gb end
-        elseif P.SightWide(inst, pa, pb, a, b, P.ROUTE_WIDE, true) then
-            return a, b
-        end
-        len = len - CELL / 2
-    end
-    -- right at a corner: the farthest of the next cells my own cell sees, else back onto the route's cell next to me
-    local r0, c0 = rc(pa, pb)
-    for j = math.min(#cells, k + 8), k + 1, -1 do
-        if P.Sight(inst, r0, c0, cells[j][1], cells[j][2], true) then return center(cells[j][1], cells[j][2]) end
-    end
-    if r0 ~= cells[k][1] or c0 ~= cells[k][2] then return center(cells[k][1], cells[k][2]) end
-    local j = math.min(#cells, k + 1)
-    return center(cells[j][1], cells[j][2])
-end
-
--- the goal of a new route from p for target q, with the coarse way w: { a, b, tail (yards from the goal on to the
--- target), leg, flight }
-local function goalOf(p, q, w)
-    if w and w.flight then
-        local fy = straight(p.a, p.b, w.a, w.b)
-        return { a = w.a, b = w.b, tail = math.max(0, (w.cost or 0) - fy), flight = w.flight }
-    end
-    local s = straight(p.a, p.b, q.a, q.b)
-    if s > P.ROUTE_FAR and w and w.srch and w.first and w.best then
-        local srch, g = w.srch, w.srch.g
-        local n, steps = w.first, 0
-        while n and n > 0 and steps < 2000 do
-            steps = steps + 1
-            local nx = srch.nxt[n]
-            if w.best - srch.dist[n] >= P.ROUTE_LEG or not nx or nx <= 0 then break end
-            n = nx
-        end
-        if n and n > 0 and srch.dist[n] and srch.dist[n] > P.ROUTE_RENEW then
-            local a, b
-            if n <= g.n then a, b = g.x[n], g.y[n] else local t = srch.taxis[n - g.n]; a, b = t.a, t.b end
-            return { a = a, b = b, tail = srch.dist[n], leg = true }
-        end
-    end
-    return { a = q.a, b = q.b, tail = 0 }
-end
-P._GoalOf = goalOf
-
-local routes = {}               -- the routes of the last few targets, found by the target's place
-local pending = {}              -- searches still running: stepped by the driver below
-P._routes = routes
-
-local function routeFor(q)
-    for _, x in ipairs(routes) do
-        if x.inst == q.inst and math.abs(x.qa - q.a) < 5 and math.abs(x.qb - q.b) < 5 then return x end
-    end
-    local x = { qa = q.a, qb = q.b, inst = q.inst }
-    table.insert(routes, 1, x)
-    local old = routes[P.WAY_KEEP + 1]
-    routes[P.WAY_KEEP + 1] = nil
-    if old then old.search = nil end
-    return x
-end
-
-local function startSearch(x, p, q, w)
-    local goal = goalOf(p, q, w)
-    local st = newSearch(p.inst, p.a, p.b, goal.a, goal.b)
-    st.goal = goal
-    x.search = st
-    x.tries = { a = p.a, b = p.b, t = GetTime and GetTime() or 0 }
-    pending[#pending + 1] = x
-    -- a short search (most are: a few hundred cells) ends right here, so the arrow goes from route to route without
-    -- showing the old way (and its other yards) in between
-    stepSearch(st, P.ROUTE_FIRST_MS, P.ROUTE_FIRST_SLICE)
-end
-
--- a search has ended: its route replaces the old one, or the target gets no route for a while
-local function adopt(x)
-    local st = x.search
-    x.search = nil
-    local rt = routeOf(st)
-    if not rt then x.failed = true; return end
-    x.failed = nil
-    rt.tail, rt.leg, rt.flight = st.goal.tail, st.goal.leg, st.goal.flight
-    x.cur = rt
-end
-
--- the way for an arrow along the kept route, nil while there is none (the arrow then uses the old way)
-function P.RouteWay(p, q, w)
-    if not (P.ROUTES and OMQ.PathRaster and OMQ.PathRaster[p.inst]) then return nil end
-    local x = routeFor(q)
-    if x.search and stepSearch(x.search, 1) then adopt(x) end
-    local now = GetTime and GetTime() or 0
-    local rt = x.cur
-    if rt then
-        local k, off = progress(rt, p.a, p.b)
-        if off then
-            x.cur, rt = nil, nil
-        elseif rt.leg and not x.search and rt.cum[#rt.cells] - rt.cum[k] < P.ROUTE_RENEW then
-            startSearch(x, p, q, w)             -- the next leg, while I walk on this one
-        elseif not x.sa or straight(x.sa, x.sb, p.a, p.b) > P.ROUTE_STALL_YD or now < x.st then
-            x.sa, x.sb, x.st, x.stalled = p.a, p.b, now, nil
-        elseif now - x.st > P.ROUTE_STALL and not x.stalled and not x.search then
-            -- I stand still next to the route (a wall the route slipped past, a ledge): once a route from right here
-            x.stalled = true
-            startSearch(x, p, q, w)
-        end
-    end
-    if not rt then
-        if not x.search then
-            local tr = x.tries
-            local again = not x.failed or not tr or now - tr.t > P.ROUTE_RETRY or now < tr.t
-                or straight(tr.a, tr.b, p.a, p.b) > 50
-            if again then startSearch(x, p, q, w) end
-            if x.search and x.search.ended then adopt(x) end
-            rt = x.cur
-            if rt then progress(rt, p.a, p.b) end
-        end
-        if not rt then return nil end
-    end
-    local a, b = routeCarrot(p.inst, rt, p.a, p.b)
-    local k = rt.k
-    local mine = straight(p.a, p.b, center(rt.cells[k][1], rt.cells[k][2]))
-    local s = straight(p.a, p.b, q.a, q.b)
-    local left = rt.cum[#rt.cells] - rt.cum[k] + mine
-    if not rt.flight and not rt.leg then left = left + straight(rt.ga, rt.gb, q.a, q.b) end
-    local cost = left + (rt.tail or 0)
-    if not rt.flight then cost = math.max(cost, s) end
-    return { cost = cost, straight = s, a = a, b = b, via = true, route = true, flight = rt.flight }
-end
-
--- the driver: running searches get a slice every frame, so a route is ready soon also when the arrows ask seldom
-local driver = CreateFrame("Frame")
-if driver.SetScript then
-    driver:SetScript("OnUpdate", function()
-        local k = 1
-        while pending[k] do
-            local x = pending[k]
-            if not x.search then
-                table.remove(pending, k)
-            else
-                local ok, ended = pcall(stepSearch, x.search, P.ROUTE_MS)
-                if not ok then x.search, x.failed = nil, true; table.remove(pending, k)
-                elseif ended then adopt(x); table.remove(pending, k)
-                else k = k + 1 end
-                break                           -- one search per frame
-            end
-        end
-    end)
-end
-P._Drive = function()
-    for _ = 1, 100000 do
-        local x = pending[1]
-        if not x then return end
-        if x.search and stepSearch(x.search, 1000) then adopt(x) end
-        if not x.search then table.remove(pending, 1) end
-    end
-end
-
 function P.Way(p, q)
     local w = coarseWay(p, q)
+    local out = w
     if w and not (OMQDB and OMQDB.pathFineOff) and num(p.a) and num(q.a) and p.inst == q.inst then
         local ok, r = pcall(P.RouteWay, p, q, w)
-        if ok and r then return r end
+        if ok and r then out = r
+        elseif not ok then P.stats.routeError = tostring(r) end
     end
-    -- the gliding point first, then the fine way to it: a wall between me and the gliding point is walked round
-    local ka, kb = w and w.a, w and w.b
-    if w and w.via then P.Carrot(p, w) end
-    if w and OMQ.PathRaster and not (OMQDB and OMQDB.pathFineOff) then steer(p, w, ka, kb) end
-    return w
+    -- without a route (still searching, no data, no way found): the network's way with its gliding point
+    if out == w and w and w.via then P.Carrot(p, w) end
+    if out and P.Record then pcall(P.Record, p, q, out) end
+    return out
 end
 function P._ResetWay()
-    wayCache, fineCache = {}, {}
+    wayCache = {}
     for k in pairs(routes) do routes[k] = nil end
     for k in pairs(pending) do pending[k] = nil end
 end
 function P._Reset()
     for k in pairs(routes) do routes[k] = nil end
     for k in pairs(pending) do pending[k] = nil end
-    graphs, taxiCache, wayCache, fineCache = {}, {}, {}, {}
-    rasterTiles, rasterOrder = {}, {}
+    graphs, taxiCache, wayCache = {}, {}, {}
+    rasterTiles, rasterRecs, rasterOrder = {}, {}, {}
+    me = {}
     for k in pairs(memo) do memo[k] = nil end
     P.taxiVersion = P.taxiVersion + 1
+end
+
+----------------------------------------------------------------------
+-- The arrow's log (decision 609): what the arrow did in the last minutes, to look at a bad way afterwards
+----------------------------------------------------------------------
+-- Every REC_EVERY seconds per arrow target one line goes into OMQDB.pathRec.list (a ring of REC_KEEP lines):
+--   time | continent | my place | the target | the point the arrow heads for | yards | kind | floors I may be on
+-- kind: R a searched way, L a leg of a far way, F to a flight master, N the network's way, S straight.
+-- /omq path mark [words] keeps the last MARK_LINES lines with a note in OMQDB.pathMarks (at most MARK_KEEP).
+-- Nothing is sent anywhere.
+P.REC_EVERY, P.REC_KEEP = 2, 600
+P.MARK_LINES, P.MARK_KEEP = 150, 20
+local recLast = {}
+local function stamp() return (GetServerTime and GetServerTime()) or (time and time()) or 0 end
+function P.Record(p, q, w)
+    if not OMQDB or OMQDB.pathRecOff then return end
+    local now = GetTime and GetTime() or 0
+    local key = floor(q.a / 5) * 100000 + floor(q.b / 5)
+    local l = recLast[key]
+    if l and now >= l and now - l < P.REC_EVERY then return end
+    if not l then
+        local n = 0
+        for _ in pairs(recLast) do n = n + 1 end
+        if n > 20 then recLast = {} end
+    end
+    recLast[key] = now
+    local s = OMQDB.pathRec
+    if type(s) ~= "table" or type(s.list) ~= "table" then s = { list = {}, at = 0 }; OMQDB.pathRec = s end
+    local kind = w.route and (w.flight and "F" or w.leg and "L" or "R") or (w.via and "N" or "S")
+    s.at = (s.at or 0) % P.REC_KEEP + 1
+    s.list[s.at] = string.format("%d|%d|%.0f|%.0f|%.0f|%.0f|%.0f|%.0f|%.0f|%s|%d", stamp(), p.inst, p.a, p.b, q.a, q.b,
+        w.a or q.a, w.b or q.b, w.cost or 0, kind, w.floors or 0)
+end
+-- the lines of the log, oldest first
+function P.RecLines(max)
+    local s = OMQDB and OMQDB.pathRec
+    local out = {}
+    if type(s) ~= "table" or type(s.list) ~= "table" then return out end
+    local n = #s.list
+    for i = 1, n do
+        local line = s.list[(s.at + i - 1) % n + 1]
+        if line then out[#out + 1] = line end
+    end
+    if max and #out > max then
+        local cut = {}
+        for i = #out - max + 1, #out do cut[#cut + 1] = out[i] end
+        out = cut
+    end
+    return out
+end
+function P.Mark(note)
+    if not OMQDB then return nil end
+    OMQDB.pathMarks = OMQDB.pathMarks or {}
+    local marks = OMQDB.pathMarks
+    local pos = OMQ.NextQuest and OMQ.NextQuest.MyPos and OMQ.NextQuest.MyPos()
+    local m = { t = stamp(), note = note ~= "" and note or nil, version = OMQ.version, lines = P.RecLines(P.MARK_LINES) }
+    if pos and num(pos.a) and num(pos.b) then m.inst, m.a, m.b = pos.inst, floor(pos.a + 0.5), floor(pos.b + 0.5) end
+    local map = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+    if num(map) then m.map = map end
+    marks[#marks + 1] = m
+    while #marks > P.MARK_KEEP do table.remove(marks, 1) end
+    return m, #marks
 end
 
 ----------------------------------------------------------------------
@@ -1255,37 +1529,52 @@ function P.Diag()
     local g = P.Graph(pos.inst)
     out[#out + 1] = string.format("position: %.0f, %.0f, continent %s", pos.a, pos.b, tostring(pos.inst))
     local v = OMQ.PathRaster and OMQ.PathRaster[pos.inst] and P.CellAt(pos.inst, P.RC(pos.a, pos.b))
-    out[#out + 1] = "fine steering: " .. ((OMQDB and OMQDB.pathFineOff) and "off" or not v and "no raster here"
-        or v == 0 and "my cell is not walkable ground in the raster" or v >= 512 and "my cell has more floors - not steered here"
-        or string.format("on (my cell walks %d ways%s)", (function() local n = 0; for d = 0, 7 do if math.floor(v / 2 ^ d) % 2 == 1 then n = n + 1 end end; return n end)(), v % 512 >= 256 and ", swum" or ""))
-    if not g then out[#out + 1] = "no walking network for this continent"; return out end
-    local near = P.Near(g, pos.a, pos.b)
-    out[#out + 1] = string.format("network: %d anchors, %d near me (nearest %s yd)", g.n, #near,
-        near[1] and string.format("%.0f", near[1][2]) or "-")
-    local taxis = P.Taxis(pos.inst)
-    local names = {}
-    for _, t in ipairs(taxis) do names[#names + 1] = t.name end
-    out[#out + 1] = string.format("flight masters I know here: %d%s", #taxis, #names > 0 and (" (" .. table.concat(names, "; ") .. ")")
-        or " - talk to a flight master once, then OMQ knows which ones you have")
-    local t = OMQ.QuestRun and OMQ.QuestRun.Target and OMQ.QuestRun:Target()
-    if t and t.place then
-        local w = P.Way(pos, t.place)
-        if w then
-            out[#out + 1] = string.format("Quest Run stop: straight %.0f yd, way %.0f yd%s%s", w.straight, w.cost,
-                w.via and string.format(", heading for %.0f yd ahead", straight(pos.a, pos.b, w.a, w.b)) or ", straight",
-                w.flight and (", fly from " .. w.flight) or "")
+    local stand = v and P.Stand(pos) or {}
+    local floors = {}
+    for n in pairs(stand) do floors[#floors + 1] = n % 8 end
+    table.sort(floors)
+    out[#out + 1] = "ground near me: " .. ((OMQDB and OMQDB.pathFineOff) and "off (only the network's way)" or not v and "no data here"
+        or #floors == 0 and "no walkable ground known around me"
+        or string.format("%s, I may be on floor %s%s", v == 0 and "my cell is no ground, the nearest is used" or
+            (v >= 512 and "my cell has more floors or a drop" or "plain ground"), table.concat(floors, " or "), v % 512 >= 256 and ", swum" or ""))
+    if not g then
+        out[#out + 1] = "no walking network for this continent"
+    else
+        local near = P.Near(g, pos.a, pos.b)
+        out[#out + 1] = string.format("network: %d anchors, %d near me (nearest %s yd)", g.n, #near,
+            near[1] and string.format("%.0f", near[1][2]) or "-")
+        local taxis = P.Taxis(pos.inst)
+        local names = {}
+        for _, t in ipairs(taxis) do names[#names + 1] = t.name end
+        out[#out + 1] = string.format("flight masters I know here: %d%s", #taxis, #names > 0 and (" (" .. table.concat(names, "; ") .. ")")
+            or " - talk to a flight master once, then OMQ knows which ones you have")
+        local t = OMQ.QuestRun and OMQ.QuestRun.Target and OMQ.QuestRun:Target()
+        if t and t.place then
+            local w = P.Way(pos, t.place)
+            if w then
+                out[#out + 1] = string.format("Quest Run stop: straight %.0f yd, way %.0f yd%s%s", w.straight, w.cost,
+                    w.via and string.format(", heading for %.0f yd ahead", straight(pos.a, pos.b, w.a, w.b)) or ", straight",
+                    w.flight and (", fly from " .. w.flight) or "")
+            end
         end
     end
-    local rt = routes[1] and routes[1].cur
-    if rt then
-        out[#out + 1] = string.format("route of the last arrow target: %.0f yd, %d%% walked%s%s", rt.cum[#rt.cells],
-            math.floor(100 * rt.cum[rt.k] / math.max(1, rt.cum[#rt.cells])), rt.leg and ", a leg (the next is searched on the way)" or "",
-            rt.flight and (", to the flight master " .. rt.flight) or "")
-    elseif routes[1] and routes[1].search then
-        out[#out + 1] = "route of the last arrow target: searching"
+    local x = routes[1]
+    local st = x and x.st
+    if st then
+        local n = P._Reached(st, stand)
+        out[#out + 1] = string.format("way of the last arrow target: %s, %d cells searched%s%s%s",
+            n and string.format("%.0f yd left", st.g[n] * P.CELL) or (st.ended and "has not reached me" or "searching"), st.count,
+            st.wide == 2 and ", wide corridor" or st.wide == 3 and ", searched anywhere" or "",
+            st.goal.leg and ", a leg (the next is searched on the way)" or "",
+            st.goal.flight and (", to the flight master " .. st.goal.flight) or "")
+    elseif x and x.failed then
+        out[#out + 1] = "way of the last arrow target: none found - the arrow uses the network's way"
     end
-    out[#out + 1] = "searches so far: " .. P.stats.searches .. ", fine searches: " .. (P.stats.fine or 0)
-        .. ", routes: " .. (P.stats.routes or 0) .. (P.stats.routeCells and (" (last " .. P.stats.routeCells .. " cells)") or "")
+    out[#out + 1] = "network searches so far: " .. P.stats.searches .. ", way searches: " .. (P.stats.routes or 0)
+        .. (P.stats.routeCells and (" (last " .. P.stats.routeCells .. " cells)") or "")
+        .. (P.stats.routeError and (", last error: " .. P.stats.routeError) or "")
+    out[#out + 1] = string.format("arrow log: %d lines, %d marks (/omq path mark <words> keeps the last minutes)", #P.RecLines(),
+        OMQDB and OMQDB.pathMarks and #OMQDB.pathMarks or 0)
     if OMQ.PathLog and OMQ.PathLog.Summary then out[#out + 1] = OMQ.PathLog:Summary() end
     return out
 end
@@ -1318,8 +1607,18 @@ pcall(taxiFrame.RegisterEvent, taxiFrame, "TAXIMAP_OPENED")
 taxiFrame:SetScript("OnEvent", function() pcall(P.LearnTaxis) end)
 
 OMQ:RegisterCommand("path", function(arg)
-    arg = (arg or ""):lower()
-    if arg == "off" then
+    local raw = arg or ""
+    arg = raw:lower()
+    if arg == "mark" or arg:find("^mark ") then
+        local m, n = P.Mark(strtrim and strtrim(raw:sub(6)) or raw:sub(6))
+        if m then
+            OMQ:Print(string.format("way marked (%d lines of the arrow's log kept, mark %d of %d)", #m.lines, n, P.MARK_KEEP))
+        end
+    elseif arg == "rec" then
+        local lines = P.RecLines(15)
+        table.insert(lines, 1, "The arrow's log - last lines (time | continent | me | target | heading for | yards | kind | floors)")
+        show(lines)
+    elseif arg == "off" then
         if OMQDB then OMQDB.pathOff = true end
         P._ResetWay()
         OMQ:Print("ways over the land: off - Quest Run uses straight lines")
@@ -1330,7 +1629,7 @@ OMQ:RegisterCommand("path", function(arg)
     elseif arg == "fine off" or arg == "fine on" then
         if OMQDB then OMQDB.pathFineOff = arg == "fine off" or nil end
         P._ResetWay()
-        OMQ:Print("fine steering near you: " .. (arg == "fine off" and "off" or "on"))
+        OMQ:Print("ways over the ground near you: " .. (arg == "fine off" and "off (only the network's way)" or "on"))
     elseif arg == "probe" then
         show(P.Probe())
     elseif arg == "log" then
@@ -1338,4 +1637,4 @@ OMQ:RegisterCommand("path", function(arg)
     else
         show(P.Diag())
     end
-end, "ways over the land: /omq path [on|off|fine on|fine off|probe|log]")
+end, "ways over the land: /omq path [on|off|fine on|fine off|probe|log|rec|mark <words>]")
