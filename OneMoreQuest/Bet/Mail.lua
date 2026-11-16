@@ -7,6 +7,10 @@
 --      MAIL_SEND_SUCCESS marks it paid and tells the winner (BP). A failure stays open for the next mailbox.
 --   4. optional: close the mailbox afterwards (option, default off).
 -- One action every STEP seconds, because the inbox updates after each action.
+-- Review H6: a debt is "sending" from the call until the game answers. Only a success for the mail OMQ itself
+-- sent (seen by its subject in a SendMail hook) marks it paid, also after a timeout or with the mailbox closed;
+-- a letter of the dad's own never pays a debt. A debt the game never confirmed is not sent again by itself
+-- (/omq bet retry does that). OMQ never clears a send form that holds the dad's own letter.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -31,6 +35,9 @@ local phase                    -- "collect", "pay", "done"
 local tries = {}               -- key -> count (this visit)
 local skipped = {}             -- owe entries skipped this visit
 local pending                  -- { entry, at } while a payment is on its way
+local late = {}                -- [subject] = entry: sent, timed out, the game's answer may still come
+local lastSubject              -- subject of the last SendMail call (OMQ's or the dad's own)
+local draftSaid = false
 local didBet = false           -- something bet related happened (for the close option)
 local poorSaid = {}
 
@@ -137,6 +144,14 @@ end
 local function payStep()
     local l = OMQ.Bets.Ledger()
     for _, e in ipairs(l.owe) do
+        if e.state == "sending" and not skipped[e] then
+            -- sent before, the game never confirmed it (disconnect, reload): never sent twice by itself
+            skipped[e] = true
+            if not (pending and pending.entry == e) and not late[SUBJECT .. " " .. e.id] then
+                OMQ:Print(string.format("Bet debt %s to %s: the game never confirmed the mail. Ask %s; /omq bet retry sends it again.",
+                    money(e.amount), e.toName or "?", e.toName or "the winner"))
+            end
+        end
         -- bet simulator: a debt to the fake dad is not mailed (it goes when the simulator ends)
         if e.state ~= "paid" and not skipped[e] and OMQ.Bets.TestMode() and OMQ.Sim:IsSim(e.to) then
             skipped[e] = true
@@ -156,14 +171,27 @@ local function payStep()
                 local kind = OMQ.Bets.KIND[e.kind]
                 local body = string.format("You won the bet \"%s\": %s. %s", kind and kind.name or "?", money(e.amount),
                     OMQ.Bets.FunnyLine())
+                if BM.DraftOpen() then
+                    -- the dad writes a letter of his own: nothing is cleared or sent, the queue waits
+                    if not draftSaid then
+                        draftSaid = true
+                        OMQ:Print("Bet debts wait while your own letter is in the send tab.")
+                    end
+                    return true
+                end
                 if ClearSendMail then pcall(ClearSendMail) end
                 pcall(SetSendMailMoney, e.amount)
-                local ok = pcall(SendMail, e.toFull, SUBJECT .. " " .. e.id, body)
+                local subject = SUBJECT .. " " .. e.id
+                e.state, e.sentAt = "sending", time()
+                lastSubject = subject
+                local ok = pcall(SendMail, e.toFull, subject, body)
                 if ok then
-                    pending = { entry = e, at = now() }
+                    pending = { entry = e, at = now(), subject = subject }
                     didBet = true
                 else
+                    e.state, e.sentAt = "open", nil
                     skipped[e] = true
+                    if ClearSendMail then pcall(ClearSendMail) end      -- the money set above goes back
                 end
                 return true
             end
@@ -183,7 +211,9 @@ function BM.Step()
     if not isOpen then stop(); return end
     if pending then
         if now() - pending.at > SEND_TIMEOUT then
+            -- no answer yet: the debt stays "sending"; a late success still marks it paid
             skipped[pending.entry] = true
+            late[pending.subject] = pending.entry
             pending = nil
         else
             return
@@ -202,8 +232,70 @@ function BM.Step()
     end
 end
 
+-- something of the dad's own in the send tab: a name, subject, text, money or an item
+function BM.DraftOpen()
+    local function text(box)
+        local b = _G[box]
+        if not (b and b.GetText) then return false end
+        local ok, t = pcall(b.GetText, b)
+        return ok and type(t) == "string" and not isSecret(t) and t:gsub("%s", "") ~= ""
+    end
+    if text("SendMailNameEditBox") or text("SendMailSubjectEditBox") or text("SendMailBodyEditBox")
+        or text("MailEditBox") then return true end
+    if GetSendMailMoney then
+        local ok, m = pcall(GetSendMailMoney)
+        if ok and type(m) == "number" and not isSecret(m) and m > 0 then return true end
+    end
+    if GetSendMailItem then
+        for i = 1, (ATTACHMENTS_MAX_SEND or 12) do
+            local ok, name = pcall(GetSendMailItem, i)
+            if ok and name ~= nil then return true end
+        end
+    end
+    return false
+end
+
+-- the game answered a send: paid only when that mail was OMQ's own (by its subject)
+function BM.OnSendResult(success)
+    local subject = lastSubject
+    lastSubject = nil
+    local e
+    if pending and pending.subject == subject then e = pending.entry; pending = nil
+    elseif subject and late[subject] then e = late[subject]; late[subject] = nil end
+    if not e then return end
+    if success then
+        OMQ.Bets:Paid(e)
+        OMQ:Print(string.format("Bet debt paid: %s to %s.", money(e.amount), e.toName or "?"))
+    else
+        e.state, e.sentAt = "open", nil
+        skipped[e] = true
+        if ClearSendMail then pcall(ClearSendMail) end
+    end
+end
+
+-- /omq bet retry: debts the game never confirmed are open again
+function BM.Retry()
+    local n = 0
+    for _, e in ipairs(OMQ.Bets.Ledger().owe) do
+        if e.state == "sending" then e.state, e.sentAt = "open", nil; n = n + 1 end
+    end
+    return n
+end
+
+local hooked = false
+local function hookSend()
+    if hooked or not (hooksecurefunc and type(_G.SendMail) == "function") then return end
+    hooked = true
+    hooksecurefunc("SendMail", function(_, subject)
+        lastSubject = (type(subject) == "string" and not isSecret(subject)) and subject or nil
+    end)
+end
+hookSend()
+BM._late = function() return late end
+
 local function start()
-    tries, skipped, pending, didBet, poorSaid = {}, {}, nil, false, {}
+    hookSend()
+    tries, skipped, pending, didBet, poorSaid, draftSaid = {}, {}, nil, false, {}, false
     phase = "collect"
     stop()
     C_Timer.After(START_DELAY, function()
@@ -221,21 +313,13 @@ ev:SetScript("OnEvent", function(_, event)
         start()
     elseif event == "MAIL_CLOSED" then
         isOpen = false
-        pending = nil
+        -- a payment on its way keeps waiting for the game's answer (review H6)
+        if pending then late[pending.subject] = pending.entry; pending = nil end
         stop()
     elseif event == "MAIL_SEND_SUCCESS" then
-        if pending then
-            local e = pending.entry
-            pending = nil
-            OMQ.Bets:Paid(e)
-            OMQ:Print(string.format("Bet debt paid: %s to %s.", money(e.amount), e.toName or "?"))
-        end
+        BM.OnSendResult(true)
     elseif event == "MAIL_FAILED" then
-        if pending then
-            skipped[pending.entry] = true
-            pending = nil
-            if ClearSendMail then pcall(ClearSendMail) end
-        end
+        BM.OnSendResult(false)
     end
 end)
 

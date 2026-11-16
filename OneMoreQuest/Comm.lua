@@ -278,12 +278,39 @@ end
 ----------------------------------------------------------------------
 -- Receiving
 ----------------------------------------------------------------------
-local function handleHello(fields, sender)
+-- The names of a group member as the game knows them (first name, full two-part name), or nil when the guid
+-- is no party unit right now or the game hides the names.
+function OMQ:UnitNamesOf(guid)
+    if not guid or hidden(guid) then return nil end
+    local pos = groupMembers()[guid]
+    local unit = pos and ("party" .. pos)
+    if not (unit and UnitGUID and UnitGUID(unit) == guid and UnitName) then return nil end
+    local first, second = UnitName(unit)
+    if type(first) ~= "string" or hidden(first) or first == "" or hidden(second) then return nil end
+    local full = (type(second) == "string" and second ~= "") and (first .. " " .. second) or first
+    return first, full
+end
+
+-- review H3: a hello may only speak for the character that sent it. When the guid it names is a party unit,
+-- the sender's name (before the realm) must be that unit's name; a mismatch is dropped. The full name for
+-- mail then comes from the game, not from the message.
+function OMQ.HelloSenderOk(guid, sender, channel)
+    if channel == "SIM" or not sender or hidden(sender) then return true, nil end
+    local first, full = OMQ:UnitNamesOf(guid)
+    if not first then return true, nil end            -- not in my group: nothing to check against
+    local who = tostring(sender):match("^([^%-]+)") or tostring(sender)
+    if who ~= first and who ~= full and who:gsub(" ", "") ~= full:gsub(" ", "") then return false, nil end
+    return true, full
+end
+
+local function handleHello(fields, sender, channel)
     local guid, name, version, class = fields[1], fields[2], fields[3], fields[4]
     if not guid or guid == "" then return end
     local me = OMQ:GetSelf()
     if me and guid == me.guid then return end        -- our own echo
-    local u, isNew = OMQ:TouchUser(guid, name or "", version or "", class or "", fields[5] or "")
+    local okSender, gameFull = OMQ.HelloSenderOk(guid, sender, channel)
+    if not okSender then return end
+    local u, isNew = OMQ:TouchUser(guid, name or "", version or "", class or "", gameFull or fields[5] or "")
     local loadId = fields[6]
     local reloaded = not isNew and loadId and loadId ~= "" and u.loadId and u.loadId ~= loadId
     if loadId and loadId ~= "" then u.loadId = loadId end
@@ -292,7 +319,7 @@ local function handleHello(fields, sender)
         -- Answer once so the newcomer learns about us. No reply to known users,
         -- otherwise two clients would answer each other forever.
         OMQ:SendHello()
-        OMQ:Fire("USER_JOINED", guid)
+        OMQ:Fire("USER_JOINED", guid, reloaded and true or false)
     end
     OMQ:Fire("USER_UPDATED", guid)
 end

@@ -231,12 +231,20 @@ function Q.Layout()
     return nil
 end
 
+-- a button is only moved when its place changed (the update runs every second; no needless SetPoint)
+local placed = {}            -- [button] = "x:y" set last
 local function place(b, i)
-    b:ClearAllPoints()
     local x, top = origin()
+    local key
+    if x then key = string.format("%.1f:%.1f", x, top - (i - 1) * (SIZE + GAP))
+    else key = "left:" .. i end
+    if placed[b] == key then return end
+    placed[b] = key
+    b:ClearAllPoints()
     if x then b:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x, top - (i - 1) * (SIZE + GAP))
     else b:SetPoint("TOPLEFT", UIParent, "LEFT", CARD_MIN + GAP, 165 - (i - 1) * (SIZE + GAP)) end
 end
+function Q._ResetPlaced() placed = {} end
 
 -- count, cooldown, dimming and whether a button is seen (alpha); allowed in combat
 local alphas = {}            -- [button] = alpha set last, for the tests
@@ -285,11 +293,11 @@ local function build(want)
             buttons[i].icon:SetTexture(itemIcon(e.item))
         end
         place(buttons[i], i)
-        buttons[i]:Show()
+        if not buttons[i]:IsShown() then buttons[i]:Show() end
     end
     for i = #want + 1, #buttons do
         if attrs[i] and attrs[i].item1 then setAttr(i, "type1", nil); setAttr(i, "item1", nil) end
-        buttons[i]:Hide()
+        if buttons[i]:IsShown() then buttons[i]:Hide() end
     end
     list = want
 end

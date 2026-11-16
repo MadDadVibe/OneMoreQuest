@@ -142,7 +142,16 @@ E.slots = {}                                   -- per row: { text, faction, dang
 
 local function locked() return InCombatLockdown and InCombatLockdown() and true or false end
 
+-- review H4: a name from the group goes into a macro; only a plain character name may get there (no line
+-- break or other control sign, no slash, semicolon, backslash or bar, at most E.MAX_NAME bytes)
+E.MAX_NAME = 48
+function E.SafeName(n)
+    if type(n) ~= "string" or (issecretvalue and issecretvalue(n)) then return false end
+    if n == "" or #n > E.MAX_NAME or n:find("^%s") then return false end
+    return n:find("[%c;/\\|]") == nil
+end
 function E.Macro(full)
+    if not E.SafeName(full) then return nil end
     return "/cleartarget\n/targetexact " .. full
 end
 
@@ -238,8 +247,9 @@ function E.Arm()
     for i = 1, E.ROWS do
         if not buttons[i] then makeButton(i) end
         local c, b = E.slots[i], buttons[i]
-        if c and c.full then
-            b:SetAttribute("macrotext1", E.Macro(c.full))
+        local macro = c and c.full and E.Macro(c.full)
+        if macro then
+            b:SetAttribute("macrotext1", macro)
             armed[i] = c.full
             b:Show()
         else
@@ -425,6 +435,8 @@ OMQ:RegisterMessage("EN", function(f, sender)
     if not E.ShareOn() then return end
     local key, name, level, class, faction, map = f[1], f[2], tonumber(f[3]), f[4], f[5], tonumber(f[6])
     if not key or key == "" or not name or not E.FACTIONS[faction] or faction == E.MyFaction() then return end
+    if not (E.SafeName(key) and E.SafeName(name)) then return end      -- review H4
+    if class and class ~= "" and not class:find("^%u+$") then class = "" end
     local who = tostring(sender or "?"):match("^[^-]+") or "?"
     local me = OMQ.GetSelf and OMQ:GetSelf()
     if me and me.name == who then return end

@@ -5,6 +5,8 @@
 --     frame, its tooltip says why (gain, or "sells for most" when none is an upgrade), and it is preselected
 --     in the window (decision 308) - "Complete Quest" takes it unless I click another one.
 -- Holding Shift while talking to the NPC switches all of it off for that conversation.
+-- Repeatable, daily and weekly quests (cloth donations, reputation hand-ins) are never taken, handed in or
+-- rewarded on their own: they cost items each time and would run in a loop (review H2). The dad clicks them.
 -- Quests shared by a dad are left to QuestSync (decision 128).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
@@ -23,6 +25,41 @@ local function fromPlayer()
     return UnitIsPlayer and UnitExists and UnitExists("npc") and UnitIsPlayer("npc") and true or false
 end
 local function level() return UnitLevel and tonumber((UnitLevel("player"))) or 1 end
+
+-- repeatable, daily or weekly (review H2): the NPC list's flags, remembered per quest id for the quest window
+local repeatables = {}
+local function flagged(repeatable, frequency)
+    if isSecret(repeatable) or isSecret(frequency) then return true end      -- unknown: the safe side
+    if repeatable == true or repeatable == 1 then return true end
+    local f = tonumber(frequency)
+    return f ~= nil and f > 0
+end
+function QA.Repeatable(questID, repeatable, frequency)
+    if flagged(repeatable, frequency) then
+        if questID and not isSecret(questID) then repeatables[questID] = true end
+        return true
+    end
+    if questID and not isSecret(questID) then
+        if repeatables[questID] then return true end
+        local CQ = C_QuestLog
+        if CQ and CQ.IsRepeatableQuest then
+            local ok, r = pcall(CQ.IsRepeatableQuest, questID)
+            if ok and r and not isSecret(r) then return true end
+        end
+    end
+    return false
+end
+-- the quest window that is open now: daily/weekly from the game, else what the NPC list said about it
+function QA.WindowRepeatable()
+    for _, f in ipairs({ QuestIsDaily, QuestIsWeekly }) do
+        local ok, v = pcall(f)
+        if ok and v and not isSecret(v) then return true end
+    end
+    local id = GetQuestID and GetQuestID()
+    if isSecret(id) then return true end
+    return QA.Repeatable(id ~= 0 and id or nil)
+end
+function QA._ResetRepeatables() repeatables = {} end
 
 -- grey for me? the game says it (isTrivial); else the quest level from the data against the green range
 function QA.Trivial(questID, flag)
@@ -46,10 +83,12 @@ local function gossipLists()
     local avail, active = {}, {}
     if G and G.GetAvailableQuests then
         for _, q in ipairs(G.GetAvailableQuests() or {}) do
-            avail[#avail + 1] = { id = q.questID, trivial = q.isTrivial, pick = function() G.SelectAvailableQuest(q.questID) end }
+            avail[#avail + 1] = { id = q.questID, trivial = q.isTrivial, rep = QA.Repeatable(q.questID, q.repeatable, q.frequency),
+                pick = function() G.SelectAvailableQuest(q.questID) end }
         end
         for _, q in ipairs(G.GetActiveQuests and G.GetActiveQuests() or {}) do
-            active[#active + 1] = { id = q.questID, complete = q.isComplete, pick = function() G.SelectActiveQuest(q.questID) end }
+            active[#active + 1] = { id = q.questID, complete = q.isComplete, rep = QA.Repeatable(q.questID, q.repeatable, q.frequency),
+                pick = function() G.SelectActiveQuest(q.questID) end }
         end
         return avail, active
     end
@@ -58,12 +97,14 @@ local function gossipLists()
         local t = { GetGossipAvailableQuests() }
         for i = 1, GetNumGossipAvailableQuests() do
             local trivial = t[(i - 1) * 7 + 3]
-            avail[#avail + 1] = { trivial = trivial, pick = function() SelectGossipAvailableQuest(i) end }
+            local rep = flagged(t[(i - 1) * 7 + 5], t[(i - 1) * 7 + 4])
+            avail[#avail + 1] = { trivial = trivial, rep = rep, pick = function() SelectGossipAvailableQuest(i) end }
         end
         local a = { GetGossipActiveQuests and GetGossipActiveQuests() or nil }
         for i = 1, (GetNumGossipActiveQuests and GetNumGossipActiveQuests() or 0) do
+            -- the old active list has no repeatable flag: hand-ins of this API are left to the dad
             local complete = a[(i - 1) * 6 + 4]
-            active[#active + 1] = { complete = complete, pick = function() SelectGossipActiveQuest(i) end }
+            active[#active + 1] = { complete = complete, rep = true, pick = function() SelectGossipActiveQuest(i) end }
         end
     end
     return avail, active
@@ -71,12 +112,18 @@ end
 local function greetingLists()
     local avail, active = {}, {}
     for i = 1, (GetNumAvailableQuests and GetNumAvailableQuests() or 0) do
-        local isTrivial = GetAvailableQuestInfo and select(1, GetAvailableQuestInfo(i))
-        avail[#avail + 1] = { trivial = isTrivial, pick = function() SelectAvailableQuest(i) end }
+        local isTrivial, frequency, isRepeatable, _, qid
+        if GetAvailableQuestInfo then isTrivial, frequency, isRepeatable, _, qid = GetAvailableQuestInfo(i) end
+        avail[#avail + 1] = { id = qid, trivial = isTrivial, rep = QA.Repeatable(qid, isRepeatable, frequency),
+            pick = function() SelectAvailableQuest(i) end }
     end
     for i = 1, (GetNumActiveQuests and GetNumActiveQuests() or 0) do
         local _, complete = GetActiveTitle(i)
-        active[#active + 1] = { complete = complete, pick = function() SelectActiveQuest(i) end }
+        local qid = GetActiveQuestID and GetActiveQuestID(i)
+        if isSecret(qid) then qid = nil end
+        -- without a quest id the greeting cannot tell a repeatable hand-in: left to the dad
+        active[#active + 1] = { id = qid, complete = complete, rep = (not qid) or QA.Repeatable(qid),
+            pick = function() SelectActiveQuest(i) end }
     end
     return avail, active
 end
@@ -84,10 +131,10 @@ end
 -- first a finished quest to hand in, then a quest to take
 function QA.Choose(avail, active)
     if QA.On("autoTurnIn") then
-        for _, q in ipairs(active) do if q.complete then return q, "turnin" end end
+        for _, q in ipairs(active) do if q.complete and not q.rep then return q, "turnin" end end
     end
     if QA.On("autoAccept") then
-        for _, q in ipairs(avail) do if not QA.Trivial(q.id, q.trivial) then return q, "accept" end end
+        for _, q in ipairs(avail) do if not q.rep and not QA.Trivial(q.id, q.trivial) then return q, "accept" end end
     end
 end
 -- a quest that cannot be taken (full log) would come back again and again: at most PICKS picks in a row
@@ -116,10 +163,11 @@ local function onDetail()
     local id = GetQuestID and GetQuestID()
     if QA.Trivial(id) then return end
     if QuestGetAutoAccept and QuestGetAutoAccept() then return end    -- the game takes it itself
+    if QA.WindowRepeatable() then return end
     AcceptQuest()
 end
 local function onProgress()
-    if paused() or not QA.On("autoTurnIn") then return end
+    if paused() or not QA.On("autoTurnIn") or QA.WindowRepeatable() then return end
     if IsQuestCompletable and IsQuestCompletable() then CompleteQuest() end
 end
 
@@ -238,7 +286,7 @@ local function onComplete()
         end
         return
     end
-    if paused() or not QA.On("autoTurnIn") then return end
+    if paused() or not QA.On("autoTurnIn") or QA.WindowRepeatable() then return end
     GetQuestReward(n == 1 and 1 or nil)
 end
 

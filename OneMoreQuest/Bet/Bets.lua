@@ -25,7 +25,13 @@ local FIGHT_READ = 9               -- the damage meter is read 1.5, 4 and 8 s af
 local ROLL_WAIT = 10
 local FALL_DEATH_WINDOW = 3        -- dying this soon after a fall counts as dying from it
 local LETTERS = "ABDEFGHKLMNPRST"  -- frequent first letters only
+local STALE_JOIN = 30              -- review H5: a join phase the starter never closed is off this long after its end
+local STALE_RESULT = 120           -- review H5: a timed bet whose result never came is off this long after its end
+local STARTER_GONE = 60            -- review H5: the starter is out of the group (or silent) this long: his bets are off
+local FIRST_RESEND = 5             -- review H5: a "first" report is sent again at most this often while no result came
+local FIRST_SENDS = 3
 B.JOIN_SECONDS, B.COOLDOWN, B.MAX_RUNNING = JOIN_SECONDS, COOLDOWN, MAX_RUNNING
+B.STALE_JOIN, B.STALE_RESULT, B.STARTER_GONE, B.FIRST_RESEND, B.FIRST_SENDS = STALE_JOIN, STALE_RESULT, STARTER_GONE, FIRST_RESEND, FIRST_SENDS
 B.TEST_SECONDS = 60                -- bet simulator (Sim/BetSim.lua): timed bets run 1 minute, no cooldown
 
 -- the bet simulator runs: fake dad only, short bets, no cooldown, no real mail
@@ -128,19 +134,20 @@ local function nameOf(guid)
     return u and u.name or "?"
 end
 
--- the name the mail needs (decision 173): from the hello, else from the unit
+-- the name the mail needs (decision 173): from the game's party unit first (review H3: a hello could name
+-- someone else), else from the hello
 local function fullNameOf(guid)
     local u = OMQ.users and OMQ.users[guid]
-    if u and u.fullName then return u.fullName end
     for i = 1, 4 do
         local unit = "party" .. i
         if UnitGUID and UnitGUID(unit) == guid then
             local first, second = UnitName(unit)
-            if first and not isSecret(first) then
+            if first and not isSecret(first) and not isSecret(second) then
                 return (type(second) == "string" and second ~= "") and (first .. " " .. second) or first
             end
         end
     end
+    if u and u.fullName then return u.fullName end
     return u and u.name
 end
 B.FullNameOf = fullNameOf
@@ -245,8 +252,14 @@ local function report(b, value, src, detail)
     if not m or b.reported then return end
     local first = KIND[b.kind].mode == "first"
     if not first then b.reported = true end
-    -- "first" bets: the value is the time since the bet started, in seconds (decision 227)
-    if first then value = math.max(0, now() - (b.startedAt or now())) end
+    -- "first" bets: the value is the time since the bet started, in seconds (decision 227). The event can stay
+    -- true (a near death is still counted): the report goes out again only a few times, spaced (review H5)
+    if first then
+        if b.firstSends and (b.firstSends >= FIRST_SENDS or now() - (b.firstSentAt or 0) < FIRST_RESEND) then return end
+        b.firstSends, b.firstSentAt = (b.firstSends or 0) + 1, now()
+        if b.firstValue == nil then b.firstValue = math.max(0, now() - (b.startedAt or now())) end
+        value = b.firstValue
+    end
     detail = clean(detail)
     B:OnValue(b.id, m.guid, value, src, detail)
     OMQ:Send("BV", b.id, m.guid, string.format("%.0f", value), src or "", detail)
@@ -535,8 +548,47 @@ local function judgeValues(b)
     return winners
 end
 
+-- review H5: only the starter decides. When he is gone (left the group, went silent, reloaded and lost his bets),
+-- his bets would stay "join" or "active" for the others for ever and block that kind: they are called off, no gold moves.
+function B.StarterGone(b, why)
+    if not b or isJudge(b) or (b.state ~= "join" and b.state ~= "active") then return false end
+    b.state, b.reason = "off", why or "the starter is gone"
+    OMQ:Fire("BET_RESULT", b.id)
+    return true
+end
+local function tickStale(t)
+    local changed = false
+    for _, b in pairs(bets) do
+        if not isJudge(b) and (b.state == "join" or b.state == "active") then
+            local u = OMQ.users and OMQ.users[b.starter]
+            local here = u and OMQ:IsOnline(u)
+            if here then b.goneSince = nil else b.goneSince = b.goneSince or t end
+            if b.goneSince and t - b.goneSince >= STARTER_GONE then
+                changed = B.StarterGone(b, "the starter left") or changed
+            elseif b.state == "join" and t >= (b.joinUntil or t) + STALE_JOIN then
+                changed = B.StarterGone(b, "the starter never started it") or changed
+            elseif b.state == "active" and b.endsAt and t >= b.endsAt + DECIDE_GRACE + STALE_RESULT then
+                changed = B.StarterGone(b, "no result came") or changed
+            end
+        end
+    end
+    if changed then fire() end
+end
+B._tickStale = tickStale
+
+OMQ:On("USER_JOINED", function(guid, reloaded)
+    if not reloaded then return end
+    local changed = false
+    for _, b in pairs(bets) do
+        if b.starter == guid then changed = B.StarterGone(b, "the starter reloaded") or changed end
+    end
+    if changed then fire() end
+end)
+
 local function tickJudge()
     local t = now()
+    local okS, errS = pcall(tickStale, t)
+    if not okS then OMQ:Error("bets stale", errS) end
     for _, b in pairs(bets) do
         if isJudge(b) then
             if b.state == "join" then
@@ -892,6 +944,13 @@ OMQ:RegisterCommand("bet", function(arg)
     end
     if arg == "sim" then
         if OMQ.BetSim then OMQ.BetSim:Toggle() end
+        return
+    end
+    if arg == "retry" then
+        local n = OMQ.BetMail and OMQ.BetMail.Retry and OMQ.BetMail.Retry() or 0
+        OMQ:Print(n > 0 and string.format("%d unconfirmed bet debt%s will be sent at the next mailbox", n, n == 1 and "" or "s")
+            or "no unconfirmed bet debts")
+        fire()
         return
     end
     if OMQ.BetUI then OMQ.BetUI:ToggleCreate() end
