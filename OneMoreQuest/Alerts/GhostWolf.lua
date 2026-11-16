@@ -158,8 +158,9 @@ end
 function G.Check()
     -- in combat the cards are hidden anyway; the run starts again after the fight
     if InCombatLockdown and InCombatLockdown() then reset(); return "keep" end
+    -- an empty list (not nil) tells the manager the run is over, so a card clicked away comes back next time (fix 606)
     local c = G.Card()
-    return c and { c } or nil
+    return { c }
 end
 
 local watch = CreateFrame("Frame")
