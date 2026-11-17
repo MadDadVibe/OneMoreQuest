@@ -68,6 +68,18 @@ local function objPlace(spots, from)
     return bestPlace(good, from)
 end
 
+-- objective places the quest data lacks (fix 631, MadDadVibe: Screecher Spirits had no stop for the 3 spirits in Feralas):
+-- from Factoruide's objectives and spawns, the biggest groups, { uiMap, x, y, spawns }
+D.OBJ_FIX = {
+    [1150] = { {1441,26.4,55.5,4} },  -- Test of Endurance
+    [1955] = { {1445,46.0,57.3,2} },  -- The Exorcism
+    [3520] = { {1444,44.7,37.6,7}, {1444,57.0,51.0,4}, {1444,46.3,49.2,3}, {1444,57.6,57.3,3} },  -- Screecher Spirits
+    [4726] = { {1428,80.3,27.4,3}, {1428,86.5,32.0,3}, {1428,22.9,69.7,2}, {1428,25.1,46.5,2} },  -- Broodling Essence
+    [5781] = { {1423,28.4,86.5,3}, {1423,23.9,74.2,1} },  -- Of Forgotten Memories
+    [6804] = { {1423,44.3,40.3,1}, {1423,62.6,27.3,1} },  -- Poisoned Water
+    [7640] = { {1423,10.4,20.7,21}, {1423,13.9,21.8,8}, {1423,13.8,24.8,4}, {1423,10.7,16.7,2} },  -- Exorcising Terrordale
+}
+
 -- may I take this quest some day? faction, race, class, no excluding quest done (not the level, D2)
 function D.ForMe(id, who, log)
     local d = data(id)
@@ -264,7 +276,8 @@ function resolve(ctx, id, goal, visiting, depth)
     local from = ctx.pos
     if not inLog then e.pick = bestPlace(d[7], from); from = e.pick or from end
     if goal == "turnin" then
-        if not NQ().IsComplete(id) and d[9] then e.obj = objPlace(d[9], from); from = e.obj or from end
+        local objs = d[9] or D.OBJ_FIX[id]
+        if not NQ().IsComplete(id) and objs then e.obj = objPlace(objs, from); from = e.obj or from end
         e.turnin = bestPlace(d[8], from) or e.pick or from
         if not (e.obj or e.turnin) then return false end
     elseif not e.pick then
