@@ -346,12 +346,24 @@ function U.AreaView()
     return view
 end
 
+-- outside the zone of the running Area Run (decision 623): no card at all, only the run's bar and arrow stay
+function U.AreaAway()
+    local R, A = OMQ.QuestRun, OMQ.AreaRun
+    if moveMode or not (R and A and A.MyZone and R:Active()) then return false end
+    if OMQ.ChainRun and OMQ.ChainRun:Active() then return false end
+    local r = R:Run()
+    if not (r and r.kind == "area" and r.zone) then return false end
+    local ok, here = pcall(A.MyZone)
+    return ok and here ~= nil and here ~= r.zone or false
+end
+
 function U:Render()
     if not frame then return end
     local Q = OMQ.QTrack
     -- a Grind Run takes the whole card (decision 518): the quest tracker is not needed while it goes
     local grind = not moveMode and OMQ.GrindUI and OMQ.GrindUI.TrackerView() or nil
     local view = moveMode and DEMO or grind or U.AreaView() or (Q:Shown() and Q:View()) or U.RunView()
+    if view and not grind and U.AreaAway() then view = nil end
     if not view then
         frame:Hide()
         lastStamp = nil
