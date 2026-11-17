@@ -7,6 +7,8 @@
 --   Left click on a marker: the big arrow points there (the run's order stays). Right click: only the marker goes;
 --   a new run brings the run's markers back, a new search a new symbol. Hover: number, quest, what to do, yards.
 --   The map pin, the corpse and the group arrow get no marker (the game shows them).
+--   An Area Run shows only its next M.AREA_SHOW (5) markers of the way; when a quest is done its stop goes and the
+--   next one comes in (decision 614). Stops sharing one marker count once, a right clicked marker lets the next in.
 --   No taint: the markers are own plain buttons on an own layer laid over the world map's canvas. Blizzard's pin
 --   pools and data providers are not touched; the map frame only gets a HookScript for OnShow/OnHide.
 --   Switch and symbol: options, Guidance (OMQDB.guide.mapMarkers, OMQDB.guide.markerIcon); /omq markers [on|off|diag].
@@ -20,6 +22,7 @@ M.SIZE = 22               -- a run marker (the first stop 26)
 M.FIRST = 26
 M.ICON = 24               -- the search symbol
 M.MAX = 40                -- markers at most
+M.AREA_SHOW = 5           -- an Area Run: only the next 5 markers of the way (MadDadVibe); a done quest lets the next one in
 M.MERGE = 15              -- yards: stops this close share one marker ("1-2"), fix 598
 M.ARRIVE = 12             -- yards: the search symbol goes away there
 M.REFRESH = 0.5           -- seconds between two looks at the runs while the map is open
@@ -166,6 +169,8 @@ function M.Collect()
     local src = chainMarkers(runs) or questMarkers(runs) or grindMarkers(runs)
     if src ~= hiddenFor then hidden, hiddenFor = {}, src end
     local n = 0
+    local limit = M.MAX
+    if runs[1] and runs[1].run == "area" then limit = math.min(M.MAX, M.AREA_SHOW) end
     for _, m in ipairs(runs) do
         n = n + 1                                         -- a hidden marker keeps its number: the order stays
         m.n = n
@@ -179,7 +184,7 @@ function M.Collect()
             if host then
                 host.also = host.also or {}
                 host.also[#host.also + 1] = m
-            elseif #out < M.MAX then out[#out + 1] = m end
+            elseif #out < limit then out[#out + 1] = m end
         end
     end
     local G = OMQ.Guide
