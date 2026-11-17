@@ -286,12 +286,71 @@ function U.RunView()
              rows = { { text = what, cells = {} } } }
 end
 
+-- the Area Run card (decision 615): first the quest I am working on (my newest progress, until its objectives
+-- are fulfilled), else the next step of the run: its objectives as the group card, or what to pick up or to
+-- turn in there. Turn-ins at the same giver one after the other are listed together. The stamp still comes.
+U.TURNIN_YD = 30
+function U.TurnIns(r)
+    local s1 = r and r.stops and r.stops[1]
+    if not (s1 and s1.kind == "t" and s1.place) then return {} end
+    local out = { s1.qid }
+    for k = 2, #r.stops do
+        local s = r.stops[k]
+        if s.kind ~= "t" or not s.place or s.place.inst ~= s1.place.inst then break end
+        local d = math.sqrt((s.place.a - s1.place.a) ^ 2 + (s.place.b - s1.place.b) ^ 2)
+        if d > U.TURNIN_YD then break end
+        out[#out + 1] = s.qid
+    end
+    return out
+end
+
+function U.AreaView()
+    local R = OMQ.QuestRun
+    if moveMode or not (R and R:Active()) then return nil end
+    if OMQ.ChainRun and OMQ.ChainRun:Active() then return nil end
+    local r = R:Run()
+    if not (r and r.kind == "area") then return nil end
+    local Q = OMQ.QTrack
+    local allowed = Q:Allowed()
+    local function card(v)
+        if not v then return nil end
+        v.run, v.showNav = "AREA RUN", false
+        return v
+    end
+    if allowed and Q:Stamp() and Q:Shown() then
+        local v = card(Q:View())
+        if v then return v end
+    end
+    local ok, t = pcall(R.Target, R)
+    if not ok then t = nil end
+    local qid = allowed and Q:Working() or nil
+    if not qid and allowed and t and t.kind == "o" and Q.Trackable(t.qid) then qid = t.qid end
+    if qid then
+        local v = card(Q:View(qid))
+        if v then return v end
+    end
+    local view = { run = "AREA RUN", qid = t and t.qid, title = t and t.title or "", showNav = false, stamp = false,
+                   cols = {}, rows = { { text = t and t.what or "all stops done", cells = {} } } }
+    if t and t.kind == "t" then
+        local list = U.TurnIns(r)
+        if #list > 1 then
+            view.title = string.format("Turn in %d quests", #list)
+            view.rows = {}
+            for _, id in ipairs(list) do
+                local nxt = R.FollowUpIn(r, id)
+                view.rows[#view.rows + 1] = { text = R.Title(id) .. (nxt and (", then pick up " .. R.Title(nxt)) or ""), cells = {} }
+            end
+        end
+    end
+    return view
+end
+
 function U:Render()
     if not frame then return end
     local Q = OMQ.QTrack
     -- a Grind Run takes the whole card (decision 518): the quest tracker is not needed while it goes
     local grind = not moveMode and OMQ.GrindUI and OMQ.GrindUI.TrackerView() or nil
-    local view = moveMode and DEMO or grind or (Q:Shown() and Q:View()) or U.RunView()
+    local view = moveMode and DEMO or grind or U.AreaView() or (Q:Shown() and Q:View()) or U.RunView()
     if not view then
         frame:Hide()
         lastStamp = nil

@@ -60,6 +60,9 @@ local dist = {}              -- questID -> yards to its point on my map, from th
 local dismissed = {}         -- questID -> true: closed by a right click while nearby, until I left it
 local nearAt = 0             -- time of the next nearby check
 local pinned = {}            -- questID -> true: a quest of the running Quest Run, its card stays (decision 465)
+local ownAt = {}             -- questID -> time of my own last progress on it (Area Run card, decision 615)
+local HOLD = 300             -- the quest I worked on stays on the Area Run card this long without new progress
+T.HOLD = HOLD
 
 ----------------------------------------------------------------------
 -- Counts
@@ -249,6 +252,7 @@ local function progress(qid, guid)
 end
 
 local function ownProgress(qid)
+    ownAt[qid] = now()
     if not sendAt[qid] then sendAt[qid] = now() + SEND_DELAY end
     local me = OMQ:GetSelf()
     if me then progress(qid, me.guid) end
@@ -260,6 +264,7 @@ local function questGone(qid)
     local me = OMQ:GetSelf()
     if me and OMQ:GetChannel() then OMQ:Send("QG", me.guid, tostring(qid)) end
     sendAt[qid] = nil
+    ownAt[qid] = nil
     local i = cardIndex(qid)
     if i and not (stamp and stamp.qid == qid) then
         table.remove(cards, i)                       -- R16: the card of a quest that left my log goes
@@ -453,6 +458,20 @@ function T:Pin(set, front)
     if added > 0 then visible = true; fire() end
 end
 function T:Pinned() return pinned end
+
+-- the quest I am working on (decision 615): the quest of my newest own progress while it still has open
+-- objectives, at most HOLD seconds after that progress. When that quest is finished, nothing is worked on, even
+-- if an older quest is still open: the Area Run card then shows the run's next step (a turn-in, too).
+function T:Working(t)
+    t = t or now()
+    local best, bt
+    for qid, at in pairs(ownAt) do
+        if not mine[qid] then ownAt[qid] = nil
+        elseif not bt or at > bt then best, bt = qid, at end
+    end
+    if best and t - bt <= T.HOLD and T.Trackable(best) then return best end
+    return nil
+end
 function T:Distance(qid) return dist[qid] end
 
 ----------------------------------------------------------------------
@@ -544,9 +563,10 @@ function T.StampFor(qid)
 end
 
 function T:IsVisible() return visible end
-function T:Shown()
-    return visible and OMQ:Master("group") and not (OMQ.db and OMQ.db.options and OMQ.db.options.qtrack == false)
+function T:Allowed()
+    return OMQ:Master("group") and not (OMQ.db and OMQ.db.options and OMQ.db.options.qtrack == false) and true or false
 end
+function T:Shown() return visible and T:Allowed() end
 function T:Cards() return cards end
 function T:Index() return idx end
 function T:Stamp() return stamp end
@@ -566,13 +586,16 @@ end
 -- right click: closed on this client until the next progress of any dad (decision 157); nearby quests stay
 -- away until I have left them (decision 453)
 function T:Close()
+    ownAt = {}                                           -- the Area Run card goes back to the run's next step (615)
     for qid, n in pairs(near) do if n then dismissed[qid] = true end end
     self:Hide()
 end
 
-function T:View()
-    local qid = stamp and stamp.qid or cards[idx]
+-- force: the card of this quest, without the arrows to switch (the Area Run card, decision 615)
+function T:View(force)
+    local qid = force or (stamp and stamp.qid) or cards[idx]
     if not qid then return nil end
+    local stamped = stamp ~= nil and stamp.qid == qid
     local title, level = titleOf(qid)
     local cols = self:Columns()
     local m = mine[qid]
@@ -601,8 +624,8 @@ function T:View()
         rows[i] = row
     end
     return { qid = qid, title = title, level = level, cols = cols, rows = rows,
-             nav = idx .. " / " .. #cards, showNav = not stamp and #cards > 1, stamp = stamp ~= nil,
-             stampKind = stamp and T.StampFor(qid) or nil }
+             nav = idx .. " / " .. #cards, showNav = not force and not stamp and #cards > 1, stamp = stamped,
+             stampKind = stamped and T.StampFor(qid) or nil }
 end
 
 ----------------------------------------------------------------------
