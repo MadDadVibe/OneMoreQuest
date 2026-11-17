@@ -2,7 +2,7 @@
 -- { uiMapID, lowest level, highest level, faction ("A", "H", "C" contested), English name }
 -- Level ranges as in the classic game guides. The name shown comes from the game (C_Map), so a German client
 -- shows the German name; the English one is the fallback. The quest hub is worked out from the quest givers
--- of Data/QuestPlaces.lua (NextQuest.ZoneHub). Zephras Isle (2521) is missing: the quest data has no quests there.
+-- of Data/QuestPlaces.lua (NextQuest.ZoneHub). The new Forever zones take their quests from Data/ForeverQuests.lua.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 OMQ.QuestZones = {
@@ -47,4 +47,8 @@ OMQ.QuestZones = {
   { 1449, 48, 55, "C", "Un'Goro Crater" },
   { 1451, 55, 60, "C", "Silithus" },
   { 1452, 55, 60, "C", "Winterspring" },
+  -- new Forever zones (decision 612)
+  { 2521, 1, 12, "C", "Zephras Isle" },
+  { 2652, 35, 45, "C", "Shen'dralas" },
+  { 2482, 54, 60, "C", "Mount Hyjal" },
 }
