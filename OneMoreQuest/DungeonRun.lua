@@ -83,13 +83,13 @@ end
 -- Steps that are no quest (decision 628): an item a dungeon quest needs, got outside the dungeon. The run counts such
 -- a step like a quest under its own negative id: "o" = get the first item, "t" = turn it into the needed one; done when
 -- the needed item is in the bags. Zul'Farrak: Gahz'rilla only comes with the Mallet of Zul'Farrak - kill Qiaga the
--- Keeper (elite) on top of Jintha'Alor (The Hinterlands) for the Sacred Mallet and use it at the Altar of Zul next to her.
+-- Keeper (elite) on top of Jintha'Alor (The Hinterlands) for the Sacred Mallet and use it at the altar of Jintha'Alor (fix 629).
 ----------------------------------------------------------------------
 D.ITEM_STEPS = {
     zf = {
         { id = -9239, quest = 2770, item = 9239, part = 9241, title = "Mallet of Zul'Farrak", elite = true,
-          map = 1425, x = 48.6, y = 68.2,
-          kill = "kill Qiaga the Keeper (elite) for the Sacred Mallet", use = "use the Sacred Mallet at the Altar of Zul" },
+          map = 1425, x = 48.6, y = 68.2, ax = 59.7, ay = 77.8,     -- Qiaga; the Jintha'Alor altar (Factoruide object 142180, fix 629)
+          kill = "kill Qiaga the Keeper (elite) for the Sacred Mallet", use = "use the Sacred Mallet at the Altar of Jintha'Alor" },
     },
 }
 function D.ItemStep(id)
@@ -308,10 +308,11 @@ function D.Build(key, pos, log, who, skip)
     end
     for _, st in ipairs(D.ITEM_STEPS[key] or {}) do           -- the steps that are no quest (628)
         local place = placeOf({ st.map, st.x, st.y, 1 })
-        if place and not ever(st.quest) and not D.Have(st.item) then
+        local altar = st.ax and placeOf({ st.map, st.ax, st.ay, 1 }) or place
+        if place and altar and not ever(st.quest) and not D.Have(st.item) then
             if skip[st.id] then info.skipped[#info.skipped + 1] = st.id
             else
-                local e = { id = st.id, goal = "turnin", needs = {}, turnin = place, item = true,
+                local e = { id = st.id, goal = "turnin", needs = {}, turnin = altar, item = true,
                             dungeon = ctx.quests[st.quest] and st.quest or nil }
                 if not D.Have(st.part) then e.obj = place end
                 ctx.quests[st.id] = e
