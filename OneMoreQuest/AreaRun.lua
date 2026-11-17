@@ -164,7 +164,15 @@ function A.Learned(id)
     return nil
 end
 -- the objective spots of a quest: the data's, else the learned ones
+-- fix 621: a quest with an objective the data has no place for (OMQ.ObjPartial) takes both, the learned one first
 function A.ObjSpots(id, d)
+    if d and d[9] and OMQ.ObjPartial and OMQ.ObjPartial[id] then
+        local l = A.Learned(id)
+        if not l then return d[9] end
+        local t = { l[1] }
+        for _, s in ipairs(d[9]) do t[#t + 1] = s end
+        return t
+    end
     if d and d[9] then return d[9] end
     return A.Learned(id)
 end
@@ -176,7 +184,7 @@ function A.Learn(log, maps)
     local n = 0
     for id in pairs(log or {}) do
         local d = data(id)
-        if type(id) == "number" and d and not d[9] and not NQ().IsComplete(id) and R().OpenObjective(id) then
+        if type(id) == "number" and d and (not d[9] or (OMQ.ObjPartial and OMQ.ObjPartial[id])) and not NQ().IsComplete(id) and R().OpenObjective(id) then
             for _, map in ipairs(maps or {}) do
                 local x, y = gamePoint(id, map)
                 if x then
