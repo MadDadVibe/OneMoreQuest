@@ -146,6 +146,54 @@ local function objPlace(spots, from, zone)
     end
     return bestPlace(good, from, zone), (#alts > 1) and alts or nil
 end
+-- Learned objective places (decision 620): for a quest whose data has no objective place (A Boar's Delight: its plants
+-- have no known spots) the game's own point of the quest on the map is saved once the quest is in my log with open
+-- objectives, account wide in OMQ.db.learnedObj[qid] = { map, x, y } (map percent). It only fills that gap: data
+-- places always win.
+local function gamePoint(qid, map)
+    if not (map and C_QuestLog and C_QuestLog.GetQuestsOnMap) then return nil end
+    local ok, list = pcall(C_QuestLog.GetQuestsOnMap, map)
+    if not ok or type(list) ~= "table" then return nil end
+    for _, q in ipairs(list) do
+        if type(q) == "table" and q.questID == qid and number(q.x) and number(q.y) then return q.x * 100, q.y * 100 end
+    end
+end
+function A.Learned(id)
+    local l = OMQ.db and OMQ.db.learnedObj and OMQ.db.learnedObj[id]
+    if type(l) == "table" and number(l[1]) and number(l[2]) and number(l[3]) then return { { l[1], l[2], l[3], 1 } } end
+    return nil
+end
+-- the objective spots of a quest: the data's, else the learned ones
+function A.ObjSpots(id, d)
+    if d and d[9] then return d[9] end
+    return A.Learned(id)
+end
+-- learns the point of every log quest without objective places that still has open objectives; maps = where to look
+-- (the run's zone, the map I stand on). Returns how many were learned now.
+function A.Learn(log, maps)
+    if not OMQ.db then return 0 end
+    local CQ = C_QuestLog
+    local n = 0
+    for id in pairs(log or {}) do
+        local d = data(id)
+        if type(id) == "number" and d and not d[9] and not NQ().IsComplete(id) and R().OpenObjective(id) then
+            for _, map in ipairs(maps or {}) do
+                local x, y = gamePoint(id, map)
+                if x then
+                    OMQ.db.learnedObj = OMQ.db.learnedObj or {}
+                    local old = OMQ.db.learnedObj[id]
+                    if not (old and old[1] == map and math.abs(old[2] - x) < 0.5 and math.abs(old[3] - y) < 0.5) then
+                        OMQ.db.learnedObj[id] = { map, math.floor(x * 10 + 0.5) / 10, math.floor(y * 10 + 0.5) / 10 }
+                        n = n + 1
+                    end
+                    break
+                end
+            end
+        end
+    end
+    return n
+end
+
 -- the game's own point of a log quest on the zone's map (quests the data does not know)
 local function zonePoint(qid, zone)
     if not (zone and C_QuestLog and C_QuestLog.GetQuestsOnMap) then return nil end
@@ -236,7 +284,8 @@ function resolve(ctx, id, visiting, depth)
     local e = { id = id, goal = "turnin", needs = needs }
     local from = ctx.pos
     if not inLog then e.pick = bestPlace(starts(id, d), from, ctx.zone); from = e.pick or from end
-    if not NQ().IsComplete(id) and d[9] then e.obj, e.alts = objPlace(d[9], from, ctx.zone); from = e.obj or from end
+    local spots = A.ObjSpots(id, d)
+    if not NQ().IsComplete(id) and spots then e.obj, e.alts = objPlace(spots, from, ctx.zone); from = e.obj or from end
     e.turnin = bestPlace(d[8], from, ctx.zone)
     if not e.turnin then
         if inLog then e.follow = e.obj or zonePoint(id, ctx.zone) or ctx.pos; e.obj = nil
@@ -1041,6 +1090,7 @@ function A.Refresh()
     local pos = NQ().MyPos()
     if not pos then return 0 end
     local log = R().MyLog()
+    pcall(A.Learn, log, { r.zone, pos.map ~= r.zone and pos.map or nil })      -- learned places (620)
     local skip = {}
     for id in pairs(r.skip or {}) do skip[id] = true end
     local plan = A.Build(r.zone, pos, log, nil, skip, r.allow or {}, r.members, true)
@@ -1066,6 +1116,15 @@ function A.Refresh()
             if k.needs and #k.needs > 0 and not same(s.needs, k.needs) then s.needs = k.needs; repaired = true end
             if not same(s.clear, k.clear) then s.clear = k.clear; repaired = true end
             if (s.glue or nil) ~= (k.glue or nil) then s.glue = k.glue; repaired = true end
+        end
+    end
+    -- a quest of the run that had no objective stop gets the one the plan knows now (a learned place, 620)
+    local hasObj = {}
+    for _, s in ipairs(r.stops) do if s.kind == "o" or s.kind == "w" then hasObj[s.qid] = true end end
+    for _, s in ipairs(plan.stops) do
+        local q = r.quests[s.qid]
+        if s.kind == "o" and q and not q.done and not q.dropped and not q.objDone and not hasObj[s.qid] and not r.group then
+            stops[#stops + 1] = { qid = s.qid, kind = "o", place = s.place, goal = "turnin" }
         end
     end
     for _, s in ipairs(plan.stops) do
@@ -1144,9 +1203,16 @@ end
 A._later = later
 
 local ev = CreateFrame("Frame")
-for _, e in ipairs({ "PLAYER_LEVEL_UP", "QUEST_ACCEPTED" }) do pcall(ev.RegisterEvent, ev, e) end
+for _, e in ipairs({ "PLAYER_LEVEL_UP", "QUEST_ACCEPTED", "QUEST_POI_UPDATE" }) do pcall(ev.RegisterEvent, ev, e) end
 ev:SetScript("OnEvent", function(_, event)
-    if not areaRun() then return end
+    local r = areaRun()
+    if not r then return end
+    if event == "QUEST_POI_UPDATE" then           -- the map points changed: plan again only when a place was learned (620)
+        local pos = NQ().MyPos()
+        local ok, n = pcall(A.Learn, R().MyLog(), { r.zone, pos and pos.map ~= r.zone and pos.map or nil })
+        if ok and n and n > 0 then later(1) end
+        return
+    end
     later(event == "PLAYER_LEVEL_UP" and 3 or 2)
 end)
 
