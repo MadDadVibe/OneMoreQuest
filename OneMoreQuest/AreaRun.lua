@@ -312,7 +312,7 @@ local function addStops(ctx, e)
         if not place then return end
         local s = { qid = e.id, kind = kind, place = place, goal = "turnin" }
         if kind == "p" and e.needs and #e.needs > 0 then s.needs = e.needs end
-        if kind == "t" and e.late then s.late = true end
+        if kind == "t" and (e.late or A.IsBuy(e.id)) then s.late = true end      -- bought items: at the end (622)
         if kind == "o" and e.alts then
             s.alts = {}
             for _, p in ipairs(e.alts) do s.alts[#s.alts + 1] = p end
@@ -340,6 +340,36 @@ end
 -- straight on to the escort's own next stops (its turn-in), nothing in between, unless that turn-in lies outside
 -- the zone at the end.
 A.ESCORT_YD = 250
+-- quests whose items are bought or crafted (Data/BuyQuests.lua, decision 622): the turn-in waits at the end of the run
+-- until the items are there
+function A.IsBuy(id) return (OMQ.BuyQuests and OMQ.BuyQuests[id]) and true or false end
+function A.BuyOpen(id) return A.IsBuy(id) and not NQ().IsComplete(id) end
+-- moves the turn-ins of open buy quests, with every stop that waits for them, to the end (if the order stays valid)
+function A.BuyLast(stops, free)
+    local held, dep = {}, {}
+    for _, s in ipairs(stops) do if s.kind == "t" and A.BuyOpen(s.qid) then held[s.qid] = true end end
+    if not next(held) then return stops end
+    local function waits(q) return held[q] or dep[q] end
+    local more = true
+    while more do                                        -- a quest that waits for a held turn-in goes along, whole
+        more = false
+        for _, s in ipairs(stops) do
+            if not dep[s.qid] then
+                local w = s.after and waits(s.after)
+                for _, n in ipairs(s.needs or {}) do if n ~= s.qid and waits(n) then w = true end end
+                if w then dep[s.qid] = true; more = true end
+            end
+        end
+    end
+    local front, back = {}, {}
+    for _, s in ipairs(stops) do
+        if dep[s.qid] or (held[s.qid] and s.kind == "t") then back[#back + 1] = s else front[#front + 1] = s end
+    end
+    for _, s in ipairs(back) do front[#front + 1] = s end
+    if A.Valid(front, free) then return front end
+    return stops
+end
+
 function A.IsEscort(id) return (OMQ.EscortQuests and OMQ.EscortQuests[id]) and true or false end
 
 -- yards from p to the way a-b (a point when b is missing or on another continent)
@@ -638,13 +668,13 @@ function A.Order(pos, stops, free)
             if c < bc - 0.5 then best, bc = r, c end
         end
     end
-    return best
+    return A.BuyLast(best, free)
 end
 
 -- the quick order the preview shows at once while A.Order works in the background
 function A.Quick(pos, stops, free)
     local d = ways()
-    return A.Improve(pos, A.Nearest(pos, stops, free, d), free, 2, A.BUDGET, d)
+    return A.BuyLast(A.Improve(pos, A.Nearest(pos, stops, free, d), free, 2, A.BUDGET, d), free)
 end
 
 -- reversing parts, moving one to three stops in a row and taking the objective area that lies best on the way while
@@ -759,7 +789,7 @@ function A.Resort(pos, stops)
         local fresh = A.Nearest(pos, stops, free)
         if A.Valid(fresh, free) or not A.Valid(stops) then stops = fresh end
     end
-    return A.Improve(pos, stops, free, 1)
+    return A.BuyLast(A.Improve(pos, stops, free, 1), free)
 end
 
 ----------------------------------------------------------------------

@@ -325,7 +325,7 @@ function U.AreaView()
     local ok, t = pcall(R.Target, R)
     if not ok then t = nil end
     local qid = allowed and Q:Working() or nil
-    if not qid and allowed and t and t.kind == "o" and Q.Trackable(t.qid) then qid = t.qid end
+    if not qid and allowed and t and t.kind == "o" and not t.buy and Q.Trackable(t.qid) then qid = t.qid end
     if qid then
         local v = card(Q:View(qid))
         if v then return v end

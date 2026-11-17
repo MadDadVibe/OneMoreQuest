@@ -1195,6 +1195,9 @@ function R:Target()
         view.what = "turn in" .. (nxt and (", then pick up " .. R.Title(nxt)) or "")
         if not nxt and run.kind == "dungeon" then view.what = "turn in the pre-quest" end
     else view.what = R.OpenObjective(s.qid) or "objectives" end
+    if view.open and OMQ.AreaRun and OMQ.AreaRun.IsBuy(s.qid) then          -- bought or crafted items (622)
+        view.buy, view.what = true, "buy or craft: " .. (R.OpenObjective(s.qid) or "the items")
+    end
     return view
 end
 
