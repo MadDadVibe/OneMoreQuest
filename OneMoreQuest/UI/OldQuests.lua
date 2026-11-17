@@ -17,15 +17,37 @@ local W, ROW_H, MAX_ROWS = 360, 20, 35
 local function isSecret(v) return issecretvalue and issecretvalue(v) or false end
 local function myLevel() return UnitLevel and tonumber((UnitLevel("player"))) or 1 end
 
--- quests below this level are grey for me (same rule as the quest log's colour)
+-- quests below this level are grey for me (same rule as the quest log's colour); the game's trivial range for me
+-- (UnitQuestTrivialLevelRange) first, else the old guess (fix 627: Forever has no GetQuestGreenRange)
 function OQ.GreyBelow(level)
+    if UnitQuestTrivialLevelRange then
+        local ok, r = pcall(UnitQuestTrivialLevelRange, "player")
+        if ok and type(r) == "number" and not isSecret(r) then return level - r end
+    end
     local NQ = OMQ.NextQuest
     if NQ and NQ.GreyBelow then return NQ.GreyBelow(level) end
     return level - 5 - math.floor(level / 10)
 end
 
--- is this log quest grey? the level the log shows, else the game's own trivial flag
+-- the colour the quest log gives this quest: the game asks per quest (C_PlayerInfo.GetContentDifficultyQuestForPlayer,
+-- Blizzard's QuestUtilsOverrides); nil when the game does not say
+local TRIVIAL = 0
+function OQ.GameDifficulty(id)
+    local P = C_PlayerInfo
+    if not (P and P.GetContentDifficultyQuestForPlayer) then return nil end
+    local ok, d = pcall(P.GetContentDifficultyQuestForPlayer, id)
+    if ok and type(d) == "number" and not isSecret(d) then return d end
+    return nil
+end
+local function trivialValue()
+    local E = Enum and Enum.RelativeContentDifficulty
+    return (E and type(E.Trivial) == "number") and E.Trivial or TRIVIAL
+end
+
+-- is this log quest grey? what the quest log shows (fix 627), else the level against my range, else the trivial flag
 function OQ.IsGrey(id, qlevel, playerLevel)
+    local d = OQ.GameDifficulty(id)
+    if d then return d == trivialValue() end
     if type(qlevel) == "number" and not isSecret(qlevel) and qlevel > 0 then
         return qlevel < OQ.GreyBelow(playerLevel or myLevel())
     end
@@ -33,6 +55,15 @@ function OQ.IsGrey(id, qlevel, playerLevel)
     if QA and QA.Trivial then return QA.Trivial(id) end
     return false
 end
+
+-- the level the quest log shows in front of the name: difficultyLevel, else level
+local function shownLevel(info)
+    local function ok(v) return type(v) == "number" and not isSecret(v) and v > 0 end
+    if ok(info.difficultyLevel) then return info.difficultyLevel end
+    if ok(info.level) then return info.level end
+    return nil
+end
+OQ._shownLevel = shownLevel
 
 local function isComplete(id, info)
     if info and info.isComplete ~= nil and not isSecret(info.isComplete) then
@@ -61,10 +92,11 @@ function OQ.List()
                 zone = not isSecret(info.title) and info.title or nil
             else
                 local id = info.questID
+                local qlvl = shownLevel(info)
                 if type(id) == "number" and not isSecret(id) and id > 0 and not info.isHidden
-                   and OQ.IsGrey(id, info.level, lvl) then
+                   and OQ.IsGrey(id, qlvl, lvl) then
                     out[#out + 1] = { id = id, title = (not isSecret(info.title) and info.title) or ("Quest " .. id),
-                                      level = (not isSecret(info.level)) and info.level or nil, zone = zone,
+                                      level = qlvl, zone = zone,
                                       done = isComplete(id, info) }
                 end
             end
@@ -247,10 +279,13 @@ function OQ.LogCount()
     return n
 end
 function OQ.MaxQuests()
-    for _, f in ipairs({ C_QuestLog and C_QuestLog.GetMaxNumQuestsCanAccept, GetMaxNumQuestsCanAccept }) do
-        local ok, m = pcall(f)
+    for _, f in ipairs({ C_QuestLog and C_QuestLog.GetMaxNumQuestsCanAccept or false, GetMaxNumQuestsCanAccept or false }) do
+        local ok, m = pcall(f or error)
         if ok and type(m) == "number" and not isSecret(m) and m > 1 then return m end
     end
+    local K = Constants and Constants.QuestLogConsts               -- what the quest map's "N/40" uses
+    local m = K and K.MAXIMUM_NUM_QUESTS_LOG_CAN_ACCEPT
+    if type(m) == "number" and m > 1 then return m end
     return 40
 end
 local function inCombat()
@@ -300,4 +335,30 @@ ev:SetScript("OnEvent", function(_, e)
     if C_Timer and C_Timer.After then C_Timer.After(2, refreshBadge) else refreshBadge() end
 end)
 
-OMQ:RegisterCommand("old", function() OQ:Toggle() end, "Old Quest Check: grey quests in your log, abandon them with one click")
+-- /omq old probe: every quest of the log with the levels and what the game says, to compare with the log's colours
+function OQ.Probe()
+    local CQ = C_QuestLog
+    local lines = {}
+    local lvl = myLevel()
+    local okR, range = pcall(UnitQuestTrivialLevelRange or error, "player")
+    lines[1] = string.format("Old Quest Check probe: level %d, trivial range %s, grey below %s, max %d", lvl,
+        okR and tostring(range) or "-", tostring(OQ.GreyBelow(lvl)), OQ.MaxQuests())
+    if CQ and CQ.GetNumQuestLogEntries and CQ.GetInfo then
+        local ok, num = pcall(CQ.GetNumQuestLogEntries)
+        for i = 1, (ok and type(num) == "number") and num or 0 do
+            local okI, info = pcall(CQ.GetInfo, i)
+            if okI and type(info) == "table" and not info.isHeader then
+                local id = info.questID
+                lines[#lines + 1] = string.format("%s [%s/%s] %s: game %s, grey %s%s", tostring(id), tostring(info.level),
+                    tostring(info.difficultyLevel), tostring(info.title), tostring(OQ.GameDifficulty(id)),
+                    tostring(OQ.IsGrey(id, shownLevel(info), lvl)), info.isHidden and ", hidden" or "")
+            end
+        end
+    end
+    for _, l in ipairs(lines) do OMQ:Print(l) end
+    return lines
+end
+
+OMQ:RegisterCommand("old", function(arg)
+    if arg == "probe" then OQ.Probe() else OQ:Toggle() end
+end, "Old Quest Check: grey quests in your log, abandon them with one click (probe: what the game says per quest)")
