@@ -368,16 +368,27 @@ R.PathCost = pathCost
 -- after the turn-in of its pre-quest (s.after)
 -- Dungeon Run (476): a stop with needs = { qid } comes after every stop of those quests (their whole chain step),
 -- a "w" stop (follow the quest in the log) is a pick up
+-- Escort quests in the Area Run (616): a stop with clear = { qid } comes after every objective stop of those quests (the
+-- area around the escort is done first); a stop with glue is followed right away by the next stop of its own quest
+-- (from the escort's pick up straight to its turn-in)
 local function valid(stops)
     local seenObj, seenT = {}, {}
     local total, seen, anyNeeds = nil, nil, false
-    for _, s in ipairs(stops) do if s.needs then anyNeeds = true; break end end
+    local lastObj
+    for _, s in ipairs(stops) do if s.needs then anyNeeds = true end; if s.clear then lastObj = {} end end
     if anyNeeds then
         total, seen = {}, {}
         for _, s in ipairs(stops) do total[s.qid] = (total[s.qid] or 0) + 1 end
     end
-    for _, s in ipairs(stops) do
+    if lastObj then
+        for i, s in ipairs(stops) do if s.kind == "o" or s.kind == "w" then lastObj[s.qid] = i end end
+    end
+    for i, s in ipairs(stops) do
         local q = s.qid
+        if s.clear then
+            for _, n in ipairs(s.clear) do if lastObj[n] and lastObj[n] > i then return false end end
+        end
+        if s.glue and stops[i + 1] and stops[i + 1].qid ~= q then return false end
         if s.needs then
             for _, n in ipairs(s.needs) do
                 if total[n] and (seen[n] or 0) < total[n] then return false end
@@ -656,7 +667,7 @@ local function save()
     local s = { id = run.id, leader = run.leader, started = run.started, total = run.total, group = run.group,
                 quests = {}, stops = {}, kind = run.kind, dungeon = run.dungeon, info = run.info, zone = run.zone, allow = run.allow }
     for qid, q in pairs(run.quests) do s.quests[#s.quests + 1] = { qid, q.new and 1 or 0, q.done and 1 or 0, q.picked and 1 or 0, q.dropped and 1 or 0, q.follow or 0, q.goal } end
-    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after, st.goal, st.needs } end
+    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after, st.goal, st.needs, st.clear, st.glue and 1 or nil } end
     OMQ.db.questRun[g] = s
 end
 
@@ -765,7 +776,7 @@ function R:Start(plan)
         run.members, run.pool = plan.members or {}, {}
         run.group = #run.members > 0
     end
-    for _, s in ipairs(plan.stops) do addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs, late = s.late }) end
+    for _, s in ipairs(plan.stops) do addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs, late = s.late, clear = s.clear, glue = s.glue }) end
     run.total = 0
     for _ in pairs(run.quests) do run.total = run.total + 1 end
     run.startedAt = now()
@@ -900,7 +911,8 @@ function R:AddStops(stops)
     local before = {}
     for qid in pairs(run.quests) do before[qid] = true end
     for _, s in ipairs(stops) do
-        addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs, late = s.late })
+        addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs, late = s.late,
+                       clear = s.clear, glue = s.glue })
         if run.group then sendStop(run.stops[#run.stops]) end
     end
     local n = 0
@@ -1366,7 +1378,7 @@ local function restore()
     run.kind, run.dungeon, run.info, run.zone, run.allow = s.kind, s.dungeon, s.info, s.zone, s.allow
     for _, st in ipairs(s.stops) do
         addStop(run, { qid = st[1], kind = st[2], place = { a = st[3], b = st[4], inst = st[5], map = st[6] }, i = st[7], after = st[8],
-                       goal = st[9], needs = st[10] })
+                       goal = st[9], needs = st[10], clear = st[11], glue = st[12] == 1 or nil })
     end
     run.members = members()
     run.pool, run.skip = {}, {}

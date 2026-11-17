@@ -276,6 +276,67 @@ local function addStops(ctx, e)
 end
 
 ----------------------------------------------------------------------
+-- Escort quests (decision 616)
+----------------------------------------------------------------------
+-- An escort (Data/EscortQuests.lua) is picked up only when the objectives of the run's quests around it are done:
+-- within A.ESCORT_YD of its pick up or of the straight way from there to its turn-in. From the pick up the run goes
+-- straight on to the escort's own next stops (its turn-in), nothing in between, unless that turn-in lies outside
+-- the zone at the end.
+A.ESCORT_YD = 250
+function A.IsEscort(id) return (OMQ.EscortQuests and OMQ.EscortQuests[id]) and true or false end
+
+-- yards from p to the way a-b (a point when b is missing or on another continent)
+function A.SegDist(p, a, b)
+    if not (p and a) or p.inst ~= a.inst then return math.huge end
+    if not b or b.inst ~= a.inst then return math.sqrt((p.a - a.a) ^ 2 + (p.b - a.b) ^ 2) end
+    local da, db = b.a - a.a, b.b - a.b
+    local len = da * da + db * db
+    local t = len > 0 and (((p.a - a.a) * da + (p.b - a.b) * db) / len) or 0
+    if t < 0 then t = 0 elseif t > 1 then t = 1 end
+    local x, y = a.a + t * da, a.b + t * db
+    return math.sqrt((p.a - x) ^ 2 + (p.b - y) ^ 2)
+end
+
+function A.MarkEscorts(stops)
+    local byQ = {}
+    for _, s in ipairs(stops) do
+        byQ[s.qid] = byQ[s.qid] or {}
+        byQ[s.qid][s.kind] = s
+    end
+    for qid, k in pairs(byQ) do
+        local p = k.p
+        if p and A.IsEscort(qid) then
+            local t = k.t
+            local stop = t and not t.late and t.place or nil
+            local clear, later = {}, {}
+            for _, s in ipairs(stops) do                   -- a follow-up of the escort cannot come before it
+                for _, n in ipairs(s.needs or {}) do if n == qid then later[s.qid] = true end end
+                if s.after == qid then later[s.qid] = true end
+            end
+            for _, s in ipairs(stops) do
+                if s.qid ~= qid and not later[s.qid] and (s.kind == "o" or s.kind == "w") and s.place then
+                    local near = A.SegDist(s.place, p.place, stop or (t and t.place)) <= A.ESCORT_YD
+                    for _, alt in ipairs(s.alts or {}) do
+                        if not near and A.SegDist(alt, p.place, stop or (t and t.place)) <= A.ESCORT_YD then near = true end
+                    end
+                    if near then
+                        local dup = false
+                        for _, c in ipairs(clear) do if c == s.qid then dup = true end end
+                        if not dup then clear[#clear + 1] = s.qid end
+                    end
+                end
+            end
+            table.sort(clear)
+            p.clear = #clear > 0 and clear or nil
+            -- straight on: pick up -> objectives -> turn-in, each glued to the next stop of the escort
+            p.glue = (k.o or k.w or stop) and true or nil
+            local o = k.o or k.w
+            if o then o.glue = stop and true or nil end
+        end
+    end
+end
+
+----------------------------------------------------------------------
 -- Order: never more quests than the log holds
 ----------------------------------------------------------------------
 -- free = room in the log now; a pick up takes a place, a turn-in gives one back
@@ -366,7 +427,10 @@ function A.Nearest(pos, stops, free, d)
         if not o then o = { 0, 0, 0 }; open[s.qid] = o end
         o[rank[s.kind]] = o[rank[s.kind]] + 1
     end
+    local glued                 -- escort (616): the stop just placed holds on to the next stop of its quest
     local function may(s)
+        if glued and s.qid ~= glued then return false end
+        for _, n in ipairs(s.clear or {}) do if open[n] and open[n][2] > 0 then return false end end
         for _, n in ipairs(s.needs or {}) do if total[n] and (seen[n] or 0) < total[n] then return false end end
         local o, r = open[s.qid], rank[s.kind]
         for k = 1, r - 1 do if o[k] > 0 then return false end end      -- the quest's own stops in their order: p, o, t
@@ -387,13 +451,16 @@ function A.Nearest(pos, stops, free, d)
             end
         end
         bi = ei or bi or li
+        if not bi and glued then glued = nil else
         if not bi then for i = 1, #left do out[#out + 1] = left[i] end break end   -- a loop in the data: keep the rest
         local s = table.remove(left, bi)
         out[#out + 1] = s
+        glued = s.glue and s.qid or nil
         seen[s.qid] = (seen[s.qid] or 0) + 1
         local o = open[s.qid]; o[rank[s.kind]] = o[rank[s.kind]] - 1
         if s.kind == "p" then room = room - 1 elseif s.kind == "t" then room = room + 1 end
         cur = s.place
+        end
     end
     return out
 end
@@ -425,6 +492,7 @@ function A.Insert(pos, stops, free, key, d)
     local function ready(q)
         for _, s in ipairs(byQ[q]) do
             for _, n in ipairs(s.needs or {}) do if byQ[n] and not placed[n] then return false end end
+            for _, n in ipairs(s.clear or {}) do if byQ[n] and not placed[n] then return false end end
         end
         return true
     end
@@ -433,7 +501,27 @@ function A.Insert(pos, stops, free, key, d)
         for i, q in ipairs(qids) do if ready(q) then k = i; break end end
         local q = table.remove(qids, k)
         local lo = 0
-        for _, s in ipairs(byQ[q]) do
+        local block = byQ[q][1].glue and byQ[q] or nil       -- an escort (616): its stops as one block
+        if block then
+            local first, last, inner = block[1].place, block[#block].place, 0
+            for i = 2, #block do inner = inner + d(block[i - 1].place, block[i].place) end
+            local bj, bc
+            for j = 0, #route do
+                local a = j == 0 and pos or route[j].place
+                local b = route[j + 1] and route[j + 1].place
+                local add = d(a, first) + inner + (b and (d(last, b) - d(a, b)) or 0)
+                if not bc or add < bc then
+                    for i, s in ipairs(block) do table.insert(route, j + i, s) end
+                    if A.Valid(route, free) then bj, bc = j, add end
+                    for _ = 1, #block do table.remove(route, j + 1) end
+                end
+            end
+            pause()
+            if not bj then return nil end
+            for i, s in ipairs(block) do table.insert(route, bj + i, s) end
+            block = true
+        end
+        for _, s in ipairs(block and {} or byQ[q]) do
             local bj, bc
             for j = lo, #route do
                 local a = j == 0 and pos or route[j].place
@@ -783,6 +871,7 @@ function A.Build(zone, pos, log, who, skip, allow, members, noOrder, quick)
         if e.pick then info.new = info.new + 1 else info.inLog = info.inLog + 1 end
         addStops(ctx, e)
     end
+    A.MarkEscorts(ctx.stops)
     local free = R().FreeSlots(log)
     info.free = free
     info.logFull = info.new > free
