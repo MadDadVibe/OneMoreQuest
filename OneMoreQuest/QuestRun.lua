@@ -119,6 +119,8 @@ R.MyLog = myLog
 local function complete(id) return NQ().IsComplete(id) end
 
 function R.IsElite(id)
+    local step = OMQ.DungeonRun and OMQ.DungeonRun.ItemStep and OMQ.DungeonRun.ItemStep(id)   -- no quest (628)
+    if step then return step.elite == true end
     local CQ = C_QuestLog
     if not (CQ and CQ.GetQuestTagInfo) then return false end
     local ok, info = pcall(CQ.GetQuestTagInfo, id)
@@ -141,6 +143,8 @@ end
 
 local titleAsked = {}
 function R.Title(id, titles)
+    local step = OMQ.DungeonRun and OMQ.DungeonRun.ItemStep and OMQ.DungeonRun.ItemStep(id)   -- no quest (628)
+    if step then return step.title end
     local t = titles and titles[id]
     if not t and C_QuestLog and C_QuestLog.GetTitleForQuestID then
         local ok, r = pcall(C_QuestLog.GetTitleForQuestID, id)
@@ -901,7 +905,9 @@ end
 -- the open stops sorted again from where I stand (the Area Run keeps the room in the quest log, 490)
 function R.Resort(pos, stops, iter)
     if run and run.kind == "area" and OMQ.AreaRun then return OMQ.AreaRun.Resort(pos, stops) end
-    if not iter and run and run.kind == "dungeon" then iter = #stops > 40 and 1 or 2 end
+    if not iter and run and run.kind == "dungeon" and OMQ.DungeonRun and OMQ.DungeonRun.Resort then   -- decision 628
+        return OMQ.DungeonRun.Resort(pos, stops)
+    end
     return R.Improve(pos, stops, iter)
 end
 
@@ -1047,8 +1053,19 @@ function R:Tick()
             if s.qid == qid and (not kinds or kinds[s.kind]) then table.remove(run.stops, k) end
         end
     end
+    local DR = OMQ.DungeonRun
     for qid, q in pairs(run.quests) do
-        if not q.done and not q.dropped and q.goal then
+        local step = DR and DR.ItemStep and DR.ItemStep(qid)
+        if step then                                    -- a step that is no quest (628): the items in the bags
+            if not q.done and not q.dropped then
+                if DR.Have(step.item) then
+                    q.done = true; removeStops(qid); changed = true
+                    if OMQ.Sound then OMQ.Sound:Play("update") end
+                elseif not q.objDone and DR.Have(step.part) then
+                    q.objDone = true; removeStops(qid, { o = true }); changed = true
+                end
+            end
+        elseif not q.done and not q.dropped and q.goal then
             -- Dungeon Run (476): a dungeon quest counts when it is in the log, a pre-quest when it is turned in
             local inLog = log[qid] and true or false
             local ever = everDone(qid)
@@ -1198,6 +1215,8 @@ function R:Target()
         view.what = "turn in" .. (nxt and (", then pick up " .. R.Title(nxt)) or "")
         if not nxt and run.kind == "dungeon" then view.what = "turn in the pre-quest" end
     else view.what = R.OpenObjective(s.qid) or "objectives" end
+    local step = OMQ.DungeonRun and OMQ.DungeonRun.ItemStep and OMQ.DungeonRun.ItemStep(s.qid)
+    if step then view.what, view.open, view.item = (s.kind == "o") and step.kill or step.use, nil, true end   -- 628
     if view.open and OMQ.AreaRun and OMQ.AreaRun.IsBuy(s.qid) then          -- bought or crafted items (622)
         view.buy, view.what = true, "buy or craft: " .. (R.OpenObjective(s.qid) or "the items")
     end

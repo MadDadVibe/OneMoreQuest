@@ -759,8 +759,8 @@ end
 
 -- the background planning: done(stops) gets the order of A.Order
 local driver
-function A.Job(pos, stops, free, done)
-    local co = coroutine.create(function() return A.Order(pos, stops, free) end)
+function A.Job(pos, stops, free, done, order)
+    local co = coroutine.create(function() return (order or A.Order)(pos, stops, free) end)   -- order: the Dungeon Run's (628)
     job = { co = co, t0 = now() or 0, done = done }
     if driver then driver:Show() end
 end

@@ -345,7 +345,8 @@ function UI:RenderDungeon(view)
     end
     if #rws > ROWS then lines[#lines + 1] = string.format("... and %d more dungeon quests", #rws - ROWS) end
     if total > 0 then
-        table.insert(lines, 1, string.format("Way: %d yd, about %d min on foot", math.floor(math.min(plan.length, 9e5) + 0.5), fmtMin(math.min(plan.length, 9e5))))
+        table.insert(lines, 1, string.format("Way: %d yd, about %d min on foot", math.floor(math.min(plan.length, 9e5) + 0.5), fmtMin(math.min(plan.length, 9e5))) ..
+            (plan.busy and "  |cff9d9d9d(looking for a shorter way...)|r" or ""))
     end
     view.lines = lines
     view.total = total
@@ -782,6 +783,7 @@ OMQ:On("QUEST_RUN_CHANGED", function()
     end
 end)
 OMQ:On("QUEST_RUN_PREP", function() if UI:IsOpen() and mode == "choose" then UI:Render() end end)
+OMQ:On("DUNGEON_RUN_PLAN", function() if UI:IsOpen() and mode == "dungeon" then UI:Render() end end)   -- decision 628
 OMQ:On("QUEST_RUN_DONE", function(done, secs, r) UI:Close(); UI:ShowCard(done, secs, r) end)
 OMQ:On("CHAIN_RUN_CHANGED", function() UI:RenderBar() end)
 OMQ:On("SETTINGS_CHANGED", function() applyStyle() end)

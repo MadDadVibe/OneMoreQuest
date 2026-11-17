@@ -12,6 +12,10 @@
 --   until the dungeon quest is there (the small arrow uses the game's map point of the next step when it has one).
 --   Quests that start inside the dungeon or from an item are no stops; the preview names them.
 --   Order: the nearest stop whose pre-quests are done first, then QuestRun's improvement (with the order rules).
+--   The chains are woven into each other (decision 628): the preview shows that quick order at once, the Area Run's
+--   planner (whole quests into the way, moving blocks of stops, AreaRun.lua 584) looks for a shorter way in the
+--   background, so a pre-quest of another chain that lies on the way is picked up in the middle of a chain. The room
+--   in the quest log counts like in the Area Run. While the run goes the order is improved the same way.
 -- In a group every dad gets his own route: the button sends DN s to the others, each one is asked and plans his own
 -- run from his own log; the dads send their counts (DN c) and the bar shows how many of them are done.
 --   DN|proto|s|dungeon key|guid|name   start your own Dungeon Run for this dungeon
@@ -73,6 +77,37 @@ function D.ForMe(id, who, log)
     if d[6] and who.class and not contains(d[6], who.class) then return false end
     for _, p in ipairs(d[12] or {}) do if ever(p) or (log and log[p]) then return false end end
     return true
+end
+
+----------------------------------------------------------------------
+-- Steps that are no quest (decision 628): an item a dungeon quest needs, got outside the dungeon. The run counts such
+-- a step like a quest under its own negative id: "o" = get the first item, "t" = turn it into the needed one; done when
+-- the needed item is in the bags. Zul'Farrak: Gahz'rilla only comes with the Mallet of Zul'Farrak - kill Qiaga the
+-- Keeper (elite) on top of Jintha'Alor (The Hinterlands) for the Sacred Mallet and use it at the Altar of Zul next to her.
+----------------------------------------------------------------------
+D.ITEM_STEPS = {
+    zf = {
+        { id = -9239, quest = 2770, item = 9239, part = 9241, title = "Mallet of Zul'Farrak", elite = true,
+          map = 1425, x = 48.6, y = 68.2,
+          kill = "kill Qiaga the Keeper (elite) for the Sacred Mallet", use = "use the Sacred Mallet at the Altar of Zul" },
+    },
+}
+function D.ItemStep(id)
+    if type(id) ~= "number" or id >= 0 then return nil end
+    for _, list in pairs(D.ITEM_STEPS) do for _, st in ipairs(list) do if st.id == id then return st end end end
+    return nil
+end
+function D.Have(item)
+    local n
+    if C_Item and C_Item.GetItemCount then
+        local ok, v = pcall(C_Item.GetItemCount, item, true)
+        if ok then n = v end
+    end
+    if n == nil and GetItemCount then
+        local ok, v = pcall(GetItemCount, item, true)
+        if ok then n = v end
+    end
+    return type(n) == "number" and n > 0
 end
 
 ----------------------------------------------------------------------
@@ -271,6 +306,20 @@ function D.Build(key, pos, log, who, skip)
             end
         end
     end
+    for _, st in ipairs(D.ITEM_STEPS[key] or {}) do           -- the steps that are no quest (628)
+        local place = placeOf({ st.map, st.x, st.y, 1 })
+        if place and not ever(st.quest) and not D.Have(st.item) then
+            if skip[st.id] then info.skipped[#info.skipped + 1] = st.id
+            else
+                local e = { id = st.id, goal = "turnin", needs = {}, turnin = place, item = true,
+                            dungeon = ctx.quests[st.quest] and st.quest or nil }
+                if not D.Have(st.part) then e.obj = place end
+                ctx.quests[st.id] = e
+                ctx.order[#ctx.order + 1] = st.id
+                if not e.dungeon then dqs[#dqs + 1] = st.id end
+            end
+        end
+    end
     for _, id in ipairs(ctx.order) do addStops(ctx, ctx.quests[id]) end
     local stops = D.Order(pos, ctx.stops)
     local list = {}
@@ -315,6 +364,40 @@ function D.Order(pos, stops)
     return R().Improve(pos, out)
 end
 
+-- the room in the quest log the order may use: nil when even the nearest order does not fit (the run then ignores it)
+local function room(pos, stops, free)
+    local A = OMQ.AreaRun
+    if not (free and A and A.Valid) then return nil end
+    if A.Valid(stops, free) then return free end
+    if A.Valid(A.Nearest(pos, stops, free), free) then return free end
+    return nil
+end
+D._room = room
+
+-- the woven order (decision 628): the Area Run's planner over all chains at once; the shorter of it and the quick order
+function D.Weave(pos, stops, free)
+    local A = OMQ.AreaRun
+    if not (A and A.Order) or #stops < 3 then return stops end
+    free = room(pos, stops, free)
+    local r = A.Order(pos, stops, free)
+    if not (r and #r == #stops and R()._valid(r)) then return stops end
+    if R().PathCost(pos, r) < R().PathCost(pos, stops) - 0.5 or not A.Valid(stops, free) then return r end
+    return stops
+end
+
+-- the open stops of a running Dungeon Run sorted again (QuestRun's clock): an order that breaks a rule is built anew,
+-- then moving blocks of stops within the Area Run's time budget (decision 628)
+function D.Resort(pos, stops)
+    local A = OMQ.AreaRun
+    if not (A and A.Improve and A.Nearest) then return R().Improve(pos, stops, #stops > 40 and 1 or 2) end
+    local free = room(pos, stops, R().FreeSlots((R().MyLog())))
+    if not A.Valid(stops, free) then
+        local fresh = A.Nearest(pos, stops, free)
+        if A.Valid(fresh, free) or not R()._valid(stops) then stops = fresh end
+    end
+    return A.Improve(pos, stops, free, 1)
+end
+
 ----------------------------------------------------------------------
 -- Preparing and starting
 ----------------------------------------------------------------------
@@ -326,9 +409,28 @@ function D:Prepare(key)
     local pos = NQ().MyPos()
     if not pos then OMQ:Print("Dungeon Run: no position here"); return nil end
     local log, titles = R().MyLog()
-    prep = { key = key, pos = pos, log = log, titles = titles, skip = {} }
-    prep.plan = D.Build(key, pos, log, nil, prep.skip)
+    prep = { key = key, pos = pos, log = log, titles = titles, skip = {}, free = R().FreeSlots(log) }
+    D.Plan()
     return prep
+end
+
+-- the preview's plan: the quick order at once, the woven one in the background (decision 628); the window shows it
+-- when it is done (event DUNGEON_RUN_PLAN), Start waits for it
+function D.Plan()
+    local A = OMQ.AreaRun
+    if A and A.StopJob then A.StopJob() end
+    local p = prep
+    p.plan = D.Build(p.key, p.pos, p.log, nil, p.skip)
+    local pl = p.plan
+    if not (pl and A and A.Job) or #pl.stops < 3 then return pl end
+    pl.busy = true
+    A.Job(p.pos, pl.stops, p.free, function(stops)
+        if prep ~= p or p.plan ~= pl then return end
+        pl.stops, pl.busy = stops, nil
+        pl.length = R().PathCost(p.pos, stops)
+        OMQ:Fire("DUNGEON_RUN_PLAN")
+    end, D.Weave)
+    return pl
 end
 
 -- the preview: leave out a dungeon quest and all pre-quests only it needs
@@ -337,8 +439,7 @@ function D:SkipPlanned(qid)
     local dq = qid
     for _, e in ipairs(prep.plan and prep.plan.quests or {}) do if e.id == qid and e.dungeon then dq = e.dungeon end end
     prep.skip[dq] = true
-    prep.plan = D.Build(prep.key, prep.pos, prep.log, nil, prep.skip)
-    return prep.plan
+    return D.Plan()
 end
 
 -- the dungeon quests of the plan with their pre-quests, for the preview rows
@@ -369,6 +470,8 @@ function D.Rows(plan)
 end
 
 function D:Start(plan)
+    local A = OMQ.AreaRun
+    if prep and prep.plan and prep.plan.busy and A and A.Busy and A.Busy() then A.FinishJob() end   -- the woven order first (628)
     plan = plan or (prep and prep.plan)
     if not plan then return false end
     local ok = R():Start(plan)
