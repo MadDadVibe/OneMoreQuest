@@ -4,7 +4,7 @@
 -- stands in the zone, and the follow-ups that open on the way. A quest counts when it is turned in; the bar shows
 -- "Area Run: 4/23". The tracker card has a green frame.
 --   Which quests: giver in the zone (or in my log with giver, objectives or turn-in in the zone), my faction, race and
---   class, never done, at most LEVEL_ABOVE levels above me, NOT grey (a grey pre-quest stays when a quest of the zone
+--   class, never done, at most LEVEL_ABOVE levels above me (a follow-up of a chain LEVEL_FOLLOW, decision 625), NOT grey (a grey pre-quest stays when a quest of the zone
 --   needs it), never repeatable, from a profession, reputation or in a dungeon; from an item only when a named mob
 --   of the zone drops it (decision 508: the pick up stop is at the mob). Elite quests stay in, also alone. Quests of a higher level join the run when I level up.
 --   Quests that start outside the zone are no stops. A quest outside whose follow-ups (or objectives) are in the zone
@@ -25,6 +25,7 @@ local A = {}
 OMQ.AreaRun = A
 
 A.LEVEL_ABOVE = 2
+A.LEVEL_FOLLOW = 4        -- a follow-up of a chain (it has pre-quests) joins up to 4 levels above me (decision 625)
 A.MAX_DEPTH = 12
 A.HINT_TICK = 2           -- seconds between the hint checks
 A.HINT_SHOW = 25          -- seconds a hint card stays
@@ -37,6 +38,13 @@ local function R() return OMQ.QuestRun end
 local function NQ() return OMQ.NextQuest end
 local function data(id) return OMQ.QuestPlaces and OMQ.QuestPlaces[id] end
 local function has(flags, b) return flags ~= nil and math.floor(flags / b) % 2 == 1 end
+-- the highest quest level the run takes for this quest (decision 625): follow-ups of a chain up to LEVEL_FOLLOW above
+-- me, so that the way can take the chain steps before them early (Rumblings of Discontent -> Rise Up! -> Death to the
+-- Executioner lies in the middle of Break Their Chains)
+function A.MaxLevel(d, level)
+    local follow = (d[10] and #d[10] > 0) or (d[11] and #d[11] > 0)
+    return level + (follow and A.LEVEL_FOLLOW or A.LEVEL_ABOVE)
+end
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
 local function number(v) return type(v) == "number" and not isSecret(v) end
 local function contains(list, v)
@@ -919,7 +927,7 @@ function A.Build(zone, pos, log, who, skip, allow, members, noOrder, quick)
         if not ever(id) and not excluded(d, id) and not has(d[13], 8) and A.ForMe(id, who, log) then
             local ql = d[3] or 0
             if ql > 0 and ql < grey then info.grey = info.grey + 1
-            elseif ql > who.level + A.LEVEL_ABOVE or (d[2] or 0) > who.level then info.later = info.later + 1
+            elseif ql > A.MaxLevel(d, who.level) or (d[2] or 0) > who.level then info.later = info.later + 1
             else want(id) end
         end
     end
@@ -991,7 +999,7 @@ function A.Count(zone, who, log)
             if log[id] then n = n + 1
             elseif not ever(id) and not excluded(d, id) and not has(d[13], 8) and A.ForMe(id, who, log) then
                 local ql = d[3] or 0
-                if not (ql > 0 and ql < grey) and ql <= who.level + A.LEVEL_ABOVE and (d[2] or 0) <= who.level then n = n + 1 end
+                if not (ql > 0 and ql < grey) and ql <= A.MaxLevel(d, who.level) and (d[2] or 0) <= who.level then n = n + 1 end
             end
         end
     end
