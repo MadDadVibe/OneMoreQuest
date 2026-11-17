@@ -697,6 +697,11 @@ function A.Resort(pos, stops)
     local free = R().FreeSlots((R().MyLog()))
     local r = R():Run()
     if r and r.kind == "area" then A.MarkEarly(stops, r.zone, r.allow) end
+    -- an order that breaks a rule (a stop learned its pre-quest, fix 618) is built anew first
+    if not A.Valid(stops, free) then
+        local fresh = A.Nearest(pos, stops, free)
+        if A.Valid(fresh, free) or not A.Valid(stops) then stops = fresh end
+    end
     return A.Improve(pos, stops, free, 1)
 end
 
@@ -1045,15 +1050,31 @@ function A.Refresh()
         local q = r.quests[e.id]
         if not q then add[e.id] = true end
     end
-    local stops = {}
-    for _, s in ipairs(plan.stops) do
-        if add[s.qid] then
-            local needs
-            for _, n in ipairs(s.needs or {}) do if add[n] then needs = needs or {}; needs[#needs + 1] = n end end
-            stops[#stops + 1] = { qid = s.qid, kind = s.kind, place = s.place, goal = "turnin", needs = needs, late = s.late }
+    -- a new quest keeps every pre-quest it waits for, also one that is in the run already (fix 618), and the
+    -- escort rules (616); the stops in the run get what the new plan knows about their pre-quests and escorts
+    local stops, repaired = {}, false
+    local known = {}
+    for _, s in ipairs(plan.stops) do known[s.qid .. s.kind] = s end
+    local function same(a, b)
+        if #(a or {}) ~= #(b or {}) then return false end
+        for i, v in ipairs(a or {}) do if b[i] ~= v then return false end end
+        return true
+    end
+    for _, s in ipairs(r.stops) do
+        local k = known[s.qid .. s.kind]
+        if k and not r.group then
+            if k.needs and #k.needs > 0 and not same(s.needs, k.needs) then s.needs = k.needs; repaired = true end
+            if not same(s.clear, k.clear) then s.clear = k.clear; repaired = true end
+            if (s.glue or nil) ~= (k.glue or nil) then s.glue = k.glue; repaired = true end
         end
     end
-    if #stops == 0 then return 0 end
+    for _, s in ipairs(plan.stops) do
+        if add[s.qid] then
+            stops[#stops + 1] = { qid = s.qid, kind = s.kind, place = s.place, goal = "turnin", needs = s.needs, late = s.late,
+                                  clear = s.clear, glue = s.glue }
+        end
+    end
+    if #stops == 0 and not repaired then return 0 end
     return R():AddStops(stops)
 end
 
