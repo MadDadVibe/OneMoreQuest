@@ -1067,13 +1067,16 @@ function R:Tick()
                 if not q.objDone and (complete(qid) or ever) and (not grp or doneForAll(qid)) then
                     q.objDone = true; removeStops(qid, { o = true }); changed = true
                 end
-                if (ever or (not inLog and q.wasComplete)) and (not grp or turnedInByAll(qid)) then
+                -- fix 626: a quest whose objectives were fulfilled and that leaves the log was turned in, even when the
+                -- game flags it as completed only a moment later (It Takes Guts went as "abandoned" and took The
+                -- Monster Surfaces with it)
+                if (ever or (not inLog and (q.wasComplete or q.objDone))) and (not grp or turnedInByAll(qid)) then
                     q.done = true
                     removeStops(qid)
                     for _, x in ipairs(run.stops) do if x.after == qid then x.after = nil end end
                     changed = true
                     if OMQ.Sound then OMQ.Sound:Play("update") end
-                elseif q.inLog and not inLog and not q.wasComplete and not ever then
+                elseif q.inLog and not inLog and not q.wasComplete and not q.objDone and not ever then
                     R.DropWithDependents(run, qid)            -- abandoned: it and what waits for it go
                     changed = true
                 end
