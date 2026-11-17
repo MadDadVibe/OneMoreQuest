@@ -527,6 +527,7 @@ function A.Nearest(pos, stops, free, d)
         if glued and s.qid ~= glued then return false end
         for _, n in ipairs(s.clear or {}) do if open[n] and open[n][2] > 0 then return false end end
         for _, n in ipairs(s.needs or {}) do if total[n] and (seen[n] or 0) < total[n] then return false end end
+        for _, n in ipairs(s.wait or {}) do if total[n] and (seen[n] or 0) < total[n] then return false end end   -- 630
         local o, r = open[s.qid], rank[s.kind]
         for k = 1, r - 1 do if o[k] > 0 then return false end end      -- the quest's own stops in their order: p, o, t
         if s.kind == "p" and room <= 0 then return false end
@@ -567,7 +568,7 @@ local RANK = { p = 1, w = 2, o = 2, t = 3 }
 function A.Insert(pos, stops, free, key, d)
     d = d or ways()
     local byQ, qids, late, needed = {}, {}, {}, {}
-    for _, s in ipairs(stops) do for _, n in ipairs(s.needs or {}) do needed[n] = true end end
+    for _, s in ipairs(stops) do for _, n in ipairs(s.needs or {}) do needed[n] = true end; for _, n in ipairs(s.wait or {}) do needed[n] = true end end
     for _, s in ipairs(stops) do
         if s.late and not needed[s.qid] then late[#late + 1] = s
         else
@@ -588,6 +589,7 @@ function A.Insert(pos, stops, free, key, d)
         for _, s in ipairs(byQ[q]) do
             for _, n in ipairs(s.needs or {}) do if byQ[n] and not placed[n] then return false end end
             for _, n in ipairs(s.clear or {}) do if byQ[n] and not placed[n] then return false end end
+            for _, n in ipairs(s.wait or {}) do if byQ[n] and not placed[n] then return false end end
         end
         return true
     end

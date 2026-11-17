@@ -375,11 +375,13 @@ R.PathCost = pathCost
 -- Escort quests in the Area Run (616): a stop with clear = { qid } comes after every objective stop of those quests (the
 -- area around the escort is done first); a stop with glue is followed right away by the next stop of its own quest
 -- (from the escort's pick up straight to its turn-in)
+-- Dungeon Run (fix 630): a stop with wait = { qid } comes after every stop of those quests like needs, but a skipped or
+-- dropped one does not take it along
 local function valid(stops)
     local seenObj, seenT = {}, {}
     local total, seen, anyNeeds = nil, nil, false
     local lastObj
-    for _, s in ipairs(stops) do if s.needs then anyNeeds = true end; if s.clear then lastObj = {} end end
+    for _, s in ipairs(stops) do if s.needs or s.wait then anyNeeds = true end; if s.clear then lastObj = {} end end
     if anyNeeds then
         total, seen = {}, {}
         for _, s in ipairs(stops) do total[s.qid] = (total[s.qid] or 0) + 1 end
@@ -397,6 +399,9 @@ local function valid(stops)
             for _, n in ipairs(s.needs) do
                 if total[n] and (seen[n] or 0) < total[n] then return false end
             end
+        end
+        for _, n in ipairs(s.wait or {}) do                -- fix 630: after every stop of those, without depending on them
+            if total[n] and (seen[n] or 0) < total[n] then return false end
         end
         if seen then seen[q] = (seen[q] or 0) + 1 end
         if s.kind == "o" or s.kind == "w" then             -- "w" (follow the log) comes after its pick up like objectives
@@ -671,7 +676,7 @@ local function save()
     local s = { id = run.id, leader = run.leader, started = run.started, total = run.total, group = run.group,
                 quests = {}, stops = {}, kind = run.kind, dungeon = run.dungeon, info = run.info, zone = run.zone, allow = run.allow }
     for qid, q in pairs(run.quests) do s.quests[#s.quests + 1] = { qid, q.new and 1 or 0, q.done and 1 or 0, q.picked and 1 or 0, q.dropped and 1 or 0, q.follow or 0, q.goal } end
-    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after, st.goal, st.needs, st.clear, st.glue and 1 or nil } end
+    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after, st.goal, st.needs, st.clear, st.glue and 1 or nil, st.wait } end
     OMQ.db.questRun[g] = s
 end
 
@@ -780,7 +785,7 @@ function R:Start(plan)
         run.members, run.pool = plan.members or {}, {}
         run.group = #run.members > 0
     end
-    for _, s in ipairs(plan.stops) do addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs, late = s.late, clear = s.clear, glue = s.glue }) end
+    for _, s in ipairs(plan.stops) do addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs, late = s.late, clear = s.clear, glue = s.glue, wait = s.wait }) end
     run.total = 0
     for _ in pairs(run.quests) do run.total = run.total + 1 end
     run.startedAt = now()
@@ -918,7 +923,7 @@ function R:AddStops(stops)
     for qid in pairs(run.quests) do before[qid] = true end
     for _, s in ipairs(stops) do
         addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs, late = s.late,
-                       clear = s.clear, glue = s.glue })
+                       clear = s.clear, glue = s.glue, wait = s.wait })
         if run.group then sendStop(run.stops[#run.stops]) end
     end
     local n = 0
@@ -1058,10 +1063,10 @@ function R:Tick()
         local step = DR and DR.ItemStep and DR.ItemStep(qid)
         if step then                                    -- a step that is no quest (628): the items in the bags
             if not q.done and not q.dropped then
-                if DR.Have(step.item) then
+                if DR.HaveItem(step) then
                     q.done = true; removeStops(qid); changed = true
                     if OMQ.Sound then OMQ.Sound:Play("update") end
-                elseif not q.objDone and DR.Have(step.part) then
+                elseif not q.objDone and DR.HavePart(step) then
                     q.objDone = true; removeStops(qid, { o = true }); changed = true
                 end
             end
@@ -1411,7 +1416,7 @@ local function restore()
     run.kind, run.dungeon, run.info, run.zone, run.allow = s.kind, s.dungeon, s.info, s.zone, s.allow
     for _, st in ipairs(s.stops) do
         addStop(run, { qid = st[1], kind = st[2], place = { a = st[3], b = st[4], inst = st[5], map = st[6] }, i = st[7], after = st[8],
-                       goal = st[9], needs = st[10], clear = st[11], glue = st[12] == 1 or nil })
+                       goal = st[9], needs = st[10], clear = st[11], glue = st[12] == 1 or nil, wait = st[13] })
     end
     run.members = members()
     run.pool, run.skip = {}, {}

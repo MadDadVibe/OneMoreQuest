@@ -87,17 +87,26 @@ end
 ----------------------------------------------------------------------
 D.ITEM_STEPS = {
     zf = {
-        { id = -9239, quest = 2770, item = 9239, part = 9241, title = "Mallet of Zul'Farrak", elite = true,
+        -- the mallet's item ID differs between the sources (9240 classic, 9239 Factoruide): both, and the name in the bags
+        -- (fix 630: the run did not see the mallet MadDadVibe got)
+        { id = -9239, quest = 2770, item = { 9240, 9239 }, part = { 9241 }, title = "Mallet of Zul'Farrak", elite = true,
+          itemName = function(n) n = n:lower(); return n:find("zul'?farrak") and (n:find("schlaghammer") or n:find("mallet"))
+                                     and not n:find("hochheilig") and not n:find("sacred") end,
+          partName = function(n) n = n:lower(); return n:find("hochheiliger schlaghammer") or n:find("sacred mallet") end,
           map = 1425, x = 48.6, y = 68.2, ax = 59.7, ay = 77.8,     -- Qiaga; the Jintha'Alor altar (Factoruide object 142180, fix 629)
           kill = "kill Qiaga the Keeper (elite) for the Sacred Mallet", use = "use the Sacred Mallet at the Altar of Jintha'Alor" },
     },
 }
+-- a quest whose item lasts only a short time (Undamaged Venom Sac 9322: 30 min): from its objectives straight to the
+-- turn-in; and what must be done before it (the mallet first, MadDadVibe, fix 630)
+D.TIMED = { [2934] = true }
+D.WAIT = { [2934] = { -9239 } }
 function D.ItemStep(id)
     if type(id) ~= "number" or id >= 0 then return nil end
     for _, list in pairs(D.ITEM_STEPS) do for _, st in ipairs(list) do if st.id == id then return st end end end
     return nil
 end
-function D.Have(item)
+local function count(item)
     local n
     if C_Item and C_Item.GetItemCount then
         local ok, v = pcall(C_Item.GetItemCount, item, true)
@@ -109,6 +118,38 @@ function D.Have(item)
     end
     return type(n) == "number" and n > 0
 end
+-- the names of the items in my bags (fix 630)
+local function bagNames()
+    local out = {}
+    local C = C_Container
+    local slots = (C and C.GetContainerNumSlots) or GetContainerNumSlots
+    if not slots then return out end
+    for bag = 0, (NUM_BAG_SLOTS or 4) + 1 do
+        local ok, n = pcall(slots, bag)
+        for slot = 1, (ok and type(n) == "number") and n or 0 do
+            local link
+            if C and C.GetContainerItemInfo then
+                local ok2, info = pcall(C.GetContainerItemInfo, bag, slot)
+                link = ok2 and type(info) == "table" and info.hyperlink or nil
+            elseif GetContainerItemLink then
+                local ok2, l = pcall(GetContainerItemLink, bag, slot)
+                link = ok2 and l or nil
+            end
+            local name = type(link) == "string" and link:match("%[(.-)%]")
+            if name then out[#out + 1] = name end
+        end
+    end
+    return out
+end
+D._bagNames = bagNames
+-- item: an ID or a list of IDs; byName: a test on the item names in the bags
+function D.Have(item, byName)
+    for _, id in ipairs(type(item) == "table" and item or { item }) do if count(id) then return true end end
+    if byName then for _, n in ipairs(bagNames()) do if byName(n) then return true end end end
+    return false
+end
+function D.HaveItem(st) return D.Have(st.item, st.itemName) end
+function D.HavePart(st) return D.Have(st.part, st.partName) end
 
 ----------------------------------------------------------------------
 -- The chain of one quest
@@ -250,8 +291,16 @@ local function addStops(ctx, e)
         ctx.stops[#ctx.stops + 1] = s
         return
     end
+    local first = #ctx.stops + 1
     stop("o", e.obj)
     stop("t", e.turnin)
+    local o = ctx.stops[first]
+    if o and o.qid == e.id and o.kind == "o" then
+        if D.TIMED[e.id] and ctx.stops[first + 1] then o.glue = true end
+        local w = {}
+        for _, n in ipairs(D.WAIT[e.id] or {}) do if ctx.quests[n] then w[#w + 1] = n end end
+        if #w > 0 then o.wait = w end
+    end
 end
 
 -- the chain start of a quest the data does not know (or knows without a giver place)
@@ -309,12 +358,12 @@ function D.Build(key, pos, log, who, skip)
     for _, st in ipairs(D.ITEM_STEPS[key] or {}) do           -- the steps that are no quest (628)
         local place = placeOf({ st.map, st.x, st.y, 1 })
         local altar = st.ax and placeOf({ st.map, st.ax, st.ay, 1 }) or place
-        if place and altar and not ever(st.quest) and not D.Have(st.item) then
+        if place and altar and not ever(st.quest) and not D.HaveItem(st) then
             if skip[st.id] then info.skipped[#info.skipped + 1] = st.id
             else
                 local e = { id = st.id, goal = "turnin", needs = {}, turnin = altar, item = true,
                             dungeon = ctx.quests[st.quest] and st.quest or nil }
-                if not D.Have(st.part) then e.obj = place end
+                if not D.HavePart(st) then e.obj = place end
                 ctx.quests[st.id] = e
                 ctx.order[#ctx.order + 1] = st.id
                 if not e.dungeon then dqs[#dqs + 1] = st.id end
