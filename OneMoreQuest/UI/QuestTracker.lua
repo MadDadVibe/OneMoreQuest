@@ -297,6 +297,7 @@ function U.TurnIns(r)
     for k = 2, #r.stops do
         local s = r.stops[k]
         if s.kind ~= "t" or not s.place or s.place.inst ~= s1.place.inst then break end
+        if OMQ.QTrack and OMQ.QTrack.Trackable(s.qid) then break end     -- its objectives are still open (619)
         local d = math.sqrt((s.place.a - s1.place.a) ^ 2 + (s.place.b - s1.place.b) ^ 2)
         if d > U.TURNIN_YD then break end
         out[#out + 1] = s.qid

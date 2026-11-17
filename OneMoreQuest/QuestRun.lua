@@ -1154,14 +1154,22 @@ function R:Target()
     local pos = NQ().MyPos()
     if s.kind == "w" then return R.FollowTarget(s, pos) end
     local view = { qid = s.qid, kind = s.kind, place = s.place, title = R.Title(s.qid) }
+    -- a turn-in while objectives of the quest are still open (the data knows no place for them, like items from
+    -- plants without known spots, fix 619): the objectives first, at the game's own map point when it has one
+    if s.kind == "t" and myLog()[s.qid] and not complete(s.qid) and R.OpenObjective(s.qid) then
+        view.kind, view.open = "o", true
+        local p = pos and mapPoint(s.qid, pos)
+        if p then view.place = p end
+    end
+    local sp = view.place
     local hunt = s.kind == "p" and R.Hunt(s.qid)
-    local near = s.kind ~= "o" and not hunt              -- a named mob walks around: the wide radius (508)
-    if pos and pos.inst == s.place.inst then
-        view.straight = math.sqrt((s.place.a - pos.a) ^ 2 + (s.place.b - pos.b) ^ 2)
+    local near = view.kind ~= "o" and not hunt           -- a named mob walks around: the wide radius (508)
+    if pos and sp and pos.inst == sp.inst then
+        view.straight = math.sqrt((sp.a - pos.a) ^ 2 + (sp.b - pos.b) ^ 2)
         view.distance = view.straight
-        local ha, hb = s.place.a, s.place.b
+        local ha, hb = sp.a, sp.b
         -- the way over the land (469): the arrow heads for the next point of the way, the yards are the way's
-        local way = OMQ.Path and OMQ.Path.ArrowWays() and OMQ.Path.Way(pos, s.place)
+        local way = OMQ.Path and OMQ.Path.ArrowWays() and OMQ.Path.Way(pos, sp)
         if way and way.via then
             view.distance, view.via, view.flight = way.cost, true, way.flight
             ha, hb = way.a, way.b
@@ -1171,7 +1179,7 @@ function R:Target()
         view.near = view.straight <= calm and view.distance <= calm + 10 or nil       -- decision 477
     end
     local inside = false
-    if s.kind == "o" and C_Minimap and C_Minimap.IsInsideQuestBlob then
+    if view.kind == "o" and C_Minimap and C_Minimap.IsInsideQuestBlob then
         local ok, v = pcall(C_Minimap.IsInsideQuestBlob, s.qid)
         inside = ok and v == true and not isSecret(v)
     end
@@ -1182,7 +1190,7 @@ function R:Target()
         local q = run.quests[s.qid]
         if q and q.follow then view.what = "pick up the follow-up of " .. R.Title(q.follow) end
         if hunt then view.what, view.hunt = hunt, true end
-    elseif s.kind == "t" then
+    elseif view.kind == "t" then
         local nxt = R.FollowUpIn(run, s.qid)
         view.what = "turn in" .. (nxt and (", then pick up " .. R.Title(nxt)) or "")
         if not nxt and run.kind == "dungeon" then view.what = "turn in the pre-quest" end
