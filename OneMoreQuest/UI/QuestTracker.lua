@@ -147,6 +147,9 @@ end
 
 local function build()
     frame = CreateFrame("Frame", "OneMoreQuestQuestTracker", UIParent)
+    -- a size from the start (fix 624): the run's bar and arrow hang on the card's place, and a card that was never
+    -- shown (a reload outside the Area Run's zone) had no size, so the game drew neither of them
+    frame:SetSize(W, 72)
     frame:SetFrameStrata("MEDIUM")
     frame:SetClampedToScreen(true)
     frame:SetMovable(true)
