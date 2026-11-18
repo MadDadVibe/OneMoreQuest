@@ -34,7 +34,11 @@ local function store()
     OMQDB.prices[r] = OMQDB.prices[r] or { items = {}, at = 0, n = 0 }
     return OMQDB.prices[r]
 end
+-- decision 636: only offers a vendor always has are learned (no limited stock such as Peacebloom); the prices
+-- learned before that are dropped once and learned again at the next merchant visit
+P.VENDOR_V = 2
 local function vendorStore()
+    if OMQDB.vendorPricesV ~= P.VENDOR_V then OMQDB.vendorPrices, OMQDB.vendorPricesV = {}, P.VENDOR_V end
     OMQDB.vendorPrices = OMQDB.vendorPrices or {}
     return OMQDB.vendorPrices
 end
@@ -702,27 +706,29 @@ end
 -- what a merchant sells and for how much one piece (decisions 341, 345). The client may have the old globals or
 -- C_MerchantFrame; both are tried, and the result is told once per merchant window.
 local function merchantItem(i)
-    local link, price, qty, extended
+    local link, price, qty, extended, avail
     local M = C_MerchantFrame
     if M and M.GetItemInfo then
         local ok, t = pcall(M.GetItemInfo, i)
-        if ok and type(t) == "table" then price, qty, extended = t.price, t.stackCount, t.hasExtendedCost end
+        if ok and type(t) == "table" then price, qty, extended, avail = t.price, t.stackCount, t.hasExtendedCost, t.numAvailable end
     end
     if price == nil and GetMerchantItemInfo then
-        local ok, _, _, p, q, _, _, x = pcall(GetMerchantItemInfo, i)
-        if ok then price, qty, extended = p, q, x end
+        local ok, _, _, p, q, a, _, _, x = pcall(GetMerchantItemInfo, i)   -- 8th value: extendedCost
+        if ok then price, qty, extended, avail = p, q, x, a end
     end
     if GetMerchantItemLink then link = GetMerchantItemLink(i)
     elseif M and M.GetItemLink then link = M.GetItemLink(i) end
-    return link, price, qty, extended
+    return link, price, qty, extended, avail
 end
+-- a vendor offer with a limited stock (numAvailable 0 or more; -1 = always there), decision 636
+function P.Limited(avail) return type(avail) == "number" and not isSecret(avail) and avail >= 0 end
 function P.LearnVendor()
     local num = GetMerchantNumItems and GetMerchantNumItems() or (C_MerchantFrame and C_MerchantFrame.GetNumItems and C_MerchantFrame.GetNumItems()) or 0
     local n, vs = 0, vendorStore()
     for i = 1, num do
-        local link, price, qty, extended = merchantItem(i)
+        local link, price, qty, extended, avail = merchantItem(i)
         local id = link and tonumber(tostring(link):match("item:(%d+)"))
-        if id and type(price) == "number" and not isSecret(price) and price > 0 and not extended then
+        if id and type(price) == "number" and not isSecret(price) and price > 0 and not extended and not P.Limited(avail) then
             vs[id] = math.floor(price / math.max(1, tonumber(qty) or 1))
             n = n + 1
         end

@@ -3,7 +3,8 @@
 -- of the Profession Check, UI/ProfCheck.lua); the Auction Helper shows them in its third tab, "Shopping".
 -- In the tab the dad picks a list and sees what to buy. Every row: bought / wanted, the price per piece now and the
 -- price the list was made with ("plan"). Items that are cheapest at a vendor stand below "Buy at a vendor" and are
--- never bought at the auction house.
+-- not bought by the big button. A click on such a row moves it up to the auction house rows (decision 636), where the
+-- next click buys it - two clicks.
 -- The big button buys the next item with one click - the whole amount still missing, the most expensive item first -
 -- and is clicked again for the next one. It skips an item that costs more than 1.5 times its plan right now; a left
 -- click on that row buys it anyway. The bags are never counted: only what was bought through the list counts (a dad
@@ -145,6 +146,15 @@ function S.Click(r)
     return B().Buy(r, r.need)
 end
 function S.BuyNext() return S.Click(S.NextRow()) end
+-- a vendor row is bought at the auction house after all (decision 636): it becomes an auction house row and is searched
+function S.ToAuction(it)
+    if not (type(it) == "table" and it.vendor) then return false end
+    it.vendor, it.fromVendor = nil, true
+    local r = rowFor(it.itemID)
+    if r.state ~= "ok" then r.state = "price" end
+    if AH() and AH().Refresh then AH().Refresh(); if AH().Pump then AH().Pump() end end
+    return true
+end
 
 -- a fresh search at every visit
 function S.Open()
@@ -238,7 +248,9 @@ local function build(panel)
     for i = 1, S.ROWS do
         local r = B()._makeRow(ui, 38)
         r:SetScript("OnClick", function(self, btn)
-            if btn == "LeftButton" and self.r then S.Click(self.r) end
+            if btn ~= "LeftButton" then return end
+            if type(self.r) == "table" then S.Click(self.r)
+            elseif type(self.vit) == "table" then S.ToAuction(self.vit) end
         end)
         r:SetScript("OnEnter", function(self)
             if GameTooltip and self.id then
@@ -300,9 +312,11 @@ local function rowText(line, it, r)
     line.icon:SetTexture(icon)
     line.name:SetText(name); line.name:SetTextColor(B()._qColor(quality))
     local bought = it.bought or 0
+    line.vit = nil
     if it.vendor then
         line.r = nil
-        line.sub:SetText("cheaper at a vendor")
+        line.vit = it
+        line.sub:SetText("vendor item - click: buy at the auction house")
         line.top:SetText("|cffe5e3dc" .. it.n .. "|r")
         line.bottom:SetText(it.plan and money(it.plan * it.n) or "")
         line.bg:SetAlpha(0.5)
@@ -383,7 +397,7 @@ function S.Render(panel, top)
             y = y + 40
         end
     end
-    for i = li + 1, #ui.lines do ui.lines[i]:Hide(); ui.lines[i].r = nil; ui.lines[i].id = nil end
+    for i = li + 1, #ui.lines do ui.lines[i]:Hide(); ui.lines[i].r = nil; ui.lines[i].vit = nil; ui.lines[i].id = nil end
     if #entries > S.ROWS then
         ui.more:ClearAllPoints(); ui.more:SetPoint("TOPLEFT", 16, -y)
         ui.more:SetText(string.format("Mouse wheel: %d more", #entries - S.ROWS)); ui.more:Show()
