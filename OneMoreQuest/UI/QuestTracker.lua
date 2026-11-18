@@ -308,6 +308,33 @@ function U.TurnIns(r)
     return out
 end
 
+-- more quests to do at the same place (decision 632): their objectives come under the card's own, each quest with
+-- its name as a gold head row; at most TOGETHER_MAX more quests on the card (the arrow's "+ N" counts them all)
+U.TOGETHER_MAX = 5
+function U.AddTogether(v, qid, t)
+    local R, Q = OMQ.QuestRun, OMQ.QTrack
+    v.more = 0
+    if not (t and R.Together) then return v end
+    local ok, list = pcall(R.Together, R, t)
+    if not ok or type(list) ~= "table" then return v end
+    local others, mainHere = {}, qid == t.qid
+    if t.qid ~= qid then others[1] = t.qid end
+    for _, id in ipairs(list) do
+        if id == qid then mainHere = true elseif id ~= t.qid then others[#others + 1] = id end
+    end
+    if not mainHere then return v end            -- the quest I work on is elsewhere: only its card, as before
+    for _, id in ipairs(others) do
+        if v.more >= U.TOGETHER_MAX then break end
+        local w = Q.Trackable(id) and Q:View(id)
+        if w and #w.rows > 0 then
+            v.more = v.more + 1
+            v.rows[#v.rows + 1] = { text = w.title or R.Title(id), head = true, cells = {} }
+            for _, r in ipairs(w.rows) do v.rows[#v.rows + 1] = r end
+        end
+    end
+    return v
+end
+
 function U.AreaView()
     local R = OMQ.QuestRun
     if moveMode or not (R and R:Active()) then return nil end
@@ -331,7 +358,10 @@ function U.AreaView()
     if not qid and allowed and t and t.kind == "o" and not t.buy and Q.Trackable(t.qid) then qid = t.qid end
     if qid then
         local v = card(Q:View(qid))
-        if v then return v end
+        if v then
+            U.AddTogether(v, qid, t)
+            return v
+        end
     end
     local view = { run = "AREA RUN", qid = t and t.qid, title = t and t.title or "", showNav = false, stamp = false,
                    cols = {}, rows = { { text = t and t.what or "all stops done", cells = {} } } }
@@ -420,12 +450,13 @@ function U:Render()
     for _, r in ipairs(view.rows) do
         local label = newText("GameFontHighlightSmall")
         label:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, y - 6)
-        label:SetWidth(labelW)
+        label:SetWidth(r.head and (width - PAD * 2) or labelW)
         label:SetJustifyH("LEFT")
         if label.SetWordWrap then label:SetWordWrap(false) end
         label:SetText(r.text or "")
         -- on a see-through card the objective is pure white, like the names (decision 210)
-        if U:Background() == "full" then label:SetTextColor(0.79, 0.8, 0.84) else label:SetTextColor(1, 1, 1) end
+        if r.head then label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])          -- another quest at this place (632)
+        elseif U:Background() == "full" then label:SetTextColor(0.79, 0.8, 0.84) else label:SetTextColor(1, 1, 1) end
         for j, cell in ipairs(r.cells) do
             local x = PAD + labelW + GAP + (j - 1) * (COL_W + GAP)
             local box = newTex()

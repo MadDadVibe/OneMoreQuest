@@ -638,7 +638,11 @@ function UI:RenderBar()
     local t = Q:Target()
     if not t then arrowFrame:Hide(); return end
     st.title = t.title
-    arrowName:SetText(t.title)
+    -- Area Run (632): more quests to do at this place -> "+ N" behind the name
+    local more = (not chain and area and Q.Together) and #Q:Together(t) or 0
+    if more > 0 then st.title = t.title .. " + " .. more end
+    st.more = more
+    arrowName:SetText(st.title)
     local alpha = 1
     if t.paused then                                  -- Chain Run (595): the next step needs a higher level (K4)
         st.dist = t.what

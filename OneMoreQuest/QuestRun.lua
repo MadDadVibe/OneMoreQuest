@@ -1228,6 +1228,30 @@ function R:Target()
     return view
 end
 
+-- Area Run (decision 632): other quests of the run whose objectives lie near the current objective step. They can
+-- be done at the same place, so the tracker card shows them all and the small arrow says "+ N". Only quests in my
+-- log with open objectives; in the order of the run.
+R.TOGETHER_YD = 200
+function R:Together(t)
+    if not (run and run.kind == "area") then return {} end
+    t = t or self:Target()
+    if not (t and t.kind == "o" and not t.buy and t.place) then return {} end
+    local Q = OMQ.QTrack
+    local out, seen = {}, { [t.qid] = true }
+    for _, s in ipairs(run.stops) do
+        local q = run.quests and run.quests[s.qid]
+        if s.kind == "o" and not seen[s.qid] and s.place and s.place.inst == t.place.inst
+                and not (q and (q.done or q.dropped)) then
+            local d = math.sqrt((s.place.a - t.place.a) ^ 2 + (s.place.b - t.place.b) ^ 2)
+            if d <= R.TOGETHER_YD and Q and Q.Trackable(s.qid) then
+                seen[s.qid] = true
+                out[#out + 1] = s.qid
+            end
+        end
+    end
+    return out
+end
+
 -- Dungeon Run (476): the steps between a known chain start and the dungeon quest are not in the data. The small
 -- arrow points at the game's own map point of a quest I picked up during the run that the data does not know
 -- (the next step of the chain), else it only says to follow the quest in the log.
