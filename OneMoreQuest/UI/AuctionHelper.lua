@@ -42,6 +42,7 @@ AH.ROWS = 12
 -- speed (decision 293): clicks go first - no new search for QUIET seconds after a click; prices of up to
 -- BATCH items come with one request (C_AuctionHouse.SearchForItemKeys), the single search stays the fallback
 AH.QUIET, AH.BATCH, AH.READY_FLASH = 3, 40, 0.6
+AH.TAB_W = 90          -- four tabs side by side (decision 637; three of 120 before)
 AH.HEAD = 108           -- the tabs and the box with the mode switch on top (decisions 264 and 267)
 
 local GOLD = { 0.89, 0.71, 0.29 }
@@ -436,6 +437,7 @@ function AH.Scanning()
     for _, e in ipairs(entries) do if e.state == "price" then return true end end
     local B, S = OMQ.AuctionBuy, OMQ.Shopping
     if AH.view == "shop" then return (S and S.Pending()) and true or false end      -- the Shopping tab (decision 551)
+    if AH.view == "upg" then return (B and B.UpgPending and B.UpgPending()) and true or false end   -- the Upgrades tab (decision 637)
     return (AH.view == "buy" and B and B.Pending and B.Pending()) and true or false
 end
 -- a click that does nothing because a scan runs: no chat line any more (decision 441; was decision 289), the
@@ -750,6 +752,7 @@ function AH._pump()
     -- then the buy mode's searches: stock prices, the weapon browse, the weapon offers (decision 264)
     local q = AH.view == "buy" and OMQ.AuctionBuy and OMQ.AuctionBuy.NextQuery()      -- only once the buy tab is looked at (decision 290)
     if not q and AH.view == "shop" and OMQ.Shopping then q = OMQ.Shopping.NextQuery() end   -- the Shopping tab (decision 551)
+    if not q and AH.view == "upg" and OMQ.AuctionBuy then q = OMQ.AuctionBuy.NextUpgQuery() end   -- the Upgrades tab (decision 637)
     if q then
         asking, askedAt = q, now()
         if q.browse then
@@ -985,22 +988,24 @@ local function build()
     panel.box = box
     local function tab(label, view, x)
         local t = CreateFrame("Button", nil, panel)
-        t:SetSize(120, 35)                                   -- 1 px over the box: the open tab merges with it
+        t:SetSize(AH.TAB_W, 35)                              -- 1 px over the box: the open tab merges with it
         t:SetPoint("TOPLEFT", x, -30)
         t:SetFrameLevel(box:GetFrameLevel() + 2)
         t.bg = t:CreateTexture(nil, "BACKGROUND"); t.bg:SetAllPoints()
         t.top = t:CreateTexture(nil, "BORDER"); t.top:SetPoint("TOPLEFT"); t.top:SetPoint("TOPRIGHT"); t.top:SetHeight(3)
         t.top:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
-        t.text = t:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge"); t.text:SetPoint("CENTER", 0, 1); t.text:SetText(label)
+        t.text = t:CreateFontString(nil, "OVERLAY", "GameFontNormal"); t.text:SetPoint("CENTER", 0, 1); t.text:SetText(label)
         t.hl = t:CreateTexture(nil, "HIGHLIGHT"); t.hl:SetAllPoints(); t.hl:SetColorTexture(1, 1, 1, 0.05)
         t:SetScript("OnClick", function() AH.SetView(view) end)
         t.view = view
         return t
     end
+    -- four tabs (decision 637): Sell | Buy | Upgrades | Shopping
     panel.sellBtn = tab("Sell", "sell", 10)
-    panel.buyBtn = tab("Buy", "buy", 130)
-    panel.shopBtn = tab("Shopping", "shop", 250)               -- the shopping lists (decision 551)
-    panel.sellBtn.mode, panel.buyBtn.mode, panel.shopBtn.mode = "sell", "buy", "shop"
+    panel.buyBtn = tab("Buy", "buy", 10 + AH.TAB_W)
+    panel.upgBtn = tab("Upgrades", "upg", 10 + 2 * AH.TAB_W)    -- gear, weapons and bags (decision 637)
+    panel.shopBtn = tab("Shopping", "shop", 10 + 3 * AH.TAB_W)  -- the shopping lists (decision 551)
+    panel.sellBtn.mode, panel.buyBtn.mode, panel.upgBtn.mode, panel.shopBtn.mode = "sell", "buy", "upg", "shop"
     panel.BOX = BOX
     local function segment(label, mode, x, onClick)
         local b = CreateFrame("Button", nil, panel)
@@ -1020,6 +1025,7 @@ local function build()
     panel.selBtn = segment("Select", "select", 123, function() AH.SetMode("select") end)
     panel.fillBtn = segment("Fill up", "fill", 22, function() OMQ.AuctionBuy.SetMode("fill") end)
     panel.oneBtn = segment("Single", "single", 123, function() OMQ.AuctionBuy.SetMode("single") end)
+    panel.Segment = segment                            -- the gold limit buttons of the Upgrades tab (decision 637)
     panel.modeHint = fs(box, "GameFontHighlightSmall", 0.72, 0.74, 0.79)
     panel.modeHint:SetPoint("LEFT", panel.selBtn, "RIGHT", 12, 0); panel.modeHint:SetWidth(130)
 
@@ -1132,7 +1138,8 @@ AH.MODE_HINT = { fast = "one button, item after item", select = "pick item by it
                  fill = "a click fills up to the target", single = "a click buys one piece" }
 
 function AH.SetView(v, auto)
-    AH.view = (v == "buy" or v == "shop") and v or "sell"
+    AH.view = (v == "buy" or v == "shop" or v == "upg") and v or "sell"
+    if AH.view == "upg" and OMQ.AuctionBuy and OMQ.AuctionBuy.OpenUpgrades then OMQ.AuctionBuy.OpenUpgrades() end
     if not auto then AH.manualView = true end
     AH.Refresh()
     AH.Pump()
@@ -1143,15 +1150,24 @@ function AH.Refresh()
     paintScan()
     local L = AH.Lists()
     -- the helper stays on Sell until the dad opens Buy himself (decision 431; before: on to buying when nothing was left)
-    local buy, shop = AH.view == "buy", AH.view == "shop"
-    local S = OMQ.Shopping
-    paintTab(panel.sellBtn, not buy and not shop); paintTab(panel.buyBtn, buy); paintTab(panel.shopBtn, shop)
+    local buy, shop, upg = AH.view == "buy", AH.view == "shop", AH.view == "upg"
+    local S, U = OMQ.Shopping, OMQ.AuctionUpgrades
+    paintTab(panel.sellBtn, not buy and not shop and not upg); paintTab(panel.buyBtn, buy)
+    paintTab(panel.upgBtn, upg); paintTab(panel.shopBtn, shop)
     local nLists = S and S.Count() or 0
     panel.shopBtn.text:SetText(nLists > 0 and string.format("Shopping |cff66d17a(%d)|r", nLists) or "Shopping")
-    for _, b in ipairs({ panel.fastBtn, panel.selBtn }) do b:SetShown(not buy and not shop) end
+    for _, b in ipairs({ panel.fastBtn, panel.selBtn }) do b:SetShown(not buy and not shop and not upg) end
     for _, b in ipairs({ panel.fillBtn, panel.oneBtn }) do b:SetShown(buy) end
-    panel.modeHint:SetShown(not shop)
+    panel.modeHint:SetShown(not shop and not upg)
     if not shop and S then S.Hide() end
+    if not upg and U then U.Hide() end
+    if upg and U then                                  -- the Upgrades tab (decision 637)
+        if OMQ.AuctionBuy then OMQ.AuctionBuy.Hide() end
+        fastUI:Hide(); selUI:Hide(); panel.out:SetText("")
+        local h = U.Render(panel, AH.HEAD)
+        panel:SetHeight(AH.HEAD + h + 16)
+        return
+    end
     if shop then                                       -- the shopping lists (decision 551)
         if OMQ.AuctionBuy then OMQ.AuctionBuy.Hide() end
         fastUI:Hide(); selUI:Hide(); panel.out:SetText("")

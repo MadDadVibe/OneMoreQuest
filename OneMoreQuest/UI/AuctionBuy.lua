@@ -1,8 +1,9 @@
 -- One More Quest: Auction Helper, buy mode (decision 264)
 -- The switch on top of the auction helper turns it from selling to buying. It suggests only what fits
 -- the class, the role and the level, each with what I carry and what it suggests:
---   weapon upgrades (item score against what I wield, only what I can put on right now - level, weapon skill
---   and class from the game's tooltip, decision 431 - at most half my gold), and the stock rows of
+--   gear upgrades for every slot (item score against what I wear, only what I can put on right now - level,
+--   weapon skill and class from the game's tooltip, decision 431 - up to the gold limit of the Upgrades tab,
+--   UI/AuctionUpgrades.lua, decision 637, which also shows the bags), and the stock rows of
 --   UI/BuyRules.lua: small, cheap buffs under a price limit per use (decision 431), armor kits for chest,
 --   legs, hands and feet without an enchantment, a shield spike for a shield without one.
 -- Every row is searched live once the Buy tab is open; the dump of the whole house is not used here (decision 431).
@@ -24,8 +25,8 @@ B.TARGET = { potion = 5, scroll = 5, elixir = 10, stone = 10, oil = 2, food = 10
 B.KIND_LABEL = { potion = "potion", scroll = "scroll", elixir = "elixir", stone = "weapon stone", oil = "weapon oil",
                  food = "buff food", flask = "flask", juju = "juju", kit = "armor kit", spike = "shield spike" }
 B.KIND_ORDER = { potion = 1, elixir = 2, flask = 3, food = 4, scroll = 5, stone = 6, oil = 7, kit = 8, spike = 9, juju = 10 }
--- weapons only that I can wield right now: no level above mine (decision 431; was 2, decision 402)
-B.WEAPON_LEVELS, B.WEAPON_GOLD_SHARE, B.WEAPON_ROWS, B.WEAPON_CHECK = 0, 0.5, 3, 5
+-- gear only that I can wear right now: no level above mine (decision 431; was 2, decision 402)
+B.WEAPON_LEVELS = 0
 B.ROWS = 10
 
 local GOLD = { 0.89, 0.71, 0.29 }
@@ -489,85 +490,161 @@ function B.Cost(r, n)
 end
 
 ----------------------------------------------------------------------
--- Weapon upgrades: a browse for weapons up to my level + 2, then the best few looked at closely
+-- Gear upgrades (decision 637, the Upgrades tab; before: weapon upgrades only, decision 264): browses for the
+-- weapons, the wands of cloth casters and every armor kind I can wear, up to my level; every result is scored
+-- against what I wear (LootPreview.GainAt: the slot it would go into, rings and trinkets against the weaker one,
+-- an empty slot counts the full value). The best few of every slot are then looked at closely (their real offers).
 ----------------------------------------------------------------------
--- what is scanned only on request (decision 290): the weapon browse and the bag browse
+-- what is scanned only on request (decision 290): the gear browses and the bag browse
 B.want = { weapons = false, bags = false }
-local browse = { state = "idle" }
+local browse = { state = "idle", gen = 0 }
 local candidates = {}
 B._browse, B._candidates = browse, candidates
 
-local function gainOf(link, equipLoc)
-    local LP = OMQ.LootPreview
-    if not (LP and LP.Gain) then return nil end
-    local ok, g = pcall(LP.Gain, link, equipLoc)
-    return ok and g or nil
-end
-local function budget() return math.floor((GetMoney and GetMoney() or 0) * B.WEAPON_GOLD_SHARE) end
+-- the slot groups of the Upgrades tab, in the order of the character window; rings and trinkets one group each
+B.GEAR_GROUPS = {
+    { key = "head", label = "Head", slots = { 1 } }, { key = "neck", label = "Neck", slots = { 2 } },
+    { key = "shoulder", label = "Shoulders", slots = { 3 } }, { key = "back", label = "Back", slots = { 15 } },
+    { key = "chest", label = "Chest", slots = { 5 } }, { key = "wrist", label = "Wrists", slots = { 9 } },
+    { key = "hands", label = "Hands", slots = { 10 } }, { key = "waist", label = "Waist", slots = { 6 } },
+    { key = "legs", label = "Legs", slots = { 7 } }, { key = "feet", label = "Feet", slots = { 8 } },
+    { key = "finger", label = "Rings", slots = { 11, 12 } }, { key = "trinket", label = "Trinkets", slots = { 13, 14 } },
+    { key = "main", label = "Main hand", slots = { 16 } }, { key = "off", label = "Off hand", slots = { 17 } },
+    { key = "ranged", label = "Ranged", slots = { 18 } },
+}
+local groupOfSlot = {}
+for _, g in ipairs(B.GEAR_GROUPS) do for _, s in ipairs(g.slots) do groupOfSlot[s] = g.key end end
+function B.GroupOf(slot) return groupOfSlot[slot or 0] end
+B.GEAR_PICKS = 3          -- items shown per slot (decision 637)
+B.GEAR_CHECK = 3          -- items per slot looked at closely
+B.GEAR_MIN_LEVELS = 8     -- the browses start this many levels below mine
 
--- cloth casters also look at wands (decision 298): a browse of its own, so the cheap weapons of the first
--- browse do not crowd them out; the best WANDS_CHECK wands are always looked at closely
+-- the gold limit per item (decision 637): 10s, 50s, 1g, 3g, 5g or no limit (0); per character, 1g at first.
+-- Never more than the gold I carry. It also holds for the bags.
+B.LIMITS = { 1000, 5000, 10000, 30000, 50000, 0 }
+B.LIMIT_DEFAULT = 10000
+function B.Limit()
+    local ah = db()
+    ah.upgLimit = ah.upgLimit or {}
+    local v = ah.upgLimit[UnitGUID and UnitGUID("player") or "?"]
+    return v or B.LIMIT_DEFAULT
+end
+function B.Budget()
+    local gold = GetMoney and GetMoney() or 0
+    local lim = B.Limit()
+    if lim <= 0 then return gold end
+    return math.min(lim, gold)
+end
+local budget = B.Budget
+
+-- the armor kinds a class can wear (item class 4): 0 miscellaneous (rings, necks, trinkets, off-hand items),
+-- 1 cloth (also every cloak), 2 leather, 3 mail, 4 plate, 6 shields. The level of mail and plate is checked per item.
+B.ARMOR = {
+    WARRIOR = { 0, 1, 2, 3, 4, 6 }, PALADIN = { 0, 1, 2, 3, 4, 6 }, SHAMAN = { 0, 1, 2, 3, 6 }, HUNTER = { 0, 1, 2, 3 },
+    ROGUE = { 0, 1, 2 }, DRUID = { 0, 1, 2 }, PRIEST = { 0, 1 }, MAGE = { 0, 1 }, WARLOCK = { 0, 1 },
+}
+
+local function gainAt(link, equipLoc)
+    local LP = OMQ.LootPreview
+    local f = LP and (LP.GainAt or LP.Gain)
+    if not f then return nil end
+    local ok, g, at = pcall(f, link, equipLoc)
+    if not ok then return nil end
+    if g and not at then                               -- no slot named: the first slot of the item's kind
+        local s = OMQ.Compare and OMQ.Compare.SLOTS and OMQ.Compare.SLOTS[equipLoc or ""]
+        at = s and s[1]
+    end
+    return g, at
+end
+
+-- cloth casters also look at wands (decision 298): a browse of its own, so the cheap weapons do not crowd them out
 B.WAND_CLASSES = { PRIEST = true, MAGE = true, WARLOCK = true }
-B.WAND_SUBCLASS, B.WANDS_CHECK = 19, 2
+B.WAND_SUBCLASS = 19
 function B.WantsWands(class)
     local SC = OMQ.Score
     class = class or (SC and SC.MyClass())
     return B.WAND_CLASSES[class or ""] and true or false
 end
 
-local function onBrowse(dump)
-    local A = CA()
-    local list = dump or (A.GetBrowseResults and A.GetBrowseResults() or {})
-    browse.results = browse.results or {}
-    for _, res in ipairs(list) do browse.results[#browse.results + 1] = res end
-    if not dump and browse.state == "asking" and B.WantsWands() then browse.state = "wands"; return end   -- the wand browse next
-    browse.state = "done"
-    list = browse.results
-    browse.results = nil
+-- the browses of one gear search: the weapons, the wands, then every armor kind of my class
+function B.GearSearches(class)
+    local SC = OMQ.Score
+    class = class or (SC and SC.MyClass()) or select(2, UnitClass("player"))
+    local out = { { 2 } }
+    if B.WantsWands(class) then out[#out + 1] = { 2, B.WAND_SUBCLASS } end
+    for _, sub in ipairs(B.ARMOR[class or ""] or { 0, 1 }) do out[#out + 1] = { 4, sub } end
+    return out
+end
+
+-- the link to score a browse result with: a random suffix ("of the Bear") is part of the key, when the game names it
+function B.KeyLink(k)
+    local id = k and k.itemID
+    if not id then return nil end
+    local s = k.itemSuffix
+    if type(s) == "number" and s ~= 0 then return "item:" .. id .. ":0:0:0:0:0:" .. s end
+    return "item:" .. id
+end
+
+local function offerResult(x)
+    x.state = "done"
+    x.offer, x.gain, x.slot = B._bestGearOffer(x, readOffers(x))
+end
+
+-- every browse result scored; the best GEAR_CHECK of each slot group are looked at closely, best first in turn
+local function judgeGear(list)
     for i = #candidates, 1, -1 do candidates[i] = nil end
     local SC = OMQ.Score
     local class = SC and SC.MyClass()
     local lvl = level()
-    local scored, seen = {}, {}
+    local bySlot, seen = {}, {}
     for _, res in ipairs(list) do
         local id = res.itemKey and res.itemKey.itemID
         local _, _, _, equipLoc, _, classID = instant(id or 0)
         local minLevel = select(5, info(id or 0))
-        if id and classID == 2 and (res.minPrice or 0) <= budget() and (not minLevel or minLevel <= lvl + B.WEAPON_LEVELS)
-            and (not SC or SC.CanUse("item:" .. id, class, lvl)) then
-            local g = gainOf("item:" .. id, equipLoc) or 0
-            local k = AH()._KeyString(res.itemKey)
-            if not seen[k] then
-                seen[k] = true
-                scored[#scored + 1] = { itemKey = res.itemKey, itemID = id, equipLoc = equipLoc, est = g,
-                                        wand = select(7, instant(id)) == B.WAND_SUBCLASS }
-            end
-        end
-    end
-    table.sort(scored, function(a, b) return a.est > b.est end)
-    local pick, wands = {}, 0
-    for i = 1, math.min(B.WEAPON_CHECK, #scored) do pick[#pick + 1] = scored[i]; if scored[i].wand then wands = wands + 1 end end
-    for i = B.WEAPON_CHECK + 1, #scored do
-        if wands >= B.WANDS_CHECK then break end
-        if scored[i].wand and scored[i].est > 0 then pick[#pick + 1] = scored[i]; wands = wands + 1 end
-    end
-    for _, c in ipairs(pick) do
-        c.key, c.state, c.commodity = "w" .. AH()._KeyString(c.itemKey), "price", false
-        c.anyKey = dump and true or nil                       -- the key of the dump is a guess: the game's own key is taken from its answer (decision 343)
-        c.onResult = function(x)
-            x.state = "done"
-            local bestO, bestG
-            for _, o in ipairs(readOffers(x)) do
-                local need = select(5, info(o.link or 0))
-                if o.link and o.buyout <= budget() and not (need and need > level() + B.WEAPON_LEVELS) and B.CanEquipNow(o.link) ~= false then
-                    local g = gainOf(o.link, x.equipLoc)
-                    if g and g > 0 and (not bestG or g > bestG or (g == bestG and o.buyout < bestO.buyout)) then bestO, bestG = o, g end
+        local k = id and AH()._KeyString(res.itemKey)
+        if id and (classID == 2 or classID == 4) and not seen[k] and (res.minPrice or 0) <= budget()
+            and (not minLevel or minLevel <= lvl + B.WEAPON_LEVELS) and (not SC or SC.CanUse("item:" .. id, class, lvl)) then
+            seen[k] = true
+            local link = B.KeyLink(res.itemKey)
+            local g, at = gainAt(link, equipLoc)
+            local grp = B.GroupOf(at)
+            if grp then
+                local quality = select(3, info(id))
+                -- 0 counts only for an item that may carry a random suffix (green or better): its real offer tells
+                if (g or 0) > 0 or (g == 0 and (quality or 2) >= 2) then
+                    bySlot[grp] = bySlot[grp] or {}
+                    local t = bySlot[grp]
+                    t[#t + 1] = { itemKey = res.itemKey, itemID = id, equipLoc = equipLoc, est = g or 0, group = grp,
+                                  wand = select(7, instant(id)) == B.WAND_SUBCLASS }
                 end
             end
-            x.offer, x.gain = bestO, bestG
         end
-        candidates[#candidates + 1] = c
     end
+    for _, t in pairs(bySlot) do table.sort(t, function(a, b) return a.est > b.est end) end
+    for rank = 1, B.GEAR_CHECK do
+        for _, g in ipairs(B.GEAR_GROUPS) do
+            local c = bySlot[g.key] and bySlot[g.key][rank]
+            if c then
+                c.key, c.state, c.commodity, c.onResult = "w" .. AH()._KeyString(c.itemKey), "price", false, offerResult
+                candidates[#candidates + 1] = c
+            end
+        end
+    end
+end
+B.JudgeGear = judgeGear
+
+local function onBrowse(gen)
+    if gen ~= browse.gen then return end                  -- the limit changed meanwhile: a new search runs
+    local A = CA()
+    local list = A.GetBrowseResults and A.GetBrowseResults() or {}
+    browse.results = browse.results or {}
+    for _, res in ipairs(list) do browse.results[#browse.results + 1] = res end
+    browse.step = (browse.step or 0) + 1
+    if browse.step < #(browse.searches or {}) then browse.state = "next"; return end
+    browse.state = "done"
+    list = browse.results
+    browse.results = nil
+    judgeGear(list)
 end
 
 -- the level a weapon offer needs; nil while the game has not loaded the item (it is asked for)
@@ -604,19 +681,36 @@ function B.CanEquipNow(link)
     end
     return true
 end
-function B.Weapons()
-    for i = #weapons, 1, -1 do weapons[i] = nil end
+
+-- every gear upgrade found, the biggest first (each with its offer, gain and slot group)
+function B.Gear()
+    local out = {}
     local never = (db()).never
     local maxLevel = level() + B.WEAPON_LEVELS
     for _, c in ipairs(candidates) do
-        -- only what I can wield within WEAPON_LEVELS: an offer whose level is not known yet waits (decision 402)
+        -- only what I can wear: an offer whose level is not known yet waits (decision 402)
         local need = c.offer and needLevel(c.offer.link)
         if c.offer and c.gain and need and need <= maxLevel and B.CanEquipNow(c.offer.link) == true
-            and not never[c.itemID] and not c.bought then weapons[#weapons + 1] = c end
+            and not never[c.itemID] and not c.bought then out[#out + 1] = c end
     end
-    table.sort(weapons, function(a, b) return a.gain > b.gain end)
-    for i = #weapons, B.WEAPON_ROWS + 1, -1 do weapons[i] = nil end
-    return weapons
+    table.sort(out, function(a, b) return a.gain > b.gain end)
+    return out
+end
+-- the best GEAR_PICKS of every slot group, in the order of B.GEAR_GROUPS: { { group, items }, ... }
+function B.GearSlots()
+    local by = {}
+    for _, c in ipairs(B.Gear()) do
+        local k = c.slot and B.GroupOf(c.slot) or c.group
+        if k then
+            by[k] = by[k] or {}
+            if #by[k] < B.GEAR_PICKS then by[k][#by[k] + 1] = c end
+        end
+    end
+    local out = {}
+    for _, g in ipairs(B.GEAR_GROUPS) do
+        if by[g.key] then out[#out + 1] = { group = g, items = by[g.key] } end
+    end
+    return out
 end
 
 ----------------------------------------------------------------------
@@ -625,7 +719,7 @@ end
 -- for hunters - each only when none of that kind is worn or a bigger one is on sale, at most half
 -- my gold. Slots come from the item's tooltip ("16 Slot Bag"), in the client's language.
 ----------------------------------------------------------------------
-local bagBrowse = { state = "idle" }
+local bagBrowse = { state = "idle", gen = 0 }
 local bagCands = {}
 B._bagBrowse, B._bagCands = bagBrowse, bagCands
 B.BAG_ROWS = 6
@@ -965,21 +1059,33 @@ end
 
 -- is a search of the buy mode still to come? (decision 286)
 function B.Pending()
-    for _, list in ipairs({ rows, foods, alts, candidates, bagCands }) do
+    for _, list in ipairs({ rows, foods, alts }) do
+        for _, r in ipairs(list) do if r.state == "price" then return true end end
+    end
+    return false
+end
+-- is a search of the Upgrades tab still to come? (decision 637)
+function B.UpgPending()
+    for _, list in ipairs({ candidates, bagCands }) do
         for _, r in ipairs(list) do if r.state == "price" then return true end end
     end
     return (B.want.weapons and browse.state ~= "done") or (B.want.bags and bagBrowse.state ~= "done") and true or false
 end
--- the weapon scan, on request (decision 290)
+local function resetGear()
+    browse.gen = (browse.gen or 0) + 1
+    browse.state, browse.step, browse.results, browse.searches = "idle", 0, nil, nil
+    for i = #candidates, 1, -1 do candidates[i] = nil end
+end
+-- the gear scan, on request (decision 290)
 function B.ScanWeapons()
     B.want.weapons = true
-    browse.state = "idle"
-    for i = #candidates, 1, -1 do candidates[i] = nil end
+    resetGear()
     AH().Refresh(); AH().Pump()
 end
 -- the bag scan, on request (decision 320, like the weapons)
 local function resetBags()
     bagBrowse.state, bagBrowse.tries, bagBrowse.results, bagBrowse.stats, bagBrowse.answered, bagBrowse.log = "idle", 0, nil, nil, 0, nil
+    bagBrowse.gen = (bagBrowse.gen or 0) + 1          -- an answer of an older bag search is not read (decision 637)
     for i = #bagCands, 1, -1 do bagCands[i] = nil end
 end
 function B.ScanBags()
@@ -987,13 +1093,28 @@ function B.ScanBags()
     resetBags()
     AH().Refresh(); AH().Pump()
 end
--- everything again: the stock prices, the weapons, the bags (decision 290)
+-- the Upgrades tab looked at (decision 637): its searches start once per visit of the auction house
+function B.OpenUpgrades()
+    if B.want.weapons and B.want.bags then return end
+    B.want.weapons, B.want.bags = true, true
+    resetGear()
+    resetBags()
+end
+-- a new gold limit (decision 637): everything of the Upgrades tab is searched again
+function B.SetLimit(c)
+    local ah = db()
+    ah.upgLimit = ah.upgLimit or {}
+    ah.upgLimit[UnitGUID and UnitGUID("player") or "?"] = c
+    B.want.weapons, B.want.bags = true, true
+    resetGear()
+    resetBags()
+    AH().Refresh(); AH().Pump()
+end
+-- everything again: the stock prices, the gear, the bags (decision 290)
 function B.ScanAll()
     B.want.weapons, B.want.bags = true, true
-    browse.state = "idle"
+    resetGear()
     resetBags()
-    for i = #candidates, 1, -1 do candidates[i] = nil end
-    for i = #bagCands, 1, -1 do bagCands[i] = nil end
     for _, r in pairs(byId) do r.state = "price" end
     B.Build()
 end
@@ -1012,37 +1133,8 @@ function B.BrowseQuery(class, sub, minLevel, maxLevel, sortOrder)
 end
 
 -- the next search the auction helper's queue should send (after its own price checks)
--- Decision 432: the weapon and bag searches go first. They are a handful of searches; the consumables can be
--- dozens, and behind them the weapons and bags did not come for minutes.
+-- The stock rows of the Buy tab; the gear and bag searches belong to the Upgrades tab (decision 637).
 function B.NextQuery()
-    if B.want.weapons and browse.state == "wands" then
-        local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
-        local lvl = level()
-        browse.state = "asking wands"
-        return { browse = true, key = "wands", onResult = function() onBrowse() end,
-                 query = B.BrowseQuery(2, B.WAND_SUBCLASS, math.max(1, lvl - 8), lvl + B.WEAPON_LEVELS, P) }
-    end
-    if B.want.weapons and browse.state == "idle" then
-        local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
-        local lvl = level()
-        browse.results = nil
-        browse.state = "asking"
-        return { browse = true, key = "browse", onResult = function() onBrowse() end,
-                 query = B.BrowseQuery(2, nil, math.max(1, lvl - 8), lvl + B.WEAPON_LEVELS, P) }
-    end
-    for _, c in ipairs(candidates) do
-        if c.state == "price" then return c end
-    end
-    if B.want.bags and (bagBrowse.state == "idle" or bagBrowse.state == "quivers") then
-        local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
-        local class = bagBrowse.state == "quivers" and 11 or 1
-        bagBrowse.state = class == 1 and "asking" or "asking quivers"
-        return { browse = true, key = "bags" .. class, onResult = function(q) onBagBrowse(q) end,
-                 query = B.BrowseQuery(class, nil, nil, nil, P) }
-    end
-    for _, c in ipairs(bagCands) do
-        if c.state == "price" then return c end
-    end
     for _, r in ipairs(rows) do
         if r.state == "price" then r.onResult = onStock; return r end
     end
@@ -1051,6 +1143,35 @@ function B.NextQuery()
     end
     for _, r in ipairs(alts) do
         if r.state == "price" then r.onResult = onStock; return r end
+    end
+    return nil
+end
+-- the next search of the Upgrades tab (decision 637): the gear browses one after another, the closer looks at the
+-- best of each slot, then the bags
+function B.NextUpgQuery()
+    if B.want.weapons and (browse.state == "idle" or browse.state == "next") then
+        local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
+        local lvl = level()
+        if browse.state == "idle" then browse.results, browse.step, browse.searches = nil, 0, B.GearSearches() end
+        local sch = browse.searches[(browse.step or 0) + 1]
+        browse.state = "asking"
+        local gen = browse.gen
+        return { browse = true, key = "gear" .. sch[1] .. "." .. tostring(sch[2]), onResult = function() onBrowse(gen) end,
+                 query = B.BrowseQuery(sch[1], sch[2], math.max(1, lvl - B.GEAR_MIN_LEVELS), lvl + B.WEAPON_LEVELS, P) }
+    end
+    for _, c in ipairs(candidates) do
+        if c.state == "price" then return c end
+    end
+    if B.want.bags and (bagBrowse.state == "idle" or bagBrowse.state == "quivers") then
+        local P = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0
+        local class = bagBrowse.state == "quivers" and 11 or 1
+        bagBrowse.state = class == 1 and "asking" or "asking quivers"
+        local gen = bagBrowse.gen
+        return { browse = true, key = "bags" .. class, onResult = function(q) if gen == bagBrowse.gen then onBagBrowse(q) end end,
+                 query = B.BrowseQuery(class, nil, nil, nil, P) }
+    end
+    for _, c in ipairs(bagCands) do
+        if c.state == "price" then return c end
     end
     return nil
 end
@@ -1129,18 +1250,19 @@ function B.Fresh(x)
     local H = AH()
     return f and now() - f.at < B.FRESH and f.seq == (H.searchSeq or 0) or false
 end
-local function bestWeaponOffer(x, offers)
-    local bestO, bestG
+-- the best offer of a gear search: under the limit, wearable now, the biggest gain (with the slot it goes into)
+local function bestGearOffer(x, offers)
+    local bestO, bestG, bestS
     for _, o in ipairs(offers) do
         local need = select(5, info(o.link or 0))
         if o.link and o.buyout <= budget() and not (need and need > level() + B.WEAPON_LEVELS) and B.CanEquipNow(o.link) ~= false then
-            local g = gainOf(o.link, x.equipLoc)
-            if g and g > 0 and (not bestG or g > bestG or (g == bestG and o.buyout < bestO.buyout)) then bestO, bestG = o, g end
+            local g, at = gainAt(o.link, x.equipLoc)
+            if g and g > 0 and (not bestG or g > bestG or (g == bestG and o.buyout < bestO.buyout)) then bestO, bestG, bestS = o, g, at end
         end
     end
-    return bestO, bestG
+    return bestO, bestG, bestS
 end
-B._bestWeaponOffer = bestWeaponOffer
+B._bestGearOffer = bestGearOffer
 local function onCheck(q)
     local c = B.check
     B.check = nil
@@ -1150,8 +1272,8 @@ local function onCheck(q)
     x.itemKey = q.itemKey or x.itemKey
     local offers = readOffers(q)
     if c.kind == "weapon" then
-        x.offer, x.gain = bestWeaponOffer(x, offers)
-        if not x.offer then x.state = "done"; OMQ:Print("auction helper: that weapon is gone") end
+        x.offer, x.gain, x.slot = bestGearOffer(x, offers)
+        if not x.offer then x.state = "done"; OMQ:Print("auction helper: that item is gone") end
     else
         x.offers = offers
         x.state = #offers > 0 and "ok" or "none"
@@ -1189,7 +1311,7 @@ function B.BuyBag(g)
     return B.Buy(g, 1)
 end
 
-function B.BuyWeapon(w)
+function B.BuyGear(w)
     local A = CA()
     if not (A and w and w.offer) or B.Busy() or not AH().open then return false end
     if not B.Fresh(w) then return B.StartCheck(w, "weapon") end
@@ -1219,11 +1341,11 @@ function B.FillNext()
     return false
 end
 
--- the consumables clicked away (right click: never suggest) - not the weapons and bags (decision 275)
+-- the consumables clicked away (right click: never suggest) - not the gear, weapons and bags (decisions 275, 637)
 local function isConsumable(id)
     if OMQ.BuyKind(id) then return true end
     local classID = select(6, instant(id))
-    return classID ~= nil and classID ~= 1 and classID ~= 2 and classID ~= 11
+    return classID ~= nil and classID ~= 1 and classID ~= 2 and classID ~= 4 and classID ~= 11
 end
 function B.NeverCount()
     local n = 0
@@ -1363,11 +1485,9 @@ end)
 
 function B.Open()
     buying, late, B.check = nil, nil, nil
-    B.want.weapons, B.want.bags = true, true          -- searched by themselves once the Buy tab is open (decision 431)
-    browse.state = "idle"
+    B.want.weapons, B.want.bags = false, false        -- searched once the Upgrades tab is looked at (decision 637)
+    resetGear()
     resetBags()
-    for i = #candidates, 1, -1 do candidates[i] = nil end
-    for i = #bagCands, 1, -1 do bagCands[i] = nil end
     for _, r in pairs(byId) do r.state, r.live = "price", nil end
     B.LearnBags()
     B.FoodCandidates(level())
@@ -1412,22 +1532,8 @@ local function build(panel)
     ui = CreateFrame("Frame", nil, panel)
     if panel.box then ui:SetFrameLevel(panel.box:GetFrameLevel() + 2) end
     ui.head = fs(ui, "GameFontHighlight", 0.79, 0.8, 0.84); ui.head:SetPoint("TOPLEFT", 16, -2); ui.head:SetWidth(348)
-    ui.wTitle = fs(ui, "GameFontNormal", 0.95, 0.82, 0.48); ui.wTitle:SetText("Weapon upgrades")
     ui.sTitle = fs(ui, "GameFontNormal", 0.95, 0.82, 0.48); ui.sTitle:SetText("Stock up")
-    ui.wRows, ui.sRows = {}, {}
-    for i = 1, B.WEAPON_ROWS do
-        local r = makeRow(ui, 42)
-        r:SetScript("OnClick", function(self, button)
-            if not self.w then return end
-            if button == "RightButton" then B.Never(self.w.itemID) else B.BuyWeapon(self.w) end
-        end)
-        r:SetScript("OnEnter", function(self)
-            if GameTooltip and self.w and self.w.offer and self.w.offer.link then
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink(self.w.offer.link); GameTooltip:Show()
-            end
-        end)
-        ui.wRows[i] = r
-    end
+    ui.sRows = {}
     ui.offset = 0
     ui:EnableMouseWheel(true)
     ui:SetScript("OnMouseWheel", function(_, d)
@@ -1477,36 +1583,6 @@ local function build(panel)
     end)
     reset:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     ui.reset = reset
-    -- the weapon scan button stands where the result would (decision 290)
-    local wScan = CreateFrame("Button", nil, ui)
-    wScan:SetSize(348, 24)
-    wScan.bg = wScan:CreateTexture(nil, "BACKGROUND"); wScan.bg:SetAllPoints(); wScan.bg:SetColorTexture(0.165, 0.141, 0.086, 1)
-    wScan.hl = wScan:CreateTexture(nil, "HIGHLIGHT"); wScan.hl:SetAllPoints(); wScan.hl:SetColorTexture(1, 1, 1, 0.06)
-    wScan.text = fs(wScan, "GameFontNormalSmall", 0.95, 0.82, 0.48); wScan.text:SetPoint("CENTER"); wScan.text:SetText("Scan for weapon upgrades")
-    wScan:SetScript("OnClick", function() B.ScanWeapons() end)
-    ui.wScan = wScan
-    ui.wNote = fs(ui, "GameFontDisableSmall")
-    ui.gTitle = fs(ui, "GameFontNormal", 0.95, 0.82, 0.48); ui.gTitle:SetText("Bags")
-    local gScan = CreateFrame("Button", nil, ui)
-    gScan:SetSize(348, 24)
-    gScan.bg = gScan:CreateTexture(nil, "BACKGROUND"); gScan.bg:SetAllPoints(); gScan.bg:SetColorTexture(0.165, 0.141, 0.086, 1)
-    gScan.hl = gScan:CreateTexture(nil, "HIGHLIGHT"); gScan.hl:SetAllPoints(); gScan.hl:SetColorTexture(1, 1, 1, 0.06)
-    gScan.text = fs(gScan, "GameFontNormalSmall", 0.95, 0.82, 0.48); gScan.text:SetPoint("CENTER"); gScan.text:SetText("Scan for bigger bags")
-    gScan:SetScript("OnClick", function() B.ScanBags() end)
-    ui.gScan = gScan
-    ui.gNote = fs(ui, "GameFontDisableSmall")
-    ui.gRows = {}
-    for i = 1, B.BAG_ROWS do
-        local r = makeRow(ui, 38)
-        r:SetScript("OnClick", function(self, button)
-            if not self.g then return end
-            if button == "RightButton" then B.Never(self.g.itemID) else B.BuyBag(self.g) end
-        end)
-        r:SetScript("OnEnter", function(self)
-            if GameTooltip and self.g then GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink("item:" .. self.g.itemID); GameTooltip:Show() end
-        end)
-        ui.gRows[i] = r
-    end
     ui.more = fs(ui, "GameFontDisableSmall")
 end
 B._UI = function() return ui end
@@ -1523,91 +1599,7 @@ function B.Render(panel, top)
     ui.head:SetText(string.format("For your %s, level %d - you carry |cfff2d27a%s|r", cname, level(), money(GetMoney and GetMoney() or 0))
         .. (AH().Manual() and "  |cffff9933Paused - press Scan all to unpause|r" or ""))
     local y = 26
-    -- weapons
-    local W = B.Weapons()
-    ui.wTitle:ClearAllPoints(); ui.wTitle:SetPoint("TOPLEFT", 16, -y)
-    y = y + 20
-    local wText
-    ui.wScan:SetShown(not B.want.weapons)
-    ui.wScan:ClearAllPoints(); ui.wScan:SetPoint("TOPLEFT", 16, -y)
-    if not B.want.weapons then wText = ""; y = y + 28
-    elseif browse.state ~= "done" then wText = "Looking at the weapons..."
-    else
-        local pending = false
-        for _, c in ipairs(candidates) do if c.state == "price" then pending = true end end
-        if pending then wText = "Looking at the weapons..." elseif #W == 0 then wText = "No upgrade on sale right now" end
-    end
-    for i, r in ipairs(ui.wRows) do
-        local w = W[i]
-        r.w = w
-        r:SetShown(w ~= nil)
-        if w then
-            r:ClearAllPoints(); r:SetPoint("TOPLEFT", 16, -y)
-            local name, _, quality, _, minLevel, _, sub, _, _, icon = info(w.offer.link)
-            r.icon:SetTexture(icon)
-            r.name:SetText(name or ("item " .. w.itemID)); r.name:SetTextColor(qColor(quality))
-            r.sub:SetText((sub or "") .. (minLevel and (" - level " .. minLevel) or ""))
-            r.top:SetText("|cff40e060+" .. w.gain .. " score|r")
-            r.bottom:SetText(w.bought and "Bought" or (w.checking and "Checking...")
-                or (B.Fresh(w) and ("|cff40e060Click: buy|r " .. money(w.offer.buyout))) or money(w.offer.buyout))
-            y = y + 44
-        end
-    end
-    ui.wNote:ClearAllPoints(); ui.wNote:SetPoint("TOPLEFT", 16, -y)
-    ui.wNote:SetText(wText or "")
-    if wText then y = y + 18 end
-    -- bags (decision 265)
-    -- the section is always there (decision 320): title, the scan button or what the scan found
-    local G = B.Bags()
-    ui.gTitle:ClearAllPoints(); ui.gTitle:SetPoint("TOPLEFT", 16, -(y + 4))
-    ui.gTitle:Show()
-    y = y + 24
-    ui.gScan:SetShown(not B.want.bags)
-    ui.gScan:ClearAllPoints(); ui.gScan:SetPoint("TOPLEFT", 16, -y)
-    local gText
-    if not B.want.bags then y = y + 28
-    else
-        local pricing = false
-        for _, c in ipairs(bagCands) do if c.state == "price" then pricing = true end end
-        local st = bagBrowse.stats or {}
-        if bagBrowse.state == "loading" then
-            gText = string.format("Loading %d bags...", st.unread or 0)
-        elseif bagBrowse.state ~= "done" then
-            gText = "Looking at the bags..."
-        elseif pricing then
-            local n, left = #bagCands, 0
-            for _, c in ipairs(bagCands) do if c.state == "price" then left = left + 1 end end
-            gText = string.format("Checking prices %d/%d...", n - left, n)
-        elseif #G == 0 then
-            gText = "No bigger bag on sale right now"
-            if (st.unread or 0) > 0 then gText = gText .. " (" .. st.unread .. " could not be read)" end
-        elseif (B.bagsMore or 0) > 0 then
-            gText = string.format("and %d more bag types", B.bagsMore)
-        end
-    end
-    for i, r in ipairs(ui.gRows) do
-        local g = G[i]
-        r.g = g
-        r:SetShown(g ~= nil)
-        if g then
-            r:ClearAllPoints(); r:SetPoint("TOPLEFT", 16, -y)
-            local name, _, quality, _, _, _, _, _, _, icon = info(g.itemID)
-            r.icon:SetTexture(icon or select(5, instant(g.itemID)))
-            r.name:SetText(name or ("item " .. g.itemID)); r.name:SetTextColor(qColor(quality))
-            local what = B.KindLabel(g.bagKind) or "bag"
-            r.sub:SetText((g.replaces == 0 and (what .. " - an empty bag slot") or string.format("%s - instead of %d slots", what, g.replaces))
-                .. (((g.boughtN or 0) > 0) and string.format(" (%d of %d bought)", g.boughtN, g.upgrades or 1) or ""))
-            r.top:SetText("|cff40e060" .. g.slots .. " slots|r")
-            r.bottom:SetText((buying and buying.row == g) and "Buying..." or (g.bought and "Bought") or ((g.checking or g.state == "price") and "Checking...")
-                or (B.Fresh(g) and ("|cff40e060Click: buy|r " .. money0(B.Cost(g, 1)))) or money0(B.Cost(g, 1)))
-            y = y + 40
-        end
-    end
-    ui.gNote:ClearAllPoints(); ui.gNote:SetPoint("TOPLEFT", 16, -y)
-    ui.gNote:SetText(gText or "")
-    if gText then y = y + 18 end
-    -- stock
-    y = y + 6
+    -- stock (the weapons and bags moved to the Upgrades tab, decision 637)
     ui.sTitle:ClearAllPoints(); ui.sTitle:SetPoint("TOPLEFT", 16, -y)
     y = y + 20
     ui.offset = math.min(ui.offset, math.max(0, #rows - B.ROWS))
