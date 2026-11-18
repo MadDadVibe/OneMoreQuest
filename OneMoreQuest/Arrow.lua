@@ -398,7 +398,7 @@ local function render()
             alpha = A.NearAlpha(g.straight or g.distance)
             if g.heading then point(g.heading) end
         else
-            distText:SetText(string.format("%d yd", math.floor(g.distance + 0.5)) .. (g.flight and (" - fly from " .. g.flight) or "")
+            distText:SetText(string.format("%d yd", math.floor(g.distance + 0.5)) .. (g.flight and (" - " .. OMQ.Path.FlightText(g)) or "")
                 .. A.StraightTag())
             texture:SetVertexColor(0.45, 0.8, 1)
             if g.heading then point(g.heading) end

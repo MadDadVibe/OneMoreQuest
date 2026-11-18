@@ -1196,7 +1196,7 @@ function R:Target()
         -- the way over the land (469): the arrow heads for the next point of the way, the yards are the way's
         local way = OMQ.Path and OMQ.Path.ArrowWays() and OMQ.Path.Way(pos, sp)
         if way and way.via then
-            view.distance, view.via, view.flight = way.cost, true, way.flight
+            view.distance, view.via, view.flight, view.flightTo = way.cost, true, way.flight, way.flightTo
             ha, hb = way.a, way.b
         end
         if OMQ.Arrow then view.heading = OMQ.Arrow.Heading(ha - pos.a, hb - pos.b) end

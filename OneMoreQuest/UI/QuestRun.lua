@@ -591,6 +591,12 @@ local function buildBar()
         GameTooltip:AddLine("Click: the big arrow to this place too", 0.8, 0.8, 0.8)
         GameTooltip:AddLine("Right click: end the run", 0.8, 0.8, 0.8)
         GameTooltip:AddLine("Middle click: way over the land / straight line", 0.8, 0.8, 0.8)
+        -- a flight on the way (decision 634): Shift at the flight master flies there
+        local P = OMQ.Path
+        local f = P and P.lastFlight
+        if f and GetTime() - f.at < 5 and P.ShortName then
+            GameTooltip:AddLine("Shift + right click the flight master: fly to " .. P.ShortName(f.toName), 0.89, 0.71, 0.29)
+        end
         GameTooltip:Show()
     end)
     arrowFrame:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -661,7 +667,7 @@ function UI:RenderBar()
         arrowTex:SetVertexColor(GREEN[1], GREEN[2], GREEN[3])
     elseif t.distance then
         st.dist = string.format("%d yd - %s", math.floor(t.distance + 0.5), t.what)
-        if t.flight then st.dist = string.format("%d yd - fly from %s - %s", math.floor(t.distance + 0.5), t.flight, t.what) end
+        if t.flight then st.dist = string.format("%d yd - %s - %s", math.floor(t.distance + 0.5), OMQ.Path.FlightText(t), t.what) end
         if t.near then st.dist = string.format("nearby - %d yd - %s", math.floor(t.distance + 0.5), t.what) end
         if not t.near and OMQ.Arrow and OMQ.Arrow.StraightTag then st.dist = st.dist .. OMQ.Arrow.StraightTag() end
         arrowDist:SetText(st.dist)

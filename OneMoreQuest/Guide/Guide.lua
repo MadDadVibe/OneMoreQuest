@@ -423,7 +423,7 @@ function G:Current()
     if c.d and P and P.ArrowWays() then
         local way = P.Way({ a = mine.a, b = mine.b, inst = mine.inst }, c)
         if way and way.via then
-            st.distance, st.via, st.flight = way.cost, true, way.flight
+            st.distance, st.via, st.flight, st.flightTo = way.cost, true, way.flight, way.flightTo
             ha, hb = way.a, way.b
         end
     end

@@ -304,7 +304,7 @@ function C:Target()
         view.straight, view.distance = d, d
         local ha, hb = p.a, p.b
         local way = OMQ.Path and OMQ.Path.ArrowWays and OMQ.Path.ArrowWays() and OMQ.Path.Way(pos, p)
-        if way and way.via then view.distance, view.via, view.flight = way.cost, true, way.flight; ha, hb = way.a, way.b end
+        if way and way.via then view.distance, view.via, view.flight, view.flightTo = way.cost, true, way.flight, way.flightTo; ha, hb = way.a, way.b end
         if OMQ.Arrow and OMQ.Arrow.Heading then view.heading = OMQ.Arrow.Heading(ha - pos.a, hb - pos.b) end
         local calm = OMQ.Arrow and OMQ.Arrow.CALM or 25
         view.near = d <= calm or nil

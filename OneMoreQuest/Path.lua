@@ -159,6 +159,12 @@ function P.LearnTaxis()
     if list then
         for _, n in ipairs(list) do
             if type(n) == "table" and KNOWN_STATE[n.state] then add(n.nodeID) end
+            -- the name in the client's language (decision 634): the arrows name flight masters as the game does
+            if type(n) == "table" and num(n.nodeID) and type(n.name) == "string" and n.name ~= ""
+                and not (issecretvalue and issecretvalue(n.name)) then
+                OMQDB.pathTaxiName = OMQDB.pathTaxiName or {}
+                if OMQDB.pathTaxiName[n.nodeID] ~= n.name then OMQDB.pathTaxiName[n.nodeID] = n.name; taxiCache = {} end
+            end
         end
     elseif NumTaxiNodes and TaxiNodeGetType and TaxiNodeName and OMQ.taxiNodeIds then
         local fac = UnitFactionGroup and UnitFactionGroup("player")
@@ -189,7 +195,8 @@ function P.Taxis(inst)
     for _, id in ipairs(ids) do
         local d = data[id]
         if d and d[1] == inst and not tostring(d[4]):find("^zz") then
-            list[#list + 1] = { id = id, a = d[2], b = d[3], name = d[4] }
+            local names = OMQDB and OMQDB.pathTaxiName
+            list[#list + 1] = { id = id, a = d[2], b = d[3], name = names and names[id] or d[4] }
             sig[#sig + 1] = id
         end
     end
@@ -503,7 +510,10 @@ local function coarseWay(p, q)
         if nx and nx < 0 then
             if not pick or pick == n then
                 pick = n
-                way.flight = srch.taxis[n - g.n] and srch.taxis[n - g.n].name
+                local fr, to = srch.taxis[n - g.n], srch.taxis[-nx - g.n]
+                way.flight = fr and fr.name
+                -- where the flight goes (decision 634): the arrows name it, Shift at the flight master flies there
+                if fr and to then way.flightTo, way.flightId, way.flightToId = to.name, fr.id, to.id end
             end
             break
         end
@@ -1183,7 +1193,8 @@ local function goalOf(p, q, w)
     if w and w.flight then
         local fy = straight(p.a, p.b, w.a, w.b)
         pts[2] = { w.a, w.b }
-        return { a = w.a, b = w.b, tail = math.max(0, (w.cost or 0) - fy), flight = w.flight, pts = pts }
+        return { a = w.a, b = w.b, tail = math.max(0, (w.cost or 0) - fy), flight = w.flight, flightTo = w.flightTo,
+                 flightId = w.flightId, flightToId = w.flightToId, pts = pts }
     end
     local s = straight(p.a, p.b, q.a, q.b)
     if w and w.srch and w.first and w.best then
@@ -1367,6 +1378,7 @@ function P.RouteWay(p, q, w)
     if not st.goal.flight and not st.goal.leg and not st.exact then cost = cost + straight(st.ga, st.gb, q.a, q.b) end
     if not st.goal.flight then cost = math.max(cost, s) end
     local way = { cost = cost, straight = s, a = cr.a, b = cr.b, via = true, route = true, flight = st.goal.flight,
+        flightTo = st.goal.flightTo, flightId = st.goal.flightId, flightToId = st.goal.flightToId,
         leg = st.goal.leg or nil, node = n, floors = count(set) }
     x.last = { t = now, way = way }
     return way
@@ -1436,7 +1448,31 @@ function P.Way(p, q)
     -- without a route (still searching, no data, no way found): the network's way with its gliding point
     if out == w and w and w.via then P.Carrot(p, w) end
     if out and P.Record then pcall(P.Record, p, q, out) end
+    -- the last flight an arrow showed (decision 634): Shift at that flight master flies to its end
+    if out and out.flightId and out.flightToId then
+        P.lastFlight = { from = out.flightId, to = out.flightToId, toName = out.flightTo, at = GetTime and GetTime() or 0 }
+    end
     return out
+end
+
+-- "fly from A to B" for an arrow's text (decision 634); the names without the zone after the comma
+local function shortName(n)
+    if type(n) ~= "string" then return "?" end
+    return n:match("^([^,]+)") or n
+end
+P.ShortName = shortName
+function P.FlightText(w)
+    if not (w and w.flight) then return nil end
+    if w.flightTo then return "fly from " .. shortName(w.flight) .. " to " .. shortName(w.flightTo) end
+    return "fly from " .. shortName(w.flight)
+end
+-- the flight an arrow showed in the last FLIGHT_KEEP seconds, from the flight master with that node id
+P.FLIGHT_KEEP = 120
+function P.FlightFrom(id)
+    local f = P.lastFlight
+    if not (f and num(id) and f.from == id) then return nil end
+    if (GetTime and GetTime() or 0) - f.at > P.FLIGHT_KEEP then return nil end
+    return f
 end
 function P._ResetWay()
     wayCache = {}
@@ -1554,7 +1590,7 @@ function P.Diag()
             if w then
                 out[#out + 1] = string.format("Quest Run stop: straight %.0f yd, way %.0f yd%s%s", w.straight, w.cost,
                     w.via and string.format(", heading for %.0f yd ahead", straight(pos.a, pos.b, w.a, w.b)) or ", straight",
-                    w.flight and (", fly from " .. w.flight) or "")
+                    w.flight and (", " .. P.FlightText(w)) or "")
             end
         end
     end

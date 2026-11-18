@@ -153,13 +153,79 @@ local ARM_SECONDS = 15
 local armUntil = 0
 local function shiftDown() return IsShiftKeyDown and IsShiftKeyDown() and true or false end
 
+----------------------------------------------------------------------
+-- Flying where the arrow says (decision 634)
+----------------------------------------------------------------------
+-- When an arrow (a run's small arrow or the main arrow) says "fly from A to B", Shift + right click on the flight
+-- master at A flies to B, the same way as the follow-flight above. A dad's pending follow-flight goes first.
+-- The flight master and the slot of B are found by node id (C_TaxiMap), else by the English node name.
+local function taxiList()
+    local mapID = OMQ.Taxi and OMQ.Taxi._TaxiMap and OMQ.Taxi._TaxiMap()
+    if not (C_TaxiMap and C_TaxiMap.GetAllTaxiNodes and type(mapID) == "number") then return nil end
+    local ok, l = pcall(C_TaxiMap.GetAllTaxiNodes, mapID)
+    if ok and type(l) == "table" then return l end
+end
+local function idByName(i)
+    local nm = nodeName(i)
+    local fac = UnitFactionGroup and UnitFactionGroup("player")
+    local byName = nm and fac and OMQ.taxiNodeIds and OMQ.taxiNodeIds[fac]
+    return byName and byName[nm:match("^([^,]+)") or nm]
+end
+-- the node id of the flight master I stand at, and the slot to fly to the node id `to` (nil when not reachable)
+function F.Slots(to)
+    local here, slot
+    local list = taxiList()
+    if list then
+        for _, n in ipairs(list) do
+            if type(n) == "table" then
+                if n.state == 0 then here = n.nodeID end
+                if to and n.nodeID == to and n.state == 1 and type(n.slotIndex) == "number" then slot = n.slotIndex end
+            end
+        end
+    end
+    if NumTaxiNodes and (not here or (to and not slot)) then
+        local ok, cnt = pcall(NumTaxiNodes)
+        for i = 1, (ok and type(cnt) == "number" and cnt or 0) do
+            local t = nodeType(i)
+            if t == "CURRENT" and not here then here = idByName(i) end
+            if to and not slot and t == "REACHABLE" and idByName(i) == to then slot = i end
+        end
+    end
+    return here, slot
+end
+-- the flight an arrow shows from this flight master (the flight map must be open)
+function F.RunFlight()
+    local P = OMQ.Path
+    if not (P and P.FlightFrom) then return nil end
+    if not P.lastFlight then return nil end
+    local here = F.Slots(nil)
+    return here and P.FlightFrom(here)
+end
+local function flyRun()
+    local f = F.RunFlight()
+    if not f then return false end
+    local _, slot = F.Slots(f.to)
+    local name = OMQ.Path.ShortName and OMQ.Path.ShortName(f.toName) or tostring(f.toName)
+    if not slot then
+        OMQ:Print("flight: cannot fly to " .. name .. " from here (not known or not reachable)")
+        return true
+    end
+    OMQ.Path.lastFlight = nil
+    local ok, err = pcall(TakeTaxiNode, slot)
+    if not ok then OMQ:Error("flight", err) end
+    return true
+end
+F._flyRun = flyRun
+
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("TAXIMAP_OPENED")
 frame:RegisterEvent("TAXIMAP_CLOSED")
 frame:RegisterEvent("GOSSIP_SHOW")
 frame:SetScript("OnEvent", function(_, event)
     if event == "TAXIMAP_CLOSED" then armUntil = 0 return end
-    if not enabled() or not F:Pending() then return end
+    local following = enabled() and F:Pending()
+    local runFlight = OMQ.Path and OMQ.Path.lastFlight      -- an arrow showed a flight lately (decision 634)
+    if not (following or runFlight) then return end
     if event == "GOSSIP_SHOW" then
         armUntil = shiftDown() and (GetTime() + ARM_SECONDS) or 0
         return
@@ -169,7 +235,11 @@ frame:SetScript("OnEvent", function(_, event)
     -- give the taxi window a moment to fill its node list
     local function run()
         if not (armed or shiftDown()) then return end     -- plain right click: normal flight map
-        local ok, err = pcall(follow); if not ok then OMQ:Error("flight", err) end
+        if enabled() and F:Pending() then
+            local ok, err = pcall(follow); if not ok then OMQ:Error("flight", err) end
+        else
+            local ok, err = pcall(flyRun); if not ok then OMQ:Error("flight", err) end
+        end
     end
     if C_Timer and C_Timer.After then C_Timer.After(0.3, run) else run() end
 end)
