@@ -314,15 +314,15 @@ U.TOGETHER_MAX = 5
 function U.AddTogether(v, qid, t)
     local R, Q = OMQ.QuestRun, OMQ.QTrack
     v.more = 0
-    if not (t and R.Together) then return v end
+    if not (t and R.Together) then return v, false end
     local ok, list = pcall(R.Together, R, t)
-    if not ok or type(list) ~= "table" then return v end
+    if not ok or type(list) ~= "table" then return v, qid == t.qid end
     local others, mainHere = {}, qid == t.qid
     if t.qid ~= qid then others[1] = t.qid end
     for _, id in ipairs(list) do
         if id == qid then mainHere = true elseif id ~= t.qid then others[#others + 1] = id end
     end
-    if not mainHere then return v end            -- the quest I work on is elsewhere: only its card, as before
+    if not mainHere then return v, false end     -- the quest I work on is elsewhere: the caller adds the step under it
     for _, id in ipairs(others) do
         if v.more >= U.TOGETHER_MAX then break end
         local w = Q.Trackable(id) and Q:View(id)
@@ -332,6 +332,16 @@ function U.AddTogether(v, qid, t)
             for _, r in ipairs(w.rows) do v.rows[#v.rows + 1] = r end
         end
     end
+    return v, true
+end
+
+-- the run's step under the card of a quest I work on elsewhere (MadDadVibe 2026-11-18): the step's name as a gold
+-- head row, then its rows (objectives with the dads' columns, or what to pick up / turn in)
+function U.AddStep(v, step)
+    if not (v and step) then return v end
+    v.rows[#v.rows + 1] = { text = step.title or "", head = true, cells = {} }
+    for _, r in ipairs(step.rows or {}) do v.rows[#v.rows + 1] = r end
+    v.more = (v.more or 0) + 1 + (step.more or 0)
     return v
 end
 
@@ -354,29 +364,38 @@ function U.AreaView()
     end
     local ok, t = pcall(R.Target, R)
     if not ok then t = nil end
-    local qid = allowed and Q:Working() or nil
-    if not qid and allowed and t and t.kind == "o" and not t.buy and Q.Trackable(t.qid) then qid = t.qid end
-    if qid then
-        local v = card(Q:View(qid))
+    -- the run's step: its objectives as the group card with the quests at the same place (632), else the step text
+    local function stepView()
+        if allowed and t and t.kind == "o" and not t.buy and Q.Trackable(t.qid) then
+            local v = card(Q:View(t.qid))
+            if v then return (U.AddTogether(v, t.qid, t)) end
+        end
+        local view = { run = "AREA RUN", qid = t and t.qid, title = t and t.title or "", showNav = false, stamp = false,
+                       cols = {}, rows = { { text = t and t.what or "all stops done", cells = {} } } }
+        if t and t.kind == "t" then
+            local list = U.TurnIns(r)
+            if #list > 1 then
+                view.title = string.format("Turn in %d quests", #list)
+                view.rows = {}
+                for _, id in ipairs(list) do
+                    local nxt = R.FollowUpIn(r, id)
+                    view.rows[#view.rows + 1] = { text = R.Title(id) .. (nxt and (", then pick up " .. R.Title(nxt)) or ""), cells = {} }
+                end
+            end
+        end
+        return view
+    end
+    -- the quest I am working on comes first; is it not part of the step, the step stays on the card under it
+    local work = allowed and Q:Working() or nil
+    if work and work ~= (t and t.qid) then
+        local v = card(Q:View(work))
         if v then
-            U.AddTogether(v, qid, t)
+            local _, here = U.AddTogether(v, work, t)
+            if not here and t then U.AddStep(v, stepView()) end
             return v
         end
     end
-    local view = { run = "AREA RUN", qid = t and t.qid, title = t and t.title or "", showNav = false, stamp = false,
-                   cols = {}, rows = { { text = t and t.what or "all stops done", cells = {} } } }
-    if t and t.kind == "t" then
-        local list = U.TurnIns(r)
-        if #list > 1 then
-            view.title = string.format("Turn in %d quests", #list)
-            view.rows = {}
-            for _, id in ipairs(list) do
-                local nxt = R.FollowUpIn(r, id)
-                view.rows[#view.rows + 1] = { text = R.Title(id) .. (nxt and (", then pick up " .. R.Title(nxt)) or ""), cells = {} }
-            end
-        end
-    end
-    return view
+    return stepView()
 end
 
 -- outside the zone of the running Area Run (decision 623): no card at all, only the run's bar and arrow stay
@@ -450,7 +469,7 @@ function U:Render()
     for _, r in ipairs(view.rows) do
         local label = newText("GameFontHighlightSmall")
         label:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, y - 6)
-        label:SetWidth(r.head and (width - PAD * 2) or labelW)
+        label:SetWidth((r.head or (#r.cells == 0 and ncols > 0)) and (width - PAD * 2) or labelW)
         label:SetJustifyH("LEFT")
         if label.SetWordWrap then label:SetWordWrap(false) end
         label:SetText(r.text or "")
