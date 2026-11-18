@@ -13,6 +13,9 @@
 -- Step 2 (decision 551): a click on a cell makes a shopping list of its materials for the Auction Helper's Shopping tab
 -- (UI/Shopping.lua). The list counts the cell alone (no intermediates left over from the cells before it) and adds 25%
 -- to the crafts of the part of a step where the recipe is already green (Data/SkillThresholds.lua).
+-- Decision 635: the tooltip of a cell also says what the crafted items bring back when they are sold - at the vendor
+-- (the game's sell price) and, as an expectation, at the auction house (the scanned price minus the 5% cut). Only
+-- what the cell's steps make and the route does not use up later counts (no bolts or cured hides).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -115,14 +118,17 @@ function PC.Compute(route, opts)
     local stock = {}
     local res = { id = route.id, name = route.name, brackets = {}, total = 0, complete = true }
     for i = 1, #PC.BRACKETS do
-        res.brackets[i] = { cost = 0, missing = {}, buy = {}, price = {}, steps = {}, nMissing = 0 }
+        res.brackets[i] = { cost = 0, missing = {}, buy = {}, price = {}, steps = {}, nMissing = 0, made = {}, products = {} }
     end
     local need
     local function craft(b, recipe, n, depth)
         local r = R[recipe]
         if not r then return end
         for k = 1, #r[3], 2 do need(b, r[3][k], r[3][k + 1] * n, depth) end
-        if r[1] and r[1] > 0 then stock[r[1]] = (stock[r[1]] or 0) + (r[2] or 1) * n end
+        if r[1] and r[1] > 0 then
+            stock[r[1]] = (stock[r[1]] or 0) + (r[2] or 1) * n
+            if depth == 0 then b.made[r[1]] = (b.made[r[1]] or 0) + (r[2] or 1) * n end   -- a step's own crafts
+        end
     end
     need = function(b, item, amount, depth)
         local have = stock[item] or 0
@@ -170,7 +176,61 @@ function PC.Compute(route, opts)
         res.total = res.total + b.cost
         if b.nMissing > 0 then res.complete = false end
     end
+    -- what is left at the end is sellable (decision 635); the route used up the oldest pieces first, so the
+    -- leftover belongs to the last brackets that made the item
+    for item, left in pairs(stock) do
+        for i = #res.brackets, 1, -1 do
+            if left <= 1e-6 then break end
+            local b = res.brackets[i]
+            local m = b.made[item]
+            if m and m > 0 then
+                local n = math.min(m, left)
+                b.products[item] = n
+                left = left - n
+            end
+        end
+    end
     return res
+end
+
+----------------------------------------------------------------------
+-- Selling the crafted items (decision 635)
+----------------------------------------------------------------------
+-- the vendor's price of one piece (copper; 0 = the vendor does not buy it), nil while the game has not loaded the item
+function PC.SellPrice(itemID)
+    local function try(fn)
+        if not fn then return nil end
+        local ok, name, _, _, _, _, _, _, _, _, _, sell = pcall(fn, itemID)
+        if ok and type(name) == "string" and name ~= "" and type(sell) == "number" and not isSecret(sell) then return sell end
+    end
+    local v = try(C_Item and C_Item.GetItemInfo)
+    if v == nil then v = try(GetItemInfo) end
+    if v == nil and C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, itemID) end
+    return v
+end
+-- the auction house's price of one piece after the cut, nil = no scanned price
+function PC.AHReturn(itemID)
+    local P = OMQ.Prices
+    local p = P and (P.Auction(itemID))
+    if type(p) ~= "number" or isSecret(p) or p <= 0 then return nil end
+    local cut = (OMQ.CraftProfit and OMQ.CraftProfit.CUT) or 0.05
+    return p * (1 - cut)
+end
+-- the gold that selling one or more brackets' crafted items brings back:
+-- { n = pieces, vendor = copper, vendorMissing = items, ah = copper, ahMissing = items }
+function PC.Returns(...)
+    local out = { n = 0, vendor = 0, vendorMissing = 0, ah = 0, ahMissing = 0 }
+    for k = 1, select("#", ...) do
+        local b = select(k, ...)
+        for item, n in pairs(b and b.products or {}) do
+            out.n = out.n + n
+            local v = PC.SellPrice(item)
+            if v then out.vendor = out.vendor + v * n else out.vendorMissing = out.vendorMissing + 1 end
+            local a = PC.AHReturn(item)
+            if a then out.ah = out.ah + a * n else out.ahMissing = out.ahMissing + 1 end
+        end
+    end
+    return out
 end
 
 -- how much of a step the recipe is green (0 to 1): the skill points from its green threshold on (decision 551)
@@ -294,9 +354,9 @@ end
 function PC.Prefetch()
     local asked, n = {}, 0
     for _, r in pairs(OMQ.ProfRecipes or {}) do
-        for k = 1, #r[3], 2 do
-            local id = r[3][k]
-            if not asked[id] then
+        for k = 1, #r[3] + 2, 2 do                 -- the reagents and the product (decision 635)
+            local id = (k <= #r[3]) and r[3][k] or r[1]
+            if id and id > 0 and not asked[id] then
                 asked[id] = true
                 if not known(id) and C_Item and C_Item.RequestLoadItemDataByID then
                     pcall(C_Item.RequestLoadItemDataByID, id); n = n + 1
@@ -419,7 +479,26 @@ function PC.FillTooltip(tt, res, i)
         tt:AddLine(string.format("%d item%s without a price - not in the sum. Scan the auction house to fill them.",
             b.nMissing, b.nMissing == 1 and "" or "s"), 1, 0.55, 0.45, true)
     end
+    PC.ReturnLines(tt, PC.Returns(b))
     PC.ClickLines(tt, res, i)
+end
+-- what selling the crafted items brings back (decision 635)
+function PC.ReturnLines(tt, r)
+    tt:AddLine(" ")
+    tt:AddLine("Selling the crafted items", GOLD[1], GOLD[2], GOLD[3])
+    if r.n <= 1e-6 then
+        tt:AddLine("Nothing to sell - the steps make no items", 0.6, 0.62, 0.66, true)
+        return
+    end
+    local function val(c, miss)
+        if miss > 0 and c <= 0 then return "|cff8a8f99?|r" end
+        return money(c) .. (miss > 0 and " |cff8a8f99+?|r" or "")
+    end
+    tt:AddDoubleLine("Gold return at the vendor", val(r.vendor, r.vendorMissing), 0.85, 0.85, 0.85, 1, 1, 1)
+    tt:AddDoubleLine("Expected at the auction house", val(r.ah, r.ahMissing), 0.85, 0.85, 0.85, 1, 1, 1)
+    tt:AddLine(string.format("%d crafted items. Auction house: scanned price minus 5%% cut%s.", math.floor(r.n + 0.5),
+        r.ahMissing > 0 and string.format(", %d item%s without a price", r.ahMissing, r.ahMissing == 1 and "" or "s") or ""),
+        0.6, 0.62, 0.66, true)
 end
 -- the last lines of a cell's tooltip: what a click does (decision 551)
 function PC.ClickLines(tt, res, col)
@@ -451,6 +530,7 @@ local function cellButton(parent)
             GameTooltip:AddLine(self.res.label or self.res.name, GOLD[1], GOLD[2], GOLD[3])
             GameTooltip:AddDoubleLine("1-300, materials", money(self.res.total), 0.85, 0.85, 0.85, 1, 1, 1)
             if not self.res.complete then GameTooltip:AddLine("Some prices are missing - the real cost is higher.", 1, 0.55, 0.45, true) end
+            PC.ReturnLines(GameTooltip, PC.Returns(unpack(self.res.brackets)))
             PC.ClickLines(GameTooltip, self.res, PC.TOTAL)
         end
         GameTooltip:Show()
