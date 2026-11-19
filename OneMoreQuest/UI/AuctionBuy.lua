@@ -587,48 +587,105 @@ end
 
 local function offerResult(x)
     x.state = "done"
-    x.offer, x.gain, x.slot = B._bestGearOffer(x, readOffers(x))
+    local offers = readOffers(x)
+    x.offer, x.gain, x.slot = B._bestGearOffer(x, offers)
+    x.offers = #offers
 end
 
--- every browse result scored; the best GEAR_CHECK of each slot group are looked at closely, best first in turn
+-- an item that comes with a random suffix ("of the Bear", "des Bären", fix 638): the plain item has no stats of its
+-- own, only each offer tells what it carries. The game's tooltip of the plain item says "<Random enchantment>"; without
+-- that line, a green or better item whose stats are only armor counts too. nil while the game has not loaded it.
+B.RANDOM_WORDS = { "random enchant", "zufällige verzauberung", "zufaellige verzauberung" }
+B.PLAIN_STATS = { RESISTANCE0_NAME = true, ITEM_MOD_DAMAGE_PER_SECOND_SHORT = true }
+function B.RandomSuffix(id)
+    local T = C_TooltipInfo
+    if T and T.GetItemByID then
+        local ok, data = pcall(T.GetItemByID, id)
+        if ok and type(data) == "table" and type(data.lines) == "table" then
+            local want = ITEM_RANDOM_ENCHANT and ITEM_RANDOM_ENCHANT:lower()
+            for _, l in ipairs(data.lines) do
+                local t = type(l.leftText) == "string" and not isSecret(l.leftText) and l.leftText:lower()
+                if t then
+                    if want and t:find(want, 1, true) then return true end
+                    for _, w in ipairs(B.RANDOM_WORDS) do if t:find(w, 1, true) then return true end end
+                end
+            end
+        end
+    end
+    local quality = select(3, info(id))
+    if not quality then return nil end
+    if quality < 2 then return false end
+    local fn = (C_Item and C_Item.GetItemStats) or GetItemStats
+    if not fn then return false end
+    local ok, t = pcall(fn, "item:" .. id)
+    if not ok or type(t) ~= "table" then return false end
+    for k in pairs(t) do if not B.PLAIN_STATS[k] then return false end end
+    return true
+end
+B.GEAR_SUFFIX = 5         -- items with a random suffix looked at closely per slot (fix 638), the highest item level first
+
+-- what the last gear search saw (fix 638): /omq ah upg prints it, OMQDB.ah.upgLog keeps it
+local function upgLog()
+    local ah = db()
+    ah.upgLog = ah.upgLog or {}
+    return ah.upgLog
+end
+B.UpgLog = upgLog
+
+-- every browse result scored; per slot group the best GEAR_CHECK by score and the GEAR_SUFFIX random-suffix items
+-- with the highest item level are looked at closely, the best of every slot first in turn
 local function judgeGear(list)
     for i = #candidates, 1, -1 do candidates[i] = nil end
     local SC = OMQ.Score
     local class = SC and SC.MyClass()
     local lvl = level()
-    local bySlot, seen = {}, {}
+    local bySlot, rnd, seen = {}, {}, {}
+    local log = upgLog()
+    log.at, log.limit, log.budget, log.level, log.results = (time and time()) or 0, B.Limit(), budget(), lvl, #list
+    local drop = { dear = 0, level = 0, use = 0, slot = 0, zero = 0, kind = 0 }
+    log.drop = drop
     for _, res in ipairs(list) do
         local id = res.itemKey and res.itemKey.itemID
         local _, _, _, equipLoc, _, classID = instant(id or 0)
         local minLevel = select(5, info(id or 0))
         local k = id and AH()._KeyString(res.itemKey)
-        if id and (classID == 2 or classID == 4) and not seen[k] and (res.minPrice or 0) <= budget()
-            and (not minLevel or minLevel <= lvl + B.WEAPON_LEVELS) and (not SC or SC.CanUse("item:" .. id, class, lvl)) then
+        if not (id and (classID == 2 or classID == 4)) then drop.kind = drop.kind + 1
+        elseif seen[k] then
+        elseif (res.minPrice or 0) > budget() then drop.dear = drop.dear + 1
+        elseif minLevel and minLevel > lvl + B.WEAPON_LEVELS then drop.level = drop.level + 1
+        elseif SC and not SC.CanUse("item:" .. id, class, lvl) then drop.use = drop.use + 1
+        else
             seen[k] = true
             local link = B.KeyLink(res.itemKey)
             local g, at = gainAt(link, equipLoc)
             local grp = B.GroupOf(at)
-            if grp then
-                local quality = select(3, info(id))
-                -- 0 counts only for an item that may carry a random suffix (green or better): its real offer tells
-                if (g or 0) > 0 or (g == 0 and (quality or 2) >= 2) then
-                    bySlot[grp] = bySlot[grp] or {}
-                    local t = bySlot[grp]
-                    t[#t + 1] = { itemKey = res.itemKey, itemID = id, equipLoc = equipLoc, est = g or 0, group = grp,
-                                  wand = select(7, instant(id)) == B.WAND_SUBCLASS }
+            local random = (res.itemKey.itemSuffix or 0) == 0 and B.RandomSuffix(id)
+            local c = { itemKey = res.itemKey, itemID = id, equipLoc = equipLoc, est = g or 0, group = grp, random = random or nil,
+                        ilvl = res.itemKey.itemLevel or select(4, info(id)) or 0, price = res.minPrice or 0 }
+            if not grp then drop.slot = drop.slot + 1
+            elseif random then rnd[grp] = rnd[grp] or {}; table.insert(rnd[grp], c)
+            elseif (g or 0) > 0 or (g == 0 and random == nil) then bySlot[grp] = bySlot[grp] or {}; table.insert(bySlot[grp], c)
+            else drop.zero = drop.zero + 1 end
+        end
+    end
+    for _, t in pairs(bySlot) do table.sort(t, function(a, b) return a.est > b.est end) end
+    for _, t in pairs(rnd) do table.sort(t, function(a, b) if a.ilvl ~= b.ilvl then return a.ilvl > b.ilvl end return a.price < b.price end) end
+    local slots = {}
+    log.slots = slots
+    for rank = 1, math.max(B.GEAR_CHECK, B.GEAR_SUFFIX) do
+        for _, g in ipairs(B.GEAR_GROUPS) do
+            for _, c in ipairs({ rank <= B.GEAR_CHECK and bySlot[g.key] and bySlot[g.key][rank] or false,
+                                 rank <= B.GEAR_SUFFIX and rnd[g.key] and rnd[g.key][rank] or false }) do
+                if c then
+                    c.key, c.state, c.commodity, c.onResult = "w" .. AH()._KeyString(c.itemKey), "price", false, offerResult
+                    candidates[#candidates + 1] = c
                 end
             end
         end
     end
-    for _, t in pairs(bySlot) do table.sort(t, function(a, b) return a.est > b.est end) end
-    for rank = 1, B.GEAR_CHECK do
-        for _, g in ipairs(B.GEAR_GROUPS) do
-            local c = bySlot[g.key] and bySlot[g.key][rank]
-            if c then
-                c.key, c.state, c.commodity, c.onResult = "w" .. AH()._KeyString(c.itemKey), "price", false, offerResult
-                candidates[#candidates + 1] = c
-            end
-        end
+    for _, g in ipairs(B.GEAR_GROUPS) do
+        local n1, n2 = #(bySlot[g.key] or {}), #(rnd[g.key] or {})
+        if n1 + n2 > 0 then slots[#slots + 1] = string.format("%s: %d scored, %d with a random suffix", g.key, n1, n2) end
     end
 end
 B.JudgeGear = judgeGear
@@ -639,12 +696,18 @@ local function onBrowse(gen)
     local list = A.GetBrowseResults and A.GetBrowseResults() or {}
     browse.results = browse.results or {}
     for _, res in ipairs(list) do browse.results[#browse.results + 1] = res end
+    local sch = browse.searches and browse.searches[(browse.step or 0) + 1]
+    local full = A.HasFullBrowseResults and A.HasFullBrowseResults()
+    browse.lines = browse.lines or {}
+    browse.lines[#browse.lines + 1] = string.format("%s.%s: %d lines%s", tostring(sch and sch[1]), tostring(sch and sch[2]), #list,
+        full == false and " (more pages)" or "")
     browse.step = (browse.step or 0) + 1
     if browse.step < #(browse.searches or {}) then browse.state = "next"; return end
     browse.state = "done"
     list = browse.results
     browse.results = nil
     judgeGear(list)
+    upgLog().browses, browse.lines = browse.lines, nil
 end
 
 -- the level a weapon offer needs; nil while the game has not loaded the item (it is asked for)
@@ -696,6 +759,35 @@ function B.Gear()
     table.sort(out, function(a, b) return a.gain > b.gain end)
     return out
 end
+-- /omq ah upg (fix 638): what the last gear search saw and what became of each item looked at closely
+function B.UpgReport()
+    local log = upgLog()
+    local d = log.drop or {}
+    local lines = {
+        string.format("v%s upgrades: level %s, limit %s, budget %s, search %s", tostring(OMQ.version), tostring(log.level),
+            money0(log.limit or 0), money0(log.budget or 0), tostring(browse.state)),
+        string.format("results %d: too dear %d, level too high %d, not for my class %d, no slot %d, no gain %d, not gear %d",
+            log.results or 0, d.dear or 0, d.level or 0, d.use or 0, d.slot or 0, d.zero or 0, d.kind or 0),
+    }
+    for _, l in ipairs(log.browses or {}) do lines[#lines + 1] = "  browse " .. l end
+    for _, l in ipairs(log.slots or {}) do lines[#lines + 1] = "  " .. l end
+    local never = (db()).never
+    for _, c in ipairs(candidates) do
+        local name = select(1, info(c.offer and c.offer.link or c.itemID)) or ("item " .. c.itemID)
+        local why
+        if c.state == "price" then why = "waiting"
+        elseif not c.offer then why = string.format("no offer under the limit with a gain (%d offers)", c.offers or 0)
+        elseif never[c.itemID] then why = "never (right click)"
+        elseif c.bought then why = "bought"
+        elseif needLevel(c.offer.link) == nil then why = "not loaded yet"
+        elseif B.CanEquipNow(c.offer.link) ~= true then why = "can not wear it now"
+        else why = "shown +" .. tostring(c.gain) .. " " .. money0(c.offer.buyout) end
+        lines[#lines + 1] = string.format("  %s %s (%d)%s est %s: %s", tostring(c.group), name, c.itemID,
+            c.random and " random" or "", tostring(c.est), why)
+    end
+    return lines
+end
+
 -- the best GEAR_PICKS of every slot group, in the order of B.GEAR_GROUPS: { { group, items }, ... }
 function B.GearSlots()
     local by = {}
@@ -1073,7 +1165,7 @@ function B.UpgPending()
 end
 local function resetGear()
     browse.gen = (browse.gen or 0) + 1
-    browse.state, browse.step, browse.results, browse.searches = "idle", 0, nil, nil
+    browse.state, browse.step, browse.results, browse.searches, browse.lines = "idle", 0, nil, nil, nil
     for i = #candidates, 1, -1 do candidates[i] = nil end
 end
 -- the gear scan, on request (decision 290)

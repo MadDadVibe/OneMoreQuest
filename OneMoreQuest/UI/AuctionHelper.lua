@@ -1503,6 +1503,11 @@ OMQ:RegisterCommand("ah", function(arg)
         for _, l in ipairs(B and B.BagReport and B.BagReport() or { "bags: no buy mode" }) do OMQ:Print(l) end
         return
     end
+    if arg == "upg" then                                 -- what the Upgrades tab's search saw (fix 638)
+        local B = OMQ.AuctionBuy
+        for _, l in ipairs(B.UpgReport()) do OMQ:Print(l) end
+        return
+    end
     if arg == "food" then                                -- which buff foods still give XP (decision 475)
         local B = OMQ.AuctionBuy
         for _, l in ipairs(B and B.FoodReport and B.FoodReport() or { "food: no buy mode" }) do OMQ:Print(l) end
