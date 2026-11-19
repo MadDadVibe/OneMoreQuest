@@ -690,6 +690,20 @@ local function judgeGear(list)
 end
 B.JudgeGear = judgeGear
 
+-- the slots of an armor kind (Enum.InventoryType, the game's numbers as fallback), for the search slot by slot (fix 640)
+B.PAGE_FULL = 500
+local function inv(name, n) local E = Enum and Enum.InventoryType; return (E and E[name]) or n end
+function B.InvTypes(sub)
+    if sub == 0 then   -- miscellaneous: necks, rings, trinkets, off-hand items
+        return { inv("IndexNeckType", 2), inv("IndexFingerType", 11), inv("IndexTrinketType", 12), inv("IndexHoldableType", 23) }
+    end
+    if sub == 6 then return {} end
+    local t = { inv("IndexHeadType", 1), inv("IndexShoulderType", 3), inv("IndexChestType", 5), inv("IndexRobeType", 20),
+                inv("IndexWaistType", 6), inv("IndexLegsType", 7), inv("IndexFeetType", 8), inv("IndexWristType", 9), inv("IndexHandType", 10) }
+    if sub == 1 then t[#t + 1] = inv("IndexCloakType", 16) end   -- every cloak is cloth
+    return t
+end
+
 local function onBrowse(gen)
     if gen ~= browse.gen then return end                  -- the limit changed meanwhile: a new search runs
     local A = CA()
@@ -699,8 +713,15 @@ local function onBrowse(gen)
     local sch = browse.searches and browse.searches[(browse.step or 0) + 1]
     local full = A.HasFullBrowseResults and A.HasFullBrowseResults()
     browse.lines = browse.lines or {}
-    browse.lines[#browse.lines + 1] = string.format("%s.%s: %d lines%s", tostring(sch and sch[1]), tostring(sch and sch[2]), #list,
+    browse.lines[#browse.lines + 1] = string.format("%s.%s%s: %d lines%s", tostring(sch and sch[1]), tostring(sch and sch[2]),
+        (sch and sch[3]) and ("/" .. sch[3]) or "", #list,
         full == false and " (more pages)" or "")
+    -- fix 640: a full page (500 lines, the cheapest first) misses the better items of an armor kind: the kind is
+    -- asked again slot by slot (the game's own category filters, e.g. Cloth > Head), right after this search
+    if sch and sch[1] == 4 and not sch[3] and (#list >= B.PAGE_FULL or full == false) then
+        local at = (browse.step or 0) + 2
+        for _, inv in ipairs(B.InvTypes(sch[2])) do table.insert(browse.searches, at, { 4, sch[2], inv }); at = at + 1 end
+    end
     browse.step = (browse.step or 0) + 1
     if browse.step < #(browse.searches or {}) then browse.state = "next"; return end
     browse.state = "done"
@@ -1248,8 +1269,10 @@ function B.NextUpgQuery()
         local sch = browse.searches[(browse.step or 0) + 1]
         browse.state = "asking"
         local gen = browse.gen
-        return { browse = true, key = "gear" .. sch[1] .. "." .. tostring(sch[2]), onResult = function() onBrowse(gen) end,
-                 query = B.BrowseQuery(sch[1], sch[2], math.max(1, lvl - B.GEAR_MIN_LEVELS), lvl + B.WEAPON_LEVELS, P) }
+        local q = B.BrowseQuery(sch[1], sch[2], math.max(1, lvl - B.GEAR_MIN_LEVELS), lvl + B.WEAPON_LEVELS, P)
+        if sch[3] then q.itemClassFilters = { { classID = sch[1], subClassID = sch[2], inventoryType = sch[3] } } end   -- one slot (fix 640)
+        return { browse = true, key = "gear" .. sch[1] .. "." .. tostring(sch[2]) .. (sch[3] and ("/" .. sch[3]) or ""),
+                 onResult = function() onBrowse(gen) end, query = q }
     end
     for _, c in ipairs(candidates) do
         if c.state == "price" then return c end
