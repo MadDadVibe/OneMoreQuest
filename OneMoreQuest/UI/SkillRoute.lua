@@ -155,6 +155,9 @@ function SR.Later(route)
     for i, e in pairs(out) do
         local made = (route.steps[i][4] or 0) * e.yield
         e.extra = math.max(0, math.ceil((e.need - made) / e.yield - 1e-6))
+        -- decision 639: what the skill crafts do not make is bought when that costs at most 20% more than making it
+        local PC = OMQ.ProfCheck
+        if e.extra > 0 and PC and not PC.PreferMake(e.item, route.steps[i][3]) then e.extra, e.buy = 0, true end
     end
     return out
 end
@@ -197,7 +200,7 @@ function SR.Lines(route, skill)
                 -- the pieces later steps need, minus what the remaining skill crafts make and what is in the bags
                 local short = lt.need - math.ceil(line.left - 1e-6) * lt.yield - bagCount(lt.item)
                 line.skillLeft = line.left
-                line.extraNow = math.max(0, math.ceil(short / lt.yield - 1e-6))
+                line.extraNow = lt.buy and 0 or math.max(0, math.ceil(short / lt.yield - 1e-6))
                 line.left = line.left + line.extraNow
             end
             local n = math.ceil(line.left - 1e-6)
@@ -208,7 +211,7 @@ function SR.Lines(route, skill)
                     local m = { kind = "mat", item = item, need = r[3][k + 1] * n, have = bagCount(item),
                                 vendor = (from == "vendor") or nil }
                     local mi, mspell, my = makerBefore(route, item, idx)
-                    if mi and m.have < m.need then
+                    if mi and m.have < m.need and OMQ.ProfCheck.PreferMake(item, mspell) then   -- decision 639
                         m.make, m.makeSpell = math.ceil((m.need - m.have) / my - 1e-6), mspell
                     end
                     out[#out + 1] = m
@@ -470,6 +473,7 @@ function SR.RowTooltip(b)
             lines[#lines + 1] = string.format("%d-%d %s: %d", st[1], st[2], OMQ.ProfCheck.RecipeName(st[3]), u[2])
         end
         if l.later.extra > 0 then lines[#lines + 1] = string.format("Make %d more than the skill needs.", l.later.extra) end
+        if l.later.buy then lines[#lines + 1] = "Buy the rest finished: not more than 20% dearer than making it." end
     elseif l.kind == "mat" and l.make then
         lines[1] = string.format("Click: make %d %s", l.make, OMQ.ProfCheck.ItemName(l.item))
         lines[2] = "Right click: only select the recipe"

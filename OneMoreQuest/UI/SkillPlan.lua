@@ -6,6 +6,7 @@
 -- names it. The plan stops at the rank cap (max skill) or the target. A recipe with a material nobody prices is left
 -- out. Material costs: the cheaper of the known price (OMQ.ProfCheck.Price) and making it with a recipe of the same
 -- profession from priced materials (3 deep); a made intermediate goes into the shopping list as its raw materials.
+-- Decision 639: an intermediate is made only when buying it costs more than 20% above making it.
 -- Shopping lists from the plan buy more than the expected crafts: +40% for crafts at a green skill, +20% at yellow.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
@@ -77,7 +78,8 @@ local function context(line)
         if m and depth < SP.DEPTH then
             local c = recipeCost(m, depth)
             local y = OMQ.ProfSkillUp[m][3] or 1
-            if c and (not best or c / y < best) then best = c / y; how[item] = m end
+            -- made only when buying costs more than 20% above making it (decision 639)
+            if c and (not best or best > c / y * (OMQ.ProfCheck and OMQ.ProfCheck.MAKE_MARGIN or 1)) then best = c / y; how[item] = m end
         end
         if depth <= 1 then memo[item] = best or false end
         return best

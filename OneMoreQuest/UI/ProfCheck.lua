@@ -13,6 +13,9 @@
 -- Step 2 (decision 551): a click on a cell makes a shopping list of its materials for the Auction Helper's Shopping tab
 -- (UI/Shopping.lua). The list counts the cell alone (no intermediates left over from the cells before it) and adds 25%
 -- to the crafts of the part of a step where the recipe is already green (Data/SkillThresholds.lua).
+-- Decision 639: an intermediate (bolts, blasting powder, cured hides ...) that the route needs beyond its own skill
+-- crafts is bought finished when it costs at most 20% more than making it (PC.MAKE_MARGIN); only when buying is
+-- dearer than that is it made from its raw materials. Making takes long, a few coppers more are worth it.
 -- Decision 635: the tooltip of a cell also says what the crafted items bring back when they are sold - at the vendor
 -- (the game's sell price) and, as an expectation, at the auction house (the scanned price minus the 5% cut). Only
 -- what the cell's steps make and the route does not use up later counts (no bolts or cured hides).
@@ -108,6 +111,18 @@ function PC.MakeCost(recipe, depth)
     return sum / (r[2] or 1)
 end
 
+-- buy the finished item or make it (decision 639): make only when buying costs more than 20% above making it.
+-- No known buy price: make it. A buy price but no price for making it: buy it.
+PC.MAKE_MARGIN = 1.2
+function PC.MakeBeats(buy, make)
+    if not buy then return true end
+    if not make then return false end
+    return buy > make * PC.MAKE_MARGIN
+end
+function PC.PreferMake(item, recipe, depth)
+    return PC.MakeBeats(PC.Price(item), recipe and PC.MakeCost(recipe, depth or 0))
+end
+
 -- one profession: { id, name, brackets = { { cost, missing = {item = n}, buy = {item = n}, price = {item = p},
 -- steps = {...}, de = true }, ... }, total, complete }
 -- opts.green: the factor for the crafts of the green part of a step (the shopping list, decision 551)
@@ -141,8 +156,8 @@ function PC.Compute(route, opts)
         local p = PC.Price(item)
         local mine = own[item]
         if mine and depth < PC.DEPTH then        -- the route makes it itself: more of it from the raw materials,
-            local make = PC.MakeCost(mine, depth)  -- unless buying it is cheaper or making it has no price (fix 539)
-            if make and (not p or make <= p) then
+            local make = PC.MakeCost(mine, depth)  -- unless buying costs at most 20% more (decision 639) or making it
+            if make and PC.MakeBeats(p, make) then  -- has no price (fix 539)
                 local r = R[mine]
                 craft(b, mine, amount / (r[2] or 1), depth + 1)
                 stock[item] = (stock[item] or 0) - amount
