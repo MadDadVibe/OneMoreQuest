@@ -37,6 +37,14 @@ local function contains(list, v)
     return false
 end
 local function ever(id) return NQ().EverDone(id) end
+-- the start of a quest for my faction: an entry of OMQ.QuestStarts may carry its own start for the Alliance (A) or the
+-- Horde (H), e.g. the Sunken Temple circle quests
+local function questStartOf(id)
+    local st = OMQ.QuestStarts and OMQ.QuestStarts[id]
+    if not st then return nil end
+    local fac = UnitFactionGroup and UnitFactionGroup("player")
+    return (type(fac) == "string" and st[string.sub(fac, 1, 1)]) or st
+end
 local function chainOf(id) return OMQ.DungeonChains and OMQ.DungeonChains[id] end      -- Data/DungeonChains.lua (478)
 
 -- a place of the data for the planner (any continent: the run takes every quest, D2)
@@ -202,7 +210,7 @@ local function needsOf(ctx, d, visiting, depth, id)
 end
 
 local function startOf(id)
-    local st = OMQ.QuestStarts and OMQ.QuestStarts[id]
+    local st = questStartOf(id)
     if not st then return nil end
     return { root = st[1], rootName = st[2], giver = st[3], map = st[5], x = st[6], y = st[7], kind = st[8] }
 end
@@ -318,9 +326,8 @@ end
 
 -- the chain start of a quest the data does not know (or knows without a giver place)
 local function starts(q)
-    local S = OMQ.QuestStarts or {}
-    local st = S[q.id]
-    if not st then for _, a in ipairs(q.alt or {}) do if S[a] then st = S[a]; break end end end
+    local st = questStartOf(q.id)
+    if not st then for _, a in ipairs(q.alt or {}) do st = questStartOf(a); if st then break end end end
     if not st then return nil end
     return { root = st[1], rootName = st[2], giver = st[3], map = st[5], x = st[6], y = st[7], kind = st[8] }
 end

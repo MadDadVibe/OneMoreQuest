@@ -599,12 +599,19 @@ function R:EntranceTip(owner)
     GameTooltip:Show()
 end
 
+-- the start of a quest for my faction: an entry of OMQ.QuestStarts may carry its own start for the Alliance (A) or the
+-- Horde (H), e.g. the Sunken Temple circle quests
+local function questStartOf(id)
+    local st = OMQ.QuestStarts and OMQ.QuestStarts[id]
+    if not st then return nil end
+    local fac = UnitFactionGroup and UnitFactionGroup("player")
+    return (type(fac) == "string" and st[string.sub(fac, 1, 1)]) or st
+end
 -- where a dungeon quest starts: info table or nil
 function R.QuestStart(q)
-    local S = OMQ.QuestStarts or {}
-    local st = S[q.id]
+    local st = questStartOf(q.id)                    -- my faction's start where the two differ
     if not st then
-        for _, alt in ipairs(q.alt or {}) do if S[alt] then st = S[alt]; break end end
+        for _, alt in ipairs(q.alt or {}) do st = questStartOf(alt); if st then break end end
     end
     if not st then return nil end
     local giver = st[3]

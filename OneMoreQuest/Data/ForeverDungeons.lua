@@ -166,3 +166,22 @@ function OMQ.BossNpc(id)
     local a = OMQ.DungeonWinExtra and OMQ.DungeonWinExtra.alias
     return a and id and a[id] or id
 end
+
+-- The Temple of Atal'Hakkar (Sunken Temple), revised 2026-11-19 from Factoruide's WoW Forever data (quest givers,
+-- chains, German names). The chain of "Into the Depths" / "Secret of the Circle" starts for the Horde at Witch Doctor
+-- Uzer'i and for the Alliance at Angelas Moonbreeze (A = the start for the Alliance; UI/Ready.lua and DungeonRun.lua take it). Class
+-- quests: the first giver of the chain after the class trainer.
+local ST_CIRCLE = { 3380, "The Sunken Temple", "Witch Doctor Uzer'i", "Hexendoktor Uzer'i", 1444, 74.4, 43.4, "npc",
+    A = { 3445, "The Sunken Temple", "Angelas Moonbreeze", "Angelas Moonbreeze", 1444, 31.8, 45.6, "npc" } }
+S[3446] = ST_CIRCLE
+S[3447] = ST_CIRCLE
+S[8232] = { 8153, "Courser Antlers", "Ogtinc", "Ogtinc", 1447, 42.4, 42.6, "npc" }                           -- hunter
+S[8236] = { 8234, "Sealed Azure Bag", "Lord Jorach Ravenholdt", "Lord Jorach Ravenholdt", 1416, 86.0, 78.9, "npc" }  -- rogue
+S[8253] = { 8251, "Magic Dust", "Archmage Xylem", "Erzmagier Xylem", 1447, 29.2, 40.2, "npc" }                -- mage
+S[8257] = { 8255, "Of Coursers We Know", "Ogtinc", "Ogtinc", 1447, 42.4, 42.6, "npc" }                       -- priest
+S[8418] = { 8414, "Dispelling Evil", "Commander Ashlam Valorfist", "Kommandant Ashlam Valorfist", 1422, 42.7, 84.0, "npc" }  -- paladin
+S[8413] = { 8411, "Mastering the Elements", "Bath'rah the Windwatcher", "Bath'rah der Windbehüter", 1416, 80.5, 66.9, "npc" } -- shaman
+S[8422] = { 8420, "Hot and Itchy", "Impsy", "Impsy", 1448, 41.4, 45.0, "npc" }                               -- warlock
+S[8425] = { 8423, "Warrior Kinship", "Fallen Hero of the Horde", "Gefallener Held der Horde", 1435, 34.3, 66.1, "npc" }  -- warrior
+S[9053] = { 9052, "Bloodpetal Poison", "Torwa Pathfinder", "Torwa Pathfinder", 1449, 71.6, 76.0, "npc" }      -- druid
+
