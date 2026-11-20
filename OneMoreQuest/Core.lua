@@ -5,7 +5,7 @@ OMQ = OMQ or {}
 _G.OneMoreQuest = OMQ
 
 OMQ.name = "One More Quest"
-OMQ.version = "1.3.245"
+OMQ.version = "1.3.246"
 
 -- the last bag to look into for what I carry: the reagent bag too, if the client has one (decision 272)
 function OMQ.LastBag()
@@ -195,6 +195,7 @@ SlashCmdList["ONEMOREQUEST"] = function(input)
         return
     end
     local c = commands[cmd]
+    if not c and cmd:match("^[%d%.]") and commands.coords then c, rest = commands.coords, input end   -- /omq 24,1 65,1
     if c then
         local ok, err = pcall(c.fn, rest)
         if not ok then OMQ:Error("/omq " .. cmd, err); OMQ:Print("error: " .. tostring(err)) end

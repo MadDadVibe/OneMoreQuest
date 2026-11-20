@@ -453,6 +453,61 @@ OMQ:RegisterCommand("go", function(arg)
     G:Start(arg)
 end, "guidance: /omq go group|trainer|vendor|repair|auction|bank|flight|mailbox|inn|pin|corpse|off")
 
+-- Arrow to map coordinates of the current zone (decision 643): "/omq 24,1 65,1". A comma is the decimal mark
+-- (German style); dots work too ("24.1 65.1", "24.1, 65.1", "24.1,65.1"). Returns x, y in percent or nil.
+function G.ParseCoords(s)
+    s = tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local function num(t)
+        t = t:gsub(",$", ""):gsub(",", ".")
+        if not t:match("^%d+%.?%d*$") and not t:match("^%.%d+$") then return nil end
+        return tonumber(t)
+    end
+    local x, y
+    local p, q = s:match("^(%S+)%s+(%S+)$")
+    if p then
+        x, y = num(p), num(q)
+    else
+        local a, b = s:match("^(%d+%.%d*),(%d+%.?%d*)$")           -- 24.1,65.1
+        if not a then                                              -- 24,1,65,1
+            local a1, a2, b1, b2 = s:match("^(%d+),(%d+),(%d+),(%d+)$")
+            if a1 then a, b = a1 .. "." .. a2, b1 .. "." .. b2 end
+        end
+        if a then x, y = tonumber(a), tonumber(b) end
+    end
+    if not (x and y) or x < 0 or x > 100 or y < 0 or y > 100 then return nil end
+    return x, y
+end
+
+local function coordText(x, y)
+    local t = string.format("%.1f / %.1f", x, y)
+    if GetLocale and GetLocale() == "deDE" then t = t:gsub("%.", ",") end
+    return t
+end
+
+function G:StartCoords(arg)
+    local x, y = G.ParseCoords(arg)
+    if not x then
+        OMQ:Print("coordinates: /omq 24,1 65,1 (x y of the current zone map, 0-100)")
+        return false
+    end
+    if not OMQ:Master("guidance") then OMQ:Print("coordinates: guidance is turned off"); return false end
+    local map = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+    local a, b, inst
+    if map and not isSecret(map) then a, b, inst = worldFromMap(map, x / 100, y / 100) end
+    if not a then OMQ:Print("coordinates: no map position here"); return false end
+    local zone
+    if C_Map.GetMapInfo then
+        local ok, info = pcall(C_Map.GetMapInfo, map)
+        zone = ok and type(info) == "table" and type(info.name) == "string" and not isSecret(info.name) and info.name or nil
+    end
+    local where = coordText(x, y)
+    self:StartAt(zone or "Coordinates", a, b, inst, "coord", nil, { name = where })
+    return true
+end
+
+OMQ:RegisterCommand("coords", function(arg) G:StartCoords(arg) end,
+    "arrow to map coordinates of the current zone: /omq 24,1 65,1")
+
 -- Prints what the fixed database resolves to (for checking the data in game).
 OMQ:RegisterCommand("goinfo", function()
     local mine = myPos()
