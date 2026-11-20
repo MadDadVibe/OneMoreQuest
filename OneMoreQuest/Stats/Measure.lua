@@ -129,6 +129,8 @@ function M:GetValues()
     v.lvl = current
     -- time until the next level at the session's XP per hour (decision 194)
     if level < 60 and v.xph > 0 then v.nextlvl = (xpMax - xp) / v.xph * 3600 end
+    -- time until level 60, own pace and reference, played and real days (decision 644)
+    if OMQ.Forecast then pcall(OMQ.Forecast.Fill, v, level, xp, xpMax) end
     v.yards = s.yards
     v.yfollow = s.yardsFollow or 0
     v.gold = s.goldGained

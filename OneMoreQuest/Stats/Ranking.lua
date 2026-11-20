@@ -50,6 +50,18 @@ R.formats = {
         if h > 0 then return string.format("%dh %dm", h, m % 60) end
         return string.format("%dm", m)
     end,
+    -- forecasts (decision 644): played seconds as "~148h", real seconds as "~38 days"
+    hours = function(v)
+        local h = v / 3600
+        if h < 1 then return string.format("~%dm", math.floor(v / 60 + 0.5)) end
+        return string.format("~%dh", math.floor(h + 0.5))
+    end,
+    days = function(v)
+        local d = v / 86400
+        if d < 1 then return "<1 day" end
+        if d < 10 then return string.format("~%.1f days", d) end
+        return string.format("~%d days", math.floor(d + 0.5))
+    end,
 }
 
 ----------------------------------------------------------------------
@@ -69,6 +81,10 @@ local ALL = {
     { key = "lvlp",    label = "Level progress",     best = "high", fmt = "plus2", session = true },
     { key = "lvl",     label = "Current level",      best = "high", fmt = "dec2", session = true },
     { key = "nextlvl", label = "Next level up",      best = "low",  fmt = "duration", session = true },
+    { key = "lvl60",   label = "Level 60 played",    best = "low",  fmt = "hours", session = true },
+    { key = "lvl60r",  label = "Level 60 played (ref)", best = "low", fmt = "hours", session = true },
+    { key = "lvl60d",  label = "Level 60 real days", best = "low",  fmt = "days", session = true },
+    { key = "lvl60dr", label = "Level 60 real days (ref)", best = "low", fmt = "days", session = true },
     { key = "xp",      label = "XP gained",          best = "high", fmt = "compact", session = true, life = true },
     { key = "xph",     label = "XP gained per hour", best = "high", fmt = "compact", session = true, life = true },
     { key = "xpkill",  label = "XP from kills",      best = "high", fmt = "compact", session = true, life = true },

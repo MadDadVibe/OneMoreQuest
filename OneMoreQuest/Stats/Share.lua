@@ -9,7 +9,8 @@ local KEYS = { "xph", "lvlp", "lvl", "yards", "gold", "curgold", "dmg", "kb", "h
 OMQ.statKeys = KEYS
 -- the rows added by decision 120 go in a second message (255 byte limit)
 local KEYS2 = { "ptime", "xp", "xpkill", "xpquest", "xpdisc", "quests", "fights", "heal",
-                "fallx", "falld", "drownd", "lava", "aucp", "aucb", "need", "greed", "gamble", "betswon", "nextlvl", "yfollow" }
+                "fallx", "falld", "drownd", "lava", "aucp", "aucb", "need", "greed", "gamble", "betswon", "nextlvl", "yfollow",
+                "lvl60", "lvl60r", "lvl60d", "lvl60dr" }
 
 local function encodeValue(v)
     if type(v) ~= "number" then return "" end
