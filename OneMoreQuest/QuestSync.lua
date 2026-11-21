@@ -349,25 +349,53 @@ function Q.GroupZone()
     return nil
 end
 
--- Does this quest of my log belong to the zone? Header in the quest log, objectives there (QuestPlaces),
--- or the game marks it on the zone's map (new Forever quests the data does not know).
-function Q.ZoneQuest(id, z)
-    local name = zoneName(z)
-    if name and myHeaders[id] == name then return true end
-    local d = OMQ.QuestPlaces and OMQ.QuestPlaces[id]
-    for _, spot in ipairs(d and d[9] or {}) do
-        if spot[1] == z or Q.ZoneOf(spot[1]) == z then return true end
-    end
-    if C_QuestLog and C_QuestLog.GetQuestsOnMap then
-        local ok, list = pcall(C_QuestLog.GetQuestsOnMap, z)
-        if ok and type(list) == "table" then
-            for _, q in ipairs(list) do
-                if type(q) == "table" and q.questID == id then return true end
-            end
-        end
+-- Does this quest of my log belong to the zone? (decision 600, narrowed by fix 645: far too much was shared)
+--   "header": it stands under the zone's header in the quest log (the quest comes from the zone)
+--   "map":    the game puts its objective point on this zone's map: not a map indicator pointing at another
+--             map, the point's own map lies in the zone, and the quest is not finished yet (then the point is
+--             the turn-in, the work lies elsewhere)
+--   "data":   every objective spot in Data/QuestPlaces.lua lies in the zone. Drop items and widespread mobs
+--             give spots all over the world (Pie for Billy: Durotar, Dun Morogh, Elwynn), so a quest with
+--             spots in several zones does not count by the data alone.
+-- Returns the reason or nil.
+local function finished(id)
+    local CQ = C_QuestLog
+    if CQ and CQ.IsComplete then
+        local ok, r = pcall(CQ.IsComplete, id)
+        if ok and r == true then return true end
     end
     return false
 end
+
+function Q.ZoneReason(id, z)
+    local name = zoneName(z)
+    if name and myHeaders[id] == name then return "header" end
+    if not finished(id) then
+        if C_QuestLog and C_QuestLog.GetQuestsOnMap then
+            local ok, list = pcall(C_QuestLog.GetQuestsOnMap, z)
+            if ok and type(list) == "table" then
+                for _, q in ipairs(list) do
+                    if type(q) == "table" and q.questID == id and q.isMapIndicatorQuest ~= true
+                       and (not num(q.mapID) or q.mapID == z or Q.ZoneOf(q.mapID) == z) then
+                        return "map"
+                    end
+                end
+            end
+        end
+        local d = OMQ.QuestPlaces and OMQ.QuestPlaces[id]
+        local spots = d and d[9]
+        if spots and #spots > 0 then
+            local all = true
+            for _, spot in ipairs(spots) do
+                if not (spot[1] == z or Q.ZoneOf(spot[1]) == z) then all = false; break end
+            end
+            if all then return "data" end
+        end
+    end
+    return nil
+end
+
+function Q.ZoneQuest(id, z) return Q.ZoneReason(id, z) ~= nil end
 
 -- Once a second: is the whole group gathered in one zone for 10 s? Then one round for that zone. Again only
 -- after the group was apart, and at most every 10 minutes per zone (a gathering within that time is skipped).
@@ -600,6 +628,20 @@ OMQ:RegisterCommand("quests", function(arg)
         OMQ:Fire("SETTINGS_CHANGED", "command")
         OMQ:Print("automatic quest sharing " .. (OMQ.db.options.autoShare and "on" or "off"))
         return
+    elseif arg == "zone" then
+        local z = Q.ZoneOf(C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player"))
+        if not z then OMQ:Print("no zone known here"); return end
+        Q:Refresh(true)
+        OMQ:Print(string.format("quests a zone sync in %s would share (if a dad lacks them):", zoneName(z) or ("zone " .. z)))
+        local list = {}
+        for id in pairs(myIds) do list[#list + 1] = id end
+        table.sort(list)
+        for _, id in ipairs(list) do
+            local why = Q.ZoneReason(id, z)
+            print(string.format("  %s %d %s (header: %s)", why and ("|cff40ff40yes|r " .. why) or "|cff888888no|r",
+                id, tostring(myTitles[id]), tostring(myHeaders[id])))
+        end
+        return
     elseif arg == "tags" then
         for id in pairs(myIds) do
             local info = C_QuestLog and C_QuestLog.GetQuestTagInfo and C_QuestLog.GetQuestTagInfo(id)
@@ -626,5 +668,5 @@ OMQ:RegisterCommand("quests", function(arg)
         for _ in pairs(u.quests or {}) do count = count + 1 end
         print(string.format("  %s: %s quests known", u.name or "?", u.quests and count or "no"))
     end
-    print("  /omq quests sync | auto | tags")
+    print("  /omq quests sync | auto | tags | zone")
 end, "quest sync status, start a sync round, class quest check")
