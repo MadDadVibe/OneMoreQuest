@@ -197,6 +197,9 @@ function U.ShowLoot(b)
     if LP() and LP().ItemEntries and #e.items > 0 then
         list, loading = LP().IconEntries(LP().ItemEntries(e.items))
     end
+    -- decision 647: the boss level in front of the state ("Level 21", or the dungeon's range while not known)
+    local lvl = W().LevelText and W().LevelText(e)
+    if lvl then state = (lvl:find("dungeon", 1, true) and "|cff9aa0aa" or "|cffffd100") .. lvl .. "|r  " .. state end
     fly.note:SetText(#e.items == 0 and (state .. "  |cff9aa0aano known loot|r") or state)
     for i, it in ipairs(list) do
         local ic = flyIcons[i]
@@ -214,13 +217,17 @@ function U.ShowLoot(b)
     for i = #list + 1, #flyIcons do flyIcons[i]:Hide() end
     local rows = math.max(1, math.ceil(#list / U.LOOT_COLS))
     local w = math.max(150, 16 + U.LOOT_COLS * (U.LOOT_ICON + 4) - 4)
+    for _, fs in ipairs({ fly.title, fly.note }) do
+        local sw = call(fs.GetStringWidth, fs)
+        if type(sw) == "number" and sw + 16 > w then w = math.ceil(sw + 16) end
+    end
     fly:SetSize(w, #list > 0 and (50 + rows * (U.LOOT_ICON + 4)) or 44)
     -- directly under the icon (decision 531): the mouse goes straight down onto the items; the strip may
     -- cover the other icons for the time being
     fly:ClearAllPoints()
     fly:SetPoint("TOPLEFT", b, "BOTTOMLEFT", 0, 1)
     fly:Show()
-    U._loot = { npc = e.npc, name = name, n = #list, loading = loading }
+    U._loot = { npc = e.npc, name = name, n = #list, loading = loading, level = lvl, note = fly.note:GetText() }
 end
 
 ----------------------------------------------------------------------

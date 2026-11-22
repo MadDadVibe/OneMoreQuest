@@ -83,12 +83,12 @@ function W.Bosses(key)
             seen[npc] = true
             local items = {}
             for i = 2, #b do items[#items + 1] = b[i] end
-            local e = { npc = npc, items = items, opt = X.opt and X.opt[npc] or nil }
+            local e = { npc = npc, items = items, opt = X.opt and X.opt[npc] or nil, key = key }
             if (D.rare and D.rare[npc]) or (X.rare and X.rare[npc]) then e.rare = true; rares[#rares + 1] = e else bosses[#bosses + 1] = e end
         end
     end
     for _, npc in ipairs(D.extra and D.extra[key] or {}) do
-        if not seen[npc] then seen[npc] = true; rares[#rares + 1] = { npc = npc, items = {}, rare = true } end
+        if not seen[npc] then seen[npc] = true; rares[#rares + 1] = { npc = npc, items = {}, rare = true, key = key } end
     end
     return bosses, rares
 end
@@ -117,6 +117,84 @@ function W.Name(npc)
     local X = extra()
     return (s and s.names[npc]) or (D.names and D.names[npc]) or (D.rare and D.rare[npc]) or (X.names and X.names[npc]) or nil
 end
+
+----------------------------------------------------------------------
+-- Boss levels (decision 647)
+----------------------------------------------------------------------
+-- Fixed levels from Data/BossLevels.lua (Factoruide). A boss missing there (the new Forever dungeons) is learned in the
+-- game: when I target it, my mouse is over it or its nameplate shows, UnitLevel (only a plain level, not -1 = "??")
+-- goes to OMQDB.dwin.lvl[npc] = { min, max } and to the dads (message BL). Until then the hover shows the dungeon's range.
+local bossSet
+local function isBoss(npc)
+    if not bossSet then
+        bossSet = {}
+        for k, list in pairs(OMQ.DungeonLoot or {}) do
+            for _, b in ipairs(list) do if num(b[1]) and b[1] > 0 then bossSet[b[1]] = true end end
+        end
+        for _, l in pairs(data().extra or {}) do for _, n in ipairs(l) do bossSet[n] = true end end
+        for n in pairs(extra().names or {}) do bossSet[n] = true end
+    end
+    return bossSet[npc] or false
+end
+
+-- min, max, how ("data" | "seen") of a boss; nil when unknown
+function W.Level(npc)
+    if not num(npc) then return nil end
+    npc = canon(npc)
+    local v = OMQ.BossLevels and OMQ.BossLevels[npc]
+    if type(v) == "number" then return v, v, "data" end
+    if type(v) == "table" then return v[1], v[2], "data" end
+    local s = W.Saved()
+    local l = s and s.lvl and s.lvl[npc]
+    if type(l) == "table" and num(l[1]) then return l[1], l[2] or l[1], "seen" end
+    return nil
+end
+
+local function range(lo, hi) return lo == hi and tostring(lo) or (lo .. "-" .. hi) end
+
+-- the text of the hover: "Level 21", or the dungeon's range while the level is not known
+function W.LevelText(e)
+    if not e then return nil end
+    local lo, hi = W.Level(e.npc)
+    if lo then return "Level " .. range(lo, hi) end
+    for _, d in ipairs(OMQ.Dungeons or {}) do
+        if d.key == e.key and num(d.min) and num(d.max) then return "Level " .. range(d.min, d.max) .. " (dungeon)" end
+    end
+    return nil
+end
+
+-- a boss level seen in the game (from me: share = tell the dads); true when something new was kept
+function W.SeenLevel(npc, lvl, share)
+    if not (num(npc) and num(lvl)) or lvl < 1 or lvl > 100 then return false end
+    npc = canon(npc)
+    if not isBoss(npc) or (OMQ.BossLevels and OMQ.BossLevels[npc]) then return false end
+    local s = W.Saved()
+    if not s then return false end
+    s.lvl = s.lvl or {}
+    local l = s.lvl[npc]
+    if type(l) == "table" and num(l[1]) and l[1] <= lvl and (l[2] or l[1]) >= lvl then return false end
+    if type(l) == "table" and num(l[1]) then
+        s.lvl[npc] = { math.min(l[1], lvl), math.max(l[2] or l[1], lvl) }
+    else
+        s.lvl[npc] = { lvl, lvl }
+    end
+    if share and OMQ.GetChannel and OMQ:GetChannel() then OMQ:Send("BL", npc, lvl) end
+    return true
+end
+
+-- look at a unit (target, mouseover, a nameplate)
+function W.LearnUnit(unit)
+    if not str(unit) then return false end
+    local npc = W.NpcOf((call(UnitGUID, unit)))
+    if not npc then return false end
+    npc = canon(npc)
+    if not isBoss(npc) or (OMQ.BossLevels and OMQ.BossLevels[npc]) then return false end
+    return W.SeenLevel(npc, (call(UnitLevel, unit)), true)
+end
+
+OMQ:RegisterMessage("BL", function(f)
+    W.SeenLevel(tonumber(f[1]), tonumber(f[2]), false)
+end)
 
 ----------------------------------------------------------------------
 -- Where am I
@@ -462,7 +540,8 @@ end, "dungeon window: what it knows about this dungeon ('test': a sample window,
 ----------------------------------------------------------------------
 local frame = CreateFrame("Frame")
 for _, e in ipairs({ "PLAYER_XP_UPDATE", "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "ZONE_CHANGED_INDOORS",
-    "QUEST_TURNED_IN", "PLAYER_MONEY", "CHAT_MSG_MONEY", "LOOT_OPENED", "LOOT_CLOSED", "ENCOUNTER_END" }) do
+    "QUEST_TURNED_IN", "PLAYER_MONEY", "CHAT_MSG_MONEY", "LOOT_OPENED", "LOOT_CLOSED", "ENCOUNTER_END",
+    "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT", "NAME_PLATE_UNIT_ADDED" }) do
     frame:RegisterEvent(e)
 end
 local HANDLERS = {
@@ -473,6 +552,9 @@ local HANDLERS = {
     LOOT_OPENED = function() W.OnLootOpened() end,
     LOOT_CLOSED = function() W.OnLootClosed() end,
     ENCOUNTER_END = function(...) W.OnEncounterEnd(...) end,
+    PLAYER_TARGET_CHANGED = function() W.LearnUnit("target") end,
+    UPDATE_MOUSEOVER_UNIT = function() W.LearnUnit("mouseover") end,
+    NAME_PLATE_UNIT_ADDED = function(unit) W.LearnUnit(unit) end,
 }
 frame:SetScript("OnEvent", function(_, event, ...)
     if not W.ready then return end
