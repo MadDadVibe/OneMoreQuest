@@ -62,6 +62,7 @@ FE.SECTIONS = {
         "Low ammo",
         "Use your elixirs, scrolls, buff food, stones and oils - never, always or in dungeons; a stone or oil goes on the weapon you click",
         "Priests: the target's nameplate glows purple when Shadow Word: Death would kill it",
+        "Spell tooltips of mana spells show damage or healing per mana (DPM/HPM) with your spell power",
         "Players of the other faction nearby: a warning card with name, level and class (red when much stronger) - a click targets and pings him -, a counter on the minimap icon, shared with the group",
     } },
     { "Crafting", {

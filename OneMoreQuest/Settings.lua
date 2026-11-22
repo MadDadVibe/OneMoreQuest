@@ -147,6 +147,13 @@ local function classItems()
           get = function() return OMQ.db.options.killGlow ~= false end,
           set = function(v) if OMQ.KillGlow then OMQ.KillGlow.SetEnabled(v) else OMQ.db.options.killGlow = v and true or false end end },
     }))
+    -- decision 648: damage / healing per mana in the spell tooltip
+    add(mark({ "PRIEST", "MAGE", "WARLOCK", "DRUID", "SHAMAN", "PALADIN", "HUNTER" }, {
+        { type = "check", label = "DPM/HPM in spell tooltips",
+          tip = "Spells that cost mana show their damage per mana (DPM) or healing per mana (HPM) in the tooltip: the amount of the tooltip (middle of the range, the whole effect over time) plus your spell power, divided by the mana cost. /omq hpm shows the numbers of the last spell.",
+          get = function() return OMQ.db.options.spellEff ~= false end,
+          set = function(v) OMQ.db.options.spellEff = v and true or false end },
+    }))
     add(mark(HEALERS, {
         -- decision 226: Shift-click heals in the game's click casting (healing classes)
         { type = "check", label = "Shift-click heals on unit frames",
