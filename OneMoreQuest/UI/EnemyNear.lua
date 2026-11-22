@@ -129,7 +129,7 @@ function E.Text(e)
 end
 
 ----------------------------------------------------------------------
--- the warning card (decision 524, 526: a left click targets the enemy; players cannot get raid markers)
+-- the warning card (decision 524, 526: a left click targets the enemy; players cannot get raid markers; 646: and pings him)
 -- The visible rows are plain frames: they may come and go in combat. Over each row lies a secure button whose macro
 -- ("/targetexact Name") can only be set out of combat. A card that appears in combat is not clickable
 -- (hint "click after combat"); after the fight its button is armed. A plain shield over a row eats the clicks of a
@@ -150,9 +150,17 @@ function E.SafeName(n)
     if n == "" or #n > E.MAX_NAME or n:find("^%s") then return false end
     return n:find("[%c;/\\|]") == nil
 end
+-- decision 646: the click also pings the enemy for the group (the game's ping, "/ping [@target,exists]" without a
+-- type = the ping the game picks for that unit). The command word comes from the game (SLASH_PING1, German and
+-- English client); /cleartarget first, so a failed /targetexact leaves no target and nothing is pinged.
+function E.PingCmd()
+    local c = _G.SLASH_PING1
+    if type(c) ~= "string" or not c:find("^/%S+$") then c = "/ping" end
+    return c
+end
 function E.Macro(full)
     if not E.SafeName(full) then return nil end
-    return "/cleartarget\n/targetexact " .. full
+    return "/cleartarget\n/targetexact " .. full .. "\n" .. E.PingCmd() .. " [@target,exists]"
 end
 
 local function makeButton(i)
@@ -176,7 +184,7 @@ local function makeButton(i)
         if not (c and GameTooltip) then return end
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
         GameTooltip:SetText(c.full or "?")
-        GameTooltip:AddLine("Left click: target him.", 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine("Left click: target him and ping him for the group.", 0.8, 0.8, 0.8, true)
         GameTooltip:AddLine("Right click: close the card.", 0.8, 0.8, 0.8, true)
         GameTooltip:Show()
     end)
