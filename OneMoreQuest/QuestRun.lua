@@ -741,7 +741,10 @@ local function addStop(r, s)
     local q = r.quests[s.qid]
     if not q then q = { qid = s.qid, new = false, done = false }; r.quests[s.qid] = q end
     if s.goal then q.goal = s.goal end
-    if s.kind == "p" or s.kind == "w" then q.new = true; q.follow = s.after end
+    if s.kind == "p" or s.kind == "w" then
+        q.new = true; q.follow = s.after
+        q.dropped, q.parked = nil, nil                         -- a parked quest that comes back (649)
+    end
 end
 
 local function sendStop(s)
@@ -869,7 +872,7 @@ function R:Skip(qid)
 end
 
 -- Dungeon Run (476): a quest goes, and every quest whose stops need it (and theirs)
-function R.DropWithDependents(r, qid)
+function R.DropWithDependents(r, qid, keep)
     local gone, more = { [qid] = true }, true
     while more do
         more = false
@@ -884,7 +887,7 @@ function R.DropWithDependents(r, qid)
     for id in pairs(gone) do
         local x = r.quests[id]
         if x and not x.done then x.dropped = true end
-        if r.skip then r.skip[id] = true end
+        if r.skip and not keep then r.skip[id] = true end        -- keep (649): parked, not skipped
     end
     for k = #r.stops, 1, -1 do
         local x = r.quests[r.stops[k].qid]
@@ -914,6 +917,29 @@ function R.Resort(pos, stops, iter)
         return OMQ.DungeonRun.Resort(pos, stops)
     end
     return R.Improve(pos, stops, iter)
+end
+
+-- Area Run (649): quests whose giver will not talk to me leave the run with what waits for them, without being
+-- skipped (parked); the next refresh brings them back when he talks to me
+function R:Park(qids)
+    if not run or (run.group and not R:IsLeader()) then return 0 end
+    local n = 0
+    for _, qid in ipairs(qids) do
+        local q = run.quests[qid]
+        if q and not q.done and not q.dropped then
+            for id in pairs(R.DropWithDependents(run, qid, true)) do
+                local x = run.quests[id]
+                if x and not x.done then x.parked = true end
+            end
+            n = n + 1
+        end
+    end
+    if n == 0 then return 0 end
+    local pos = NQ().MyPos()
+    if pos then run.stops = R.Resort(pos, run.stops, 3) end
+    sendState()
+    fire()
+    return n
 end
 
 -- Area Run (491): quests that came up during the run (a level up, a hint taken) join it

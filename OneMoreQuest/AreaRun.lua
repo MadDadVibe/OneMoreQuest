@@ -223,6 +223,62 @@ local function zonePoint(qid, zone)
 end
 
 ----------------------------------------------------------------------
+-- Givers that will not talk to me (decision 649)
+----------------------------------------------------------------------
+-- Data/QuestGivers.lua names the NPCs that give and take each quest and their reputation faction. A quest whose giver
+-- (or turn-in NPC) I am below Neutral with is no pick up (Korsa in Azshara wants Neutral with Timbermaw Hold). NPCs the
+-- data knows no faction for are learned: a giver I target, hover or see the nameplate of with a red or orange reaction
+-- is closed for this character until I see him yellow or green again (OMQ.db.unfriendly[player GUID][npc id]).
+A.NEUTRAL = 4
+local standCache = {}
+function A.Standing(fid)
+    if standCache[fid] then return standCache[fid] end
+    local st
+    local CR = C_Reputation
+    if CR and CR.GetFactionDataByID then
+        local ok, f = pcall(CR.GetFactionDataByID, fid)
+        if ok and type(f) == "table" and type(f.reaction) == "number" and f.reaction > 0 then st = f.reaction end
+    end
+    if not st and GetFactionInfoByID then
+        local ok, _, _, v = pcall(GetFactionInfoByID, fid)
+        if ok and type(v) == "number" and v > 0 then st = v end
+    end
+    if st then standCache[fid] = st; return st end
+    if OMQ.RepLow and OMQ.RepLow[fid] then return A.NEUTRAL - 1 end       -- every race starts below Neutral there
+    return nil
+end
+function A.ForgetStandings() standCache = {} end
+
+function A.ClosedNpcs()
+    if not OMQ.db then return {} end
+    local k = (UnitGUID and UnitGUID("player")) or "?"
+    OMQ.db.unfriendly = OMQ.db.unfriendly or {}
+    OMQ.db.unfriendly[k] = OMQ.db.unfriendly[k] or {}
+    return OMQ.db.unfriendly[k]
+end
+
+-- all of these NPCs closed to me: their faction below Neutral, or each one learned red/orange
+local function closed(npcs, fid)
+    if fid then
+        local st = A.Standing(fid)
+        if st and st < A.NEUTRAL then return true end
+    end
+    if not npcs or #npcs == 0 then return false end
+    local l = A.ClosedNpcs()
+    for _, n in ipairs(npcs) do if not l[n] then return false end end
+    return true
+end
+
+-- "giver" or "turnin" when that NPC will not talk to me, else false
+function A.Unfriendly(id)
+    local g = OMQ.QuestGivers and OMQ.QuestGivers[id]
+    if not g then return false end
+    if g[1] and closed(g[1], g[3]) then return "giver" end
+    if g[2] and closed(g[2], g[4]) then return "turnin" end
+    return false
+end
+
+----------------------------------------------------------------------
 -- Quests
 ----------------------------------------------------------------------
 -- may I take this quest some day? faction, race, class, no excluding quest done (not the level)
@@ -237,6 +293,7 @@ function A.ForMe(id, who, log)
 end
 local function excluded(d, id)
     if has(d[13], 1) or has(d[13], 2) then return true end
+    if id and A.Unfriendly(id) then return true end    -- giver or turn-in NPC will not talk to me (649)
     if d[7] then return has(d[13], 4) end
     return not (id and NQ().Drop(id))              -- from an item: only a named mob's drop (508)
 end
@@ -1137,6 +1194,7 @@ function A.Refresh()
     if not r then return 0 end
     local pos = NQ().MyPos()
     if not pos then return 0 end
+    A.DropUnfriendly()                                                          -- closed givers leave (649)
     local log = R().MyLog()
     pcall(A.Learn, log, { r.zone, pos.map ~= r.zone and pos.map or nil })      -- learned places (620)
     local skip = {}
@@ -1146,7 +1204,7 @@ function A.Refresh()
     local add = {}
     for _, e in ipairs(plan.quests) do
         local q = r.quests[e.id]
-        if not q then add[e.id] = true end
+        if not q or q.parked then add[e.id] = true end                      -- a parked quest comes back (649)
     end
     -- a new quest keeps every pre-quest it waits for, also one that is in the run already (fix 618), and the
     -- escort rules (616); the stops in the run get what the new plan knows about their pre-quests and escorts
@@ -1250,6 +1308,111 @@ local function later(secs)
 end
 A._later = later
 
+-- pick ups of the run whose giver (or turn-in NPC) will not talk to me leave it, with what waits for them (649);
+-- they are not skipped: the next refresh brings them back once he talks to me
+function A.DropUnfriendly()
+    local r = areaRun()
+    if not r then return 0 end
+    local log = R().MyLog()
+    local ids, list = {}, {}
+    for _, s in ipairs(r.stops) do
+        if s.kind == "p" and not log[s.qid] and not ids[s.qid] and A.Unfriendly(s.qid) then
+            ids[s.qid] = true
+            list[#list + 1] = s.qid
+        end
+    end
+    if #list == 0 then return 0 end
+    table.sort(list)
+    return R():Park(list)
+end
+
+-- the diagnostics lines (649): quests of the zone left out because their giver or turn-in NPC will not talk to me
+function A.ClosedReport(zone, out)
+    local n, learnt = 0, 0
+    for _ in pairs(A.ClosedNpcs()) do learnt = learnt + 1 end
+    local rows = {}
+    for id, d in pairs(OMQ.QuestPlaces or {}) do
+        if zone and (inZone(starts(id, d), zone) or inZone(d[8], zone)) and not ever(id) then
+            local why = A.Unfriendly(id)
+            if why then
+                n = n + 1
+                local g = OMQ.QuestGivers[id]
+                local f = g[why == "giver" and 3 or 4]
+                rows[#rows + 1] = string.format("  %s (%d): %s%s", R().Title(id), id, why == "giver" and "giver" or "turn-in NPC",
+                    f and string.format(" below Neutral with faction %d (standing %s)", f, tostring(A.Standing(f))) or " seen red/orange")
+            end
+        end
+    end
+    table.sort(rows)
+    out[#out + 1] = string.format("closed givers: %d quests left out, %d NPCs learned red/orange", n, learnt)
+    for k = 1, math.min(#rows, 10) do out[#out + 1] = rows[k] end
+end
+
+-- a quest NPC I see: learn whether he talks to me (649); true when that changed
+local giverIndex
+function A.SeeUnit(unit)
+    if not (UnitExists and UnitExists(unit)) then return false end
+    if UnitIsPlayer and UnitIsPlayer(unit) then return false end
+    local g = UnitGUID and UnitGUID(unit)
+    if g == nil or (issecretvalue and issecretvalue(g)) or type(g) ~= "string" then return false end
+    local kind, n = g:match("^(%a+)%-%d+%-%d+%-%d+%-%d+%-(%d+)")
+    n = tonumber(n)
+    if kind ~= "Creature" or not n then return false end
+    if not giverIndex then
+        giverIndex = {}
+        for _, q in pairs(OMQ.QuestGivers or {}) do
+            for k = 1, 2 do for _, x in ipairs(q[k] or {}) do giverIndex[x] = true end end
+        end
+    end
+    if not giverIndex[n] then return false end
+    local rc = UnitReaction and UnitReaction(unit, "player")
+    if rc == nil or (issecretvalue and issecretvalue(rc)) or type(rc) ~= "number" then return false end
+    local l = A.ClosedNpcs()
+    local bad = (rc < A.NEUTRAL) or nil
+    if l[n] == bad then return false end
+    l[n] = bad
+    return true
+end
+
+-- my standing with a faction of the data crossed Neutral (649): true when one did
+local lastStand
+function A.StandingsChanged()
+    A.ForgetStandings()
+    local now = {}
+    for _, q in pairs(OMQ.QuestGivers or {}) do
+        for k = 3, 4 do
+            local f = q[k]
+            if f and now[f] == nil then
+                local st = A.Standing(f)
+                now[f] = st ~= nil and st < A.NEUTRAL
+            end
+        end
+    end
+    local was = lastStand
+    lastStand = now
+    if not was then return false end
+    for f, v in pairs(now) do if was[f] ~= nil and was[f] ~= v then return true end end
+    return false
+end
+
+local function closedChanged()
+    if not areaRun() then return end
+    A.DropUnfriendly()
+    later(1)
+end
+A._closedChanged = closedChanged
+
+local seen = CreateFrame("Frame")
+for _, e in ipairs({ "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT", "NAME_PLATE_UNIT_ADDED", "UPDATE_FACTION" }) do
+    pcall(seen.RegisterEvent, seen, e)
+end
+seen:SetScript("OnEvent", function(_, event, unit)
+    local ok, changed
+    if event == "UPDATE_FACTION" then ok, changed = pcall(A.StandingsChanged)
+    else ok, changed = pcall(A.SeeUnit, event == "PLAYER_TARGET_CHANGED" and "target" or event == "UPDATE_MOUSEOVER_UNIT" and "mouseover" or unit) end
+    if ok and changed then closedChanged() end
+end)
+
 local ev = CreateFrame("Frame")
 for _, e in ipairs({ "PLAYER_LEVEL_UP", "QUEST_ACCEPTED", "QUEST_POI_UPDATE" }) do pcall(ev.RegisterEvent, ev, e) end
 ev:SetScript("OnEvent", function(_, event)
@@ -1265,6 +1428,7 @@ ev:SetScript("OnEvent", function(_, event)
 end)
 
 OMQ:On("READY", function()
+    pcall(A.StandingsChanged)                                            -- the first look at my standings (649)
     C_Timer.After(5, function() if areaRun() then later(1) end end)     -- the hints of a restored run
     C_Timer.NewTicker(A.HINT_TICK, function()
         local ok, err = pcall(A.CheckHints)
@@ -1291,6 +1455,7 @@ OMQ:RegisterCommand("arun", function(arg)
                 out[#out + 1] = string.format("  hint: %s in %s, opens %d", R().Title(h.id), A.ZoneName(h.map), h.opens)
             end
         end
+        A.ClosedReport(r and r.kind == "area" and r.zone or zone, out)
         if OMQ.ShowReport then OMQ:ShowReport(out) else for _, l in ipairs(out) do print(l) end end
         return
     end
