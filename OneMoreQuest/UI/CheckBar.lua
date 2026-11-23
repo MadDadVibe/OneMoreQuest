@@ -27,6 +27,8 @@ local ITEMS = {
       icon = MEDIA .. "Icon_Vote" },
     { id = "old", label = "Old Quest Check", tip = "Click: the grey quests in your log - abandon them with one click",   -- decision 601
       icon = MEDIA .. "Icon_Old" },
+    { id = "bis", label = "BiS Check", tip = "Click: the pre-raid BiS items of your spec and where you get them",   -- decision 657
+      icon = MEDIA .. "Icon_Bis" },
     { id = "bet", label = "Bet Check", tip = "Click: start a bet with the dads",          -- decision 170, from level 5
       icon = MEDIA .. "Icon_Bet", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("bets") end },
     { id = "prof", label = "Profession Check", tip = "Click: what each crafting profession costs to skill to 75, 150, 225 and 300, with the auction prices",   -- decision 535
@@ -101,6 +103,8 @@ local function click(item)
         if OMQ.Vote then OMQ.Vote:Start() end
     elseif item.id == "old" then
         if OMQ.OldQuests then OMQ.OldQuests:Toggle() end
+    elseif item.id == "bis" then
+        if OMQ.BisCheck then OMQ.BisCheck:Toggle() end
     elseif item.id == "bet" then
         if OMQ.BetUI then OMQ.BetUI:ToggleCreate() end
     elseif item.id == "duel" then

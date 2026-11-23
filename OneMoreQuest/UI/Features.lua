@@ -37,6 +37,7 @@ FE.SECTIONS = {
         "Dungeon window: in every dungeon the time, the XP from mobs, the coins looted and the bosses and rares with a red X when dead; hover over a boss for its loot, fold it to one line",
         "Dungeon XP: when you leave a dungeon, a card shows the XP you got inside and its XP per hour against your XP per hour outside",
         "Progress Check: the milestones of your class, the dungeons and, on request, the quest zones by level; a click on a zone leads to its quest hub",
+        "BiS Check: the pre-raid best-in-slot items of your spec (Pre-Raid BiS or Realistic) and where each comes from; click an item to put it on a shopping list or get the arrow there, and see which dungeons and quests are worth it at your level",
     } },
     { "Finding your way", {
         "Arrow to the nearest dad from the icon bar, when you fell behind",
