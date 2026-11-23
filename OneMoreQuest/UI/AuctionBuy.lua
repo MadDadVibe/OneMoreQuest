@@ -538,11 +538,30 @@ end
 local budget = B.Budget
 
 -- the armor kinds a class can wear (item class 4): 0 miscellaneous (rings, necks, trinkets, off-hand items),
--- 1 cloth (also every cloak), 2 leather, 3 mail, 4 plate, 6 shields. The level of mail and plate is checked per item.
-B.ARMOR = {
-    WARRIOR = { 0, 1, 2, 3, 4, 6 }, PALADIN = { 0, 1, 2, 3, 4, 6 }, SHAMAN = { 0, 1, 2, 3, 6 }, HUNTER = { 0, 1, 2, 3 },
-    ROGUE = { 0, 1, 2 }, DRUID = { 0, 1, 2 }, PRIEST = { 0, 1 }, MAGE = { 0, 1 }, WARLOCK = { 0, 1 },
+-- 1 cloth (also every cloak), 2 leather, 3 mail, 4 plate, 6 shields.
+-- Fix 658: only the best kind I may wear at my level is browsed (plate from 40, mail for hunters and shamans from
+-- 40: OMQ.Score's table), with the misc items, the cloaks (cloth, the back slot only) and the shields; the lighter
+-- kinds were 3 or 4 browses more, each asked again slot by slot once its page was full.
+B.ARMOR_ORDER = { 4, 3, 2, 1 }
+B.ARMOR_FALLBACK = {
+    WARRIOR = { 1, 2, 3, 4, 6 }, PALADIN = { 1, 2, 3, 4, 6 }, SHAMAN = { 1, 2, 3, 6 }, HUNTER = { 1, 2, 3 },
+    ROGUE = { 1, 2 }, DRUID = { 1, 2 }, PRIEST = { 1 }, MAGE = { 1 }, WARLOCK = { 1 },
 }
+-- may the class wear armor kind sub at level lvl?
+local function mayWear(class, sub, lvl)
+    local SC = OMQ.Score
+    local t = SC and SC.ARMOR and SC.ARMOR[sub]
+    if t then return t[class] ~= nil and (lvl or 1) >= t[class] end
+    for _, s in ipairs(B.ARMOR_FALLBACK[class or ""] or { 1 }) do if s == sub then return true end end
+    return false
+end
+-- the best body armor kind at my level (cloth when nothing else)
+function B.BestArmor(class, lvl)
+    for _, sub in ipairs(B.ARMOR_ORDER) do
+        if mayWear(class, sub, lvl) then return sub end
+    end
+    return 1
+end
 
 local function gainAt(link, equipLoc)
     local LP = OMQ.LootPreview
@@ -566,13 +585,22 @@ function B.WantsWands(class)
     return B.WAND_CLASSES[class or ""] and true or false
 end
 
--- the browses of one gear search: the weapons, the wands, then every armor kind of my class
-function B.GearSearches(class)
+-- the browses of one gear search: the weapons, the wands, the misc items, the best armor kind at my level, the
+-- cloaks (when that kind is not cloth) and the shields (fix 658)
+function B.GearSearches(class, lvl)
     local SC = OMQ.Score
     class = class or (SC and SC.MyClass()) or select(2, UnitClass("player"))
+    lvl = lvl or level()
     local out = { { 2 } }
     if B.WantsWands(class) then out[#out + 1] = { 2, B.WAND_SUBCLASS } end
-    for _, sub in ipairs(B.ARMOR[class or ""] or { 0, 1 }) do out[#out + 1] = { 4, sub } end
+    out[#out + 1] = { 4, 0 }
+    local best = B.BestArmor(class, lvl)
+    out[#out + 1] = { 4, best }
+    if best ~= 1 then
+        local E = Enum and Enum.InventoryType
+        out[#out + 1] = { 4, 1, (E and E.IndexCloakType) or 16 }
+    end
+    if mayWear(class, 6, lvl) then out[#out + 1] = { 4, 6 } end
     return out
 end
 
