@@ -16,7 +16,7 @@ OMQ.QTrackFrame = U
 local runEdges = {}
 local topEdge                      -- the gold line on top; blue with the rest of the frame during a Dungeon Run (476)
 local BLUE = { 0.30, 0.62, 1.00 }
-local frame, header, title, level, prevBtn, navText, nextBtn, stampFrame, stampTex, stampAnim, dim
+local frame, header, title, level, opens, opensHover, prevBtn, navText, nextBtn, stampFrame, stampTex, stampAnim, dim
 local texts, texs, tUsed, xUsed = {}, {}, 0, 0
 local moveMode = false
 local lastStamp
@@ -64,7 +64,7 @@ local function applyBackground()
         borderTex:SetColorTexture(0.23, 0.2, 0.13, 1)
     end
     if dim then dim:SetAlpha(b == "none" and 0 or (b == "light" and 0.5 or 1)) end
-    for _, fs in ipairs({ header, title, level, navText }) do shade(fs) end
+    for _, fs in ipairs({ header, title, level, navText, opens }) do shade(fs) end
     for _, fs in ipairs(texts) do shade(fs) end
 end
 function U:SetBackground(b)
@@ -199,6 +199,18 @@ local function build()
     level = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     level:SetPoint("LEFT", title, "RIGHT", 6, 0)
     level:SetTextColor(0.66, 0.69, 0.73)
+    -- what the quest opens (decision 656): green "opens N" behind the level, the hover lists the follow-ups
+    opens = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    opens:SetPoint("LEFT", level, "RIGHT", 6, 0)
+    opens:SetTextColor(GREEN[1], GREEN[2], GREEN[3])
+    opensHover = CreateFrame("Frame", nil, frame)
+    opensHover:SetPoint("TOPLEFT", title, "TOPLEFT", -2, 3)
+    opensHover:SetPoint("BOTTOMRIGHT", opens, "BOTTOMRIGHT", 2, -3)
+    if opensHover.EnableMouse then opensHover:EnableMouse(true) end
+    if opensHover.SetMouseClickEnabled then pcall(opensHover.SetMouseClickEnabled, opensHover, false) end  -- clicks go to the card
+    opensHover:SetScript("OnEnter", function(self) U.OpensTip(self) end)
+    opensHover:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    opensHover:Hide()
 
     nextBtn = navButton(1)
     nextBtn:SetPoint("TOPRIGHT", -8, -14)
@@ -328,7 +340,7 @@ function U.AddTogether(v, qid, t)
         local w = Q.Trackable(id) and Q:View(id)
         if w and #w.rows > 0 then
             v.more = v.more + 1
-            v.rows[#v.rows + 1] = { text = w.title or R.Title(id), head = true, cells = {} }
+            v.rows[#v.rows + 1] = { text = (w.title or R.Title(id)) .. U.OpensText(id), head = true, cells = {} }
             for _, r in ipairs(w.rows) do v.rows[#v.rows + 1] = r end
         end
     end
@@ -339,13 +351,38 @@ end
 -- head row, then its rows (objectives with the dads' columns, or what to pick up / turn in)
 function U.AddStep(v, step)
     if not (v and step) then return v end
-    v.rows[#v.rows + 1] = { text = step.title or "", head = true, cells = {} }
+    v.rows[#v.rows + 1] = { text = (step.title or "") .. (step.multi and "" or U.OpensText(step.qid)), head = true, cells = {} }
     for _, r in ipairs(step.rows or {}) do v.rows[#v.rows + 1] = r end
     v.more = (v.more or 0) + 1 + (step.more or 0)
     return v
 end
 
+-- " (opens N)" in green behind a quest's name on the Area Run card (decision 656), "" when it opens nothing
+U.OPENS_COLOR = "|cff7dc770"
+function U.OpensText(qid)
+    local A = OMQ.AreaRun
+    local n = qid and A and A.Opens and A.Opens(qid) or 0
+    if n <= 0 then return "" end
+    return " " .. U.OPENS_COLOR .. "(opens " .. n .. ")|r"
+end
+-- the level of a quest from the data, for the pick up and turn-in steps that have no quest log entry yet
+function U.DataLevel(qid)
+    local d = qid and OMQ.QuestPlaces and OMQ.QuestPlaces[qid]
+    return d and type(d[3]) == "number" and d[3] > 0 and d[3] or nil
+end
+
 function U.AreaView()
+    local v = U.AreaCard()
+    -- the card's own quest: what turning it in opens (decision 656)
+    if v and v.qid and not v.multi then
+        local A = OMQ.AreaRun
+        local n = A and A.Opens and A.Opens(v.qid) or 0
+        if n > 0 then v.opens, v.opensQid = n, v.qid end
+    end
+    return v
+end
+
+function U.AreaCard()
     local R = OMQ.QuestRun
     if moveMode or not (R and R:Active()) then return nil end
     if OMQ.ChainRun and OMQ.ChainRun:Active() then return nil end
@@ -372,14 +409,16 @@ function U.AreaView()
         end
         local view = { run = "AREA RUN", qid = t and t.qid, title = t and t.title or "", showNav = false, stamp = false,
                        cols = {}, rows = { { text = t and t.what or "all stops done", cells = {} } } }
+        if t and t.qid then view.level = U.DataLevel(t.qid) end                 -- the level on p/t steps too (656)
         if t and t.kind == "t" then
             local list = U.TurnIns(r)
             if #list > 1 then
                 view.title = string.format("Turn in %d quests", #list)
+                view.multi, view.level = true, nil
                 view.rows = {}
                 for _, id in ipairs(list) do
                     local nxt = R.FollowUpIn(r, id)
-                    view.rows[#view.rows + 1] = { text = R.Title(id) .. (nxt and (", then pick up " .. R.Title(nxt)) or ""), cells = {} }
+                    view.rows[#view.rows + 1] = { text = R.Title(id) .. U.OpensText(id) .. (nxt and (", then pick up " .. R.Title(nxt)) or ""), cells = {} }
                 end
             end
         end
@@ -432,6 +471,9 @@ function U:Render()
     title:SetTextColor(tc[1], tc[2], tc[3])
     title:SetText(view.title or "")
     level:SetText(view.level and ("[" .. view.level .. "]") or "")
+    opens:SetText(view.opens and ("opens " .. view.opens) or "")
+    U.opensQid = view.opens and view.opensQid or nil
+    if U.opensQid then opensHover:Show() else opensHover:Hide() end
     local cols = moveMode and {} or view.cols
     local ncols = #cols
     local labelW = W - PAD * 2 - ncols * (COL_W + GAP)
@@ -446,6 +488,7 @@ function U:Render()
         return type(v) == "number" and v or nil
     end
     local levelW = view.level and ((textW(level) or 24) + 6) or 0
+    if view.opens then levelW = levelW + (textW(opens) or 48) + 6 end
     local nameW = textW(title) or room
     title:SetWidth(math.max(20, math.min(nameW + 2, room - levelW)))
     if view.showNav then
@@ -526,6 +569,28 @@ function U:Render()
         lastStamp = nil
     end
     frame:Show()
+end
+
+-- the hover over the name (decision 656): the quests turning it in opens, the chain one step behind them
+function U.OpensTip(owner)
+    local A, qid = OMQ.AreaRun, U.opensQid
+    if not (GameTooltip and A and A.OpensLines and qid) then return false end
+    local ok, lines, more = pcall(A.OpensLines, qid)
+    if not ok or type(lines) ~= "table" or #lines == 0 then return false end
+    GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+    local n = 0
+    for _, l in ipairs(lines) do if l.depth == 1 then n = n + 1 end end
+    GameTooltip:AddLine(string.format("Turning it in opens %d quest%s", n, n == 1 and "" or "s"), GOLD[1], GOLD[2], GOLD[3])
+    for _, l in ipairs(lines) do
+        local left = (l.depth > 1 and "    then " or "") .. l.text
+        if l.note then left = left .. (l.noteKind == "run" and "  |cff7dc770(" or "  |cffff9933(") .. l.note .. ")|r" end
+        local c = l.depth > 1 and 0.75 or 1
+        GameTooltip:AddDoubleLine(left, l.zone or "", c, c, c, 0.66, 0.69, 0.73)
+    end
+    if (more or 0) > 0 then GameTooltip:AddLine(string.format("... and %d more", more), 0.66, 0.69, 0.73) end
+    GameTooltip:Show()
+    U.tipLines = lines
+    return true
 end
 
 function U:IsShown() return frame and frame:IsShown() or false end

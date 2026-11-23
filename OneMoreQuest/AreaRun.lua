@@ -1467,3 +1467,96 @@ OMQ:RegisterCommand("arun", function(arg)
     end
     if OMQ.AreaRunUI then OMQ.AreaRunUI:Open(zone) end
 end, "Area Run: /omq arun [zone|off|diag] - one way through every quest of a zone")
+
+----------------------------------------------------------------------
+-- What turning in a quest opens (decision 656): the Area Run's card shows "opens N" behind the quest's level,
+-- the hover lists the follow-ups with level and zone and the chain one step behind them
+----------------------------------------------------------------------
+A.OPENS_LINES = 10        -- lines of the follow-up hover at most
+A.OPENS_CACHE = 2         -- seconds a counted quest is not counted again (the card is drawn four times a second)
+local followIdx, opensCache = nil, {}
+-- [pre-quest] = { quests that need it (all of the group or one of the single list) }
+function A.FollowIndex()
+    if followIdx then return followIdx end
+    followIdx = {}
+    for id, d in pairs(OMQ.QuestPlaces or {}) do
+        for k = 10, 11 do
+            for _, p in ipairs(d[k] or {}) do
+                local l = followIdx[p]
+                if not l then l = {}; followIdx[p] = l end
+                if not contains(l, id) then l[#l + 1] = id end
+            end
+        end
+    end
+    for _, l in pairs(followIdx) do table.sort(l) end
+    return followIdx
+end
+function A.ResetFollow() followIdx = nil; opensCache = {} end
+
+-- the direct follow-ups of id for me: not done, not in my log, my faction, race and class, not repeatable;
+-- the same quest at several givers (same name and level) counts once
+function A.FollowUps(id, who, log)
+    who = who or NQ().Me()
+    local out, seen = {}, {}
+    for _, f in ipairs(A.FollowIndex()[id] or {}) do
+        local d = data(f)
+        if d and f ~= id and not has(d[13], 1) and not ever(f) and not (log and log[f]) and A.ForMe(f, who, log) then
+            local key = tostring(d[1]) .. "|" .. tostring(d[3])
+            if not seen[key] then seen[key] = true; out[#out + 1] = f end
+        end
+    end
+    return out
+end
+
+-- how many quests turning in id opens, counted at most every OPENS_CACHE seconds
+function A.Opens(id)
+    if not number(id) then return 0 end
+    local now = GetTime and GetTime() or 0
+    local c = opensCache[id]
+    if c and now - c.t < A.OPENS_CACHE then return c.n end
+    local ok, list = pcall(function() return A.FollowUps(id, nil, R().MyLog()) end)
+    local n = ok and #list or 0
+    opensCache[id] = { n = n, t = now }
+    return n
+end
+
+-- the zone a quest starts in (or is turned in, when an item starts it)
+local function zoneOfQuest(d)
+    local s = (d[7] and d[7][1]) or (d[8] and d[8][1])
+    return s and s[1] and A.ZoneName(A.ZoneOf(s[1])) or nil
+end
+-- what f needs besides pre: the other quests of its pre-quest group I have not done
+local function alsoNeeds(f, pre)
+    local d, out = data(f), {}
+    for _, p in ipairs(d and d[10] or {}) do
+        if p ~= pre and not ever(p) then out[#out + 1] = R().Title(p) end
+    end
+    return out
+end
+-- the hover's lines: { depth, qid, text = "Name [level]", zone, note, noteKind = "run" | "needs" }, at most OPENS_LINES;
+-- more = how many did not fit
+function A.OpensLines(id, who, log)
+    who = who or NQ().Me()
+    log = log or R().MyLog()
+    local r = R() and R():Run()
+    local inRun = function(f)
+        local q = r and r.quests and r.quests[f]
+        return q and not q.done and not q.dropped
+    end
+    local out, more = {}, 0
+    local function add(depth, f, pre)
+        if #out >= A.OPENS_LINES then more = more + 1; return end
+        local d = data(f) or {}
+        local line = { depth = depth, qid = f, zone = zoneOfQuest(d),
+                       text = R().Title(f) .. (number(d[3]) and (" [" .. d[3] .. "]") or "") }
+        local needs = alsoNeeds(f, pre)
+        if #needs > 0 then line.note, line.noteKind = "also needs: " .. table.concat(needs, ", "), "needs"
+        elseif inRun(f) then line.note, line.noteKind = "in this run", "run" end
+        out[#out + 1] = line
+    end
+    for _, f in ipairs(A.FollowUps(id, who, log)) do
+        add(1, f, id)
+        for _, g in ipairs(A.FollowUps(f, who, log)) do add(2, g, f) end
+    end
+    return out, more
+end
