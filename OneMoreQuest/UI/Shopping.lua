@@ -10,7 +10,9 @@
 -- click on that row buys it anyway. The bags are never counted: only what was bought through the list counts (a dad
 -- sells what is left over).
 -- The lists are kept per character until the dad deletes one (the X next to the list, any time); nothing is deleted
--- by itself. Making the list of the same place again replaces it.
+-- by itself. Making the list of the same place again replaces it. The second place (decision 650): the button next
+-- to "Ask the group" in the profession window adds the mats of the selected recipe to that recipe's own list
+-- ("Craft: <name> xN"), 1 craft per click, 5 with Shift; every click adds to what is there.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -64,6 +66,41 @@ function S.Add(list)
     local l = { key = list.key, title = list.title, source = list.source, at = clock(), items = items }
     table.insert(st.lists, 1, l)
     st.sel = l.key
+    if AH() and AH().open then AH().Refresh(); AH().Pump() end
+    return l
+end
+-- the mats of a recipe from the profession window (decision 650): the list of that recipe grows with every click.
+-- items = { { itemID, n } } for ONE craft; crafts = how many crafts to add. What was bought stays; the list is chosen.
+-- Returns the list.
+function S.AddCrafts(key, name, items, crafts)
+    crafts = math.max(1, math.floor(tonumber(crafts) or 1))
+    local l = S.Find(key)
+    if not l then
+        l = S.Add({ key = key, title = name, source = "craft", items = {} })
+        l.crafts = 0
+    end
+    l.crafts = (l.crafts or 0) + crafts
+    l.name = name or l.name
+    l.title = string.format("Craft: %s x%d", l.name or "?", l.crafts)
+    local PC = OMQ.ProfCheck
+    for _, want in ipairs(items or {}) do
+        local it
+        for _, x in ipairs(l.items) do if x.itemID == want.itemID then it = x end end
+        local p, from
+        if PC and PC.Price then p, from = PC.Price(want.itemID) end
+        if not it then
+            it = { itemID = want.itemID, n = 0, bought = 0, vendor = (from == "vendor") or nil }
+            l.items[#l.items + 1] = it
+        end
+        it.n = it.n + (want.n or 1) * crafts
+        if p then it.plan = p end
+    end
+    table.sort(l.items, function(a, c)
+        local va, vc = (a.plan or 0) * a.n, (c.plan or 0) * c.n
+        if va ~= vc then return va > vc end
+        return a.itemID < c.itemID
+    end)
+    store().sel = key
     if AH() and AH().open then AH().Refresh(); AH().Pump() end
     return l
 end
@@ -361,7 +398,7 @@ function S.Render(panel, top)
         for _, line in ipairs(ui.lines) do line:Hide() end
         ui.head:Hide(); ui.vTitle:Hide(); ui.more:Hide(); ui.big:Hide(); ui.hint:Hide()
         ui.empty:Show(); ui.empty:ClearAllPoints(); ui.empty:SetPoint("TOPLEFT", 16, -y)
-        ui.empty:SetText("No shopping list yet. Click a cell of the Profession Check (check bar hammer or /omq prof) to make one.")
+        ui.empty:SetText("No shopping list yet. Click a cell of the Profession Check (check bar hammer or /omq prof) or the bag button next to a recipe's reagents to make one.")
         return y + 50
     end
     ui.empty:Hide(); ui.head:Show(); ui.hint:Show(); ui.big:Show()

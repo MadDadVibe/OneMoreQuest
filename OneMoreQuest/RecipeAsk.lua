@@ -2,6 +2,8 @@
 -- A button next to the favorite star of the selected recipe in the profession window asks
 -- every addon user which of the recipe's materials they carry (bags, and bank separately).
 -- The answers appear in a small panel next to the profession window.
+-- Right of it a second button (decision 650) puts the recipe's mats into a shopping list of the Auction Helper:
+-- click = mats for 1 craft, Shift-click = 5 crafts, every further click adds again (UI/Shopping.lua S.AddCrafts).
 --   RQ|proto|reqId|guid|id1,id2,...              (question: the material item ids)
 --   RR|proto|reqId|guid|name|class|id:bags:total,...   (answer; only items the player has)
 local ADDON, OMQ = ...
@@ -216,7 +218,8 @@ local function currentRecipe()
     if not schematic and info and info.recipeID and C_TradeSkillUI and C_TradeSkillUI.GetRecipeSchematic then
         schematic = C_TradeSkillUI.GetRecipeSchematic(info.recipeID, false)
     end
-    return info and info.name, schematic
+    local id = (info and info.recipeID) or (type(schematic) == "table" and schematic.recipeID) or nil
+    return info and info.name, schematic, id
 end
 
 local function refresh()
@@ -277,6 +280,94 @@ function A:Click()
     showPanel()
 end
 
+----------------------------------------------------------------------
+-- Mats into the shopping list (decision 650)
+----------------------------------------------------------------------
+A.SHIFT_CRAFTS = 5
+A.NOTE_TIME = 3
+local shop
+-- the mats of one craft: the first item of every slot (the one the game shows) with its amount
+function A.CraftItems(slots)
+    local items, at = {}, {}
+    for _, s in ipairs(slots or {}) do
+        local id = s.ids[1]
+        if id then
+            if at[id] then at[id].n = at[id].n + s.qty
+            else at[id] = { itemID = id, n = s.qty }; items[#items + 1] = at[id] end
+        end
+    end
+    return items
+end
+function A.ShopKey(recipeID, name) return "craft:" .. tostring(recipeID or name or "?") end
+-- how many crafts of the selected recipe the shopping list holds
+function A.ListedCrafts()
+    local S = OMQ.Shopping
+    local name, _, id = currentRecipe()
+    local l = S and S.Find(A.ShopKey(id, name))
+    return l and l.crafts or 0
+end
+local function note(msg)
+    if not (shop and shop.note) then return end
+    shop.note:SetText(msg)
+    shop.note:Show()
+    local token = {}
+    shop.noteToken = token
+    if C_Timer and C_Timer.After then
+        C_Timer.After(A.NOTE_TIME, function() if shop.noteToken == token then shop.note:Hide() end end)
+    end
+end
+-- the click: 1 craft, with Shift 5 crafts. Returns the list, or nil and why.
+function A:ShopClick(shift)
+    local S = OMQ.Shopping
+    local name, schematic, id = currentRecipe()
+    local items = A.CraftItems(A.SlotsOf(schematic))
+    if not S then return nil, "no shopping list" end
+    if not name or #items == 0 then note("|cffff8c73This recipe has no materials.|r"); return nil, "no materials" end
+    local n = shift and A.SHIFT_CRAFTS or 1
+    local l = S.AddCrafts(A.ShopKey(id, name), name, items, n)
+    note(string.format("|cff9fdc8a+%d craft%s (%d on the list)|r", n, n == 1 and "" or "s", l.crafts or n))
+    return l
+end
+local function shopTooltip(self)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Shopping list")
+    GameTooltip:AddLine("Click: add the mats for 1 craft", 1, 1, 1, true)
+    GameTooltip:AddLine("Shift-click: add the mats for " .. A.SHIFT_CRAFTS .. " crafts", 1, 1, 1, true)
+    local n = A.ListedCrafts()
+    if n > 0 then GameTooltip:AddLine(string.format("On the list: %d craft%s (Auction Helper, Shopping tab)", n, n == 1 and "" or "s"), 0.62, 0.86, 0.54, true) end
+    GameTooltip:Show()
+end
+function A:EnsureShopButton(form)
+    if not (button and form) then return false end
+    if not shop then
+        shop = CreateFrame("Button", "OneMoreQuestRecipeShopButton", form)
+        shop:SetSize(22, 22)
+        shop:SetFrameLevel((form.GetFrameLevel and form:GetFrameLevel() or 1) + 10)
+        local icon = shop:CreateTexture(nil, "ARTWORK")
+        icon:SetAllPoints()
+        icon:SetTexture("Interface\\Icons\\INV_Misc_Bag_10")
+        shop.icon = icon
+        local hl = shop:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.15)
+        shop.note = shop:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        shop.note:SetPoint("LEFT", shop, "RIGHT", 6, 0)
+        shop.note:Hide()
+        shop:SetScript("OnClick", function(self)
+            local shift = IsShiftKeyDown and IsShiftKeyDown() and true or false
+            local ok, err = pcall(A.ShopClick, A, shift)
+            if not ok then OMQ:Error("recipe shop", err) end
+            if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(self) then shopTooltip(self) end
+        end)
+        shop:SetScript("OnEnter", shopTooltip)
+        shop:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    end
+    shop:ClearAllPoints()
+    shop:SetPoint("LEFT", button, "RIGHT", 4, 0)
+    shop:Show()
+    return true
+end
+
 function A:EnsureButton()
     local form = schematicForm()
     if not form then return false end
@@ -308,6 +399,7 @@ function A:EnsureButton()
     button.onLabel = label and true or false
     button.hasStar = star and true or false
     button:Show()
+    A:EnsureShopButton(form)
     return true
 end
 
@@ -324,6 +416,7 @@ local function hookForm()
     if hooksecurefunc and form.Init then
         hooksecurefunc(form, "Init", function()
             if panel and panel:IsShown() then panel:Hide() end      -- another recipe: the answer is stale
+            if shop and shop.note then shop.note:Hide() end
             ensureLater()
         end)
     end
@@ -352,5 +445,6 @@ OMQ:RegisterCommand("recipeask", function()
     local name, schematic = currentRecipe()
     local slots = A.SlotsOf(schematic)
     out[#out + 1] = string.format("selected recipe: %s, %d material slots", tostring(name), #slots)
+    out[#out + 1] = string.format("shopping list button: %s, crafts on the list: %d", tostring(shop ~= nil), A.ListedCrafts())
     OMQ:ShowReport(out)
 end, "diagnose the profession window button")
