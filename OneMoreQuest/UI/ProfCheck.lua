@@ -11,7 +11,9 @@
 -- their raw materials; what the route needs more of than it made is made from raw materials, too. Any other item
 -- of the same profession without a price is made from its materials as well.
 -- Step 2 (decision 551): a click on a cell makes a shopping list of its materials for the Auction Helper's Shopping tab
--- (UI/Shopping.lua). The list counts the cell alone (no intermediates left over from the cells before it) and adds 25%
+-- (UI/Shopping.lua). Decision 658: recipes of the cell's steps that are bought (vendor or drop recipes the character
+-- does not know yet and does not carry) go on the list too, one each, below "Buy at a vendor" unless the auction house
+-- is known to be cheaper. The list counts the cell alone (no intermediates left over from the cells before it) and adds 25%
 -- to the crafts of the part of a step where the recipe is already green (Data/SkillThresholds.lua).
 -- Decision 639: an intermediate (bolts, blasting powder, cured hides ...) that the route needs beyond its own skill
 -- crafts is bought finished when it costs at most 20% more than making it (PC.MAKE_MARGIN); only when buying is
@@ -280,6 +282,12 @@ function PC.ShoppingList(route, col)
         local cnt = math.ceil(n - 1e-6)
         if cnt > 0 then items[#items + 1] = { itemID = item, n = cnt, plan = p, vendor = (from == "vendor") or nil } end
     end
+    -- the recipes the cell's steps need that are bought (decision 659): one piece each, at a vendor unless the
+    -- auction house is known to be cheaper
+    for _, r in ipairs(PC.RecipesToBuy(steps, route.id)) do
+        local p, from = PC.Price(r.itemID)
+        items[#items + 1] = { itemID = r.itemID, n = 1, plan = p, vendor = (from ~= "ah") or nil, recipe = r.spell }
+    end
     table.sort(items, function(a, c)
         local va, vc = (a.plan or 0) * a.n, (c.plan or 0) * c.n
         if va ~= vc then return va > vc end
@@ -288,6 +296,37 @@ function PC.ShoppingList(route, col)
     local br = PC.BRACKETS[col]
     local range = br and string.format("%d-%d", br[1], br[2]) or string.format("%d-%d", PC.BRACKETS[1][1], PC.BRACKETS[#PC.BRACKETS][2])
     return { key = "prof:" .. route.id .. ":" .. col, title = PC.ProfName(route) .. " " .. range, source = "prof", items = items }
+end
+-- the recipe items to buy for some route steps (decision 659): steps whose recipe comes from a vendor or a drop
+-- ("V", Data/ProfRecipeItems.lua), not yet known (OMQ.SkillRoute.Known), not in the bags or the bank and not of a
+-- step the character's skill has already passed. { { itemID, spell } }, each recipe once, in the order of the steps.
+function PC.RecipesToBuy(steps, line)
+    local out, seen = {}, {}
+    local SR = OMQ.SkillRoute
+    local rank = line and PC.Mine()[line]
+    for _, st in ipairs(steps or {}) do
+        local spell = st[3]
+        local ri = st[5] == "V" and (OMQ.ProfRecipeItems or {})[spell]
+        if ri and not seen[spell] and not (rank and rank >= st[2]) then
+            seen[spell] = true
+            local known = SR and SR.Known and SR.Known(spell)
+            if not known and PC.Carried(ri[1]) <= 0 then out[#out + 1] = { itemID = ri[1], spell = spell } end
+        end
+    end
+    return out
+end
+-- pieces in the bags and the bank
+function PC.Carried(id)
+    local n
+    if C_Item and C_Item.GetItemCount then
+        local ok, v = pcall(C_Item.GetItemCount, id, true)
+        if ok then n = v end
+    elseif GetItemCount then
+        local ok, v = pcall(GetItemCount, id, true)
+        if ok then n = v end
+    end
+    if type(n) ~= "number" or isSecret(n) then return 0 end
+    return n
 end
 PC.NOTE_TIME = 4
 -- a click on a cell: the list is made (again) and the window says so for 4 seconds

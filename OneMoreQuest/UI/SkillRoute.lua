@@ -106,8 +106,36 @@ function SR.Learned(spell)
     local T = C_TradeSkillUI
     if not (T and T.GetRecipeInfo) then return nil end
     local ok, info = pcall(T.GetRecipeInfo, spell)
-    if ok and type(info) == "table" then return info.learned ~= false end
+    if ok and type(info) == "table" then
+        local learned = info.learned ~= false
+        if learned then SR.Remember(spell) end
+        return learned
+    end
     return false
+end
+-- recipes seen learned in the profession window, per character (decision 659): the Profession Check knows them
+-- while the window is closed
+local function knownStore()
+    if type(OMQDB) ~= "table" then return nil end
+    OMQDB.recipesKnown = OMQDB.recipesKnown or {}
+    local guid = UnitGUID and UnitGUID("player") or "?"
+    OMQDB.recipesKnown[guid] = OMQDB.recipesKnown[guid] or {}
+    return OMQDB.recipesKnown[guid]
+end
+function SR.Remember(spell)
+    local st = knownStore()
+    if st and spell then st[spell] = true end
+end
+-- the character knows the recipe: seen in the profession window now or before, or a known spell
+function SR.Known(spell)
+    local st = knownStore()
+    if st and st[spell] then return true end
+    if IsPlayerSpell then
+        local ok, v = pcall(IsPlayerSpell, spell)
+        if ok and v == true then SR.Remember(spell); return true end
+    end
+    local ok, v = pcall(SR.Learned, spell)
+    return ok and v == true
 end
 
 local function bagCount(id)
