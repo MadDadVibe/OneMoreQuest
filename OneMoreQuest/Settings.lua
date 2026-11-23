@@ -443,6 +443,11 @@ local function allSections()
             { type = "check", label = "Mark and preselect the best quest reward",
               tip = "With a choice of rewards, the best one for you by item score gets a gold frame and is preselected; when none is an upgrade, the one that sells for most. Its tooltip says why. Click another reward to change it.",
               get = qolGet("rewardHint"), set = qolSet("rewardHint") },
+            -- decision 654
+            { type = "check", label = "Quest of a quest item in its tooltip",
+              tip = "Hovering a quest item shows the quests it belongs to: the quest level coloured like the quest log (grey, green, yellow, orange, red), the zone and the state (in your log with the progress, ready to turn in, not accepted, turned in). /omq qitem lists them for the last item.",
+              get = function() return OMQ.db.options.questItemTip ~= false end,
+              set = function(v) OMQ.db.options.questItemTip = v and true or false end },
             { type = "check", label = "Buy water (mana classes)", get = qolGet("water"), set = qolSet("water"),
               tip = "From level 10: tops the bags up to 20 of the best water the merchant sells. Before level 10 it costs too much." },
             { type = "check", label = "Open all mail at the mailbox",
