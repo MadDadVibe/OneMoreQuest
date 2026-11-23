@@ -135,7 +135,7 @@ local function questMarkers(out)
             local t = (i == 1) and R.FollowTarget(s, myPos()) or nil
             p, what = t and t.place, t and t.what or what
         elseif s.kind == "o" then
-            what = R.OpenObjective and R.OpenObjective(s.qid) or what
+            what = (R.StopWhat and R.StopWhat(s)) or what           -- a part stop: its own objectives (663)
         elseif s.kind == "p" and R.Hunt and R.Hunt(s.qid) then
             what = R.Hunt(s.qid)                          -- a named mob drops it (508)
         end

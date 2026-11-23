@@ -359,9 +359,15 @@ function resolve(ctx, id, visiting, depth)
     if not inLog then e.pick = bestPlace(starts(id, d), from, ctx.zone); from = e.pick or from end
     local spots = A.ObjSpots(id, d)
     if not NQ().IsComplete(id) and spots then e.obj, e.alts = objPlace(spots, from, ctx.zone); from = e.obj or from end
+    -- objectives that lie apart (663): one stop per open objective, each at its own best area
+    if not NQ().IsComplete(id) and not A.IsEscort(id) then
+        local at = from
+        e.parts = R().PartPlaces(id, function(sp) return objPlace(sp, at, ctx.zone) end)
+        if e.parts then e.obj, e.alts = e.parts[1].place, nil; from = e.parts[#e.parts].place end
+    end
     e.turnin = bestPlace(d[8], from, ctx.zone)
     if not e.turnin then
-        if inLog then e.follow = e.obj or zonePoint(id, ctx.zone) or ctx.pos; e.obj = nil
+        if inLog then e.follow = e.obj or zonePoint(id, ctx.zone) or ctx.pos; e.obj, e.parts = nil, nil
         else return fail(ctx, id) end
     end
     if e.turnin and e.turnin.map ~= ctx.zone then e.late = true end
@@ -393,7 +399,16 @@ local function addStops(ctx, e)
         ctx.stops[#ctx.stops + 1] = s
         return
     end
-    stop("o", e.obj)
+    if e.parts then                                    -- one stop per open objective (663)
+        for _, p in ipairs(e.parts) do
+            local s = { qid = e.id, kind = "o", place = p.place, goal = "turnin", oi = p.oi }
+            if p.alts and #p.alts > 1 then
+                s.alts = {}
+                for _, x in ipairs(p.alts) do s.alts[#s.alts + 1] = x end
+            end
+            ctx.stops[#ctx.stops + 1] = s
+        end
+    else stop("o", e.obj) end
     stop("t", e.turnin)
 end
 
@@ -1230,13 +1245,13 @@ function A.Refresh()
     for _, s in ipairs(plan.stops) do
         local q = r.quests[s.qid]
         if s.kind == "o" and q and not q.done and not q.dropped and not q.objDone and not hasObj[s.qid] and not r.group then
-            stops[#stops + 1] = { qid = s.qid, kind = "o", place = s.place, goal = "turnin" }
+            stops[#stops + 1] = { qid = s.qid, kind = "o", place = s.place, goal = "turnin", oi = s.oi }
         end
     end
     for _, s in ipairs(plan.stops) do
         if add[s.qid] then
             stops[#stops + 1] = { qid = s.qid, kind = s.kind, place = s.place, goal = "turnin", needs = s.needs, late = s.late,
-                                  clear = s.clear, glue = s.glue }
+                                  clear = s.clear, glue = s.glue, oi = s.oi }
         end
     end
     if #stops == 0 and not repaired then return 0 end

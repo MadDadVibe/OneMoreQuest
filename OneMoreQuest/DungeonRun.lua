@@ -286,6 +286,12 @@ function resolve(ctx, id, goal, visiting, depth)
     if goal == "turnin" then
         local objs = d[9] or D.OBJ_FIX[id]
         if not NQ().IsComplete(id) and objs then e.obj = objPlace(objs, from); from = e.obj or from end
+        -- objectives that lie apart (663): one stop per open objective; not for the quests with own rules here
+        if not NQ().IsComplete(id) and d[9] and not (D.OBJ_FIX[id] or D.TIMED[id] or D.WAIT[id]) then
+            local at = e.pick or ctx.pos
+            e.parts = OMQ.QuestRun.PartPlaces(id, function(sp) return objPlace(sp, at) end)
+            if e.parts then e.obj = e.parts[1].place; from = e.parts[#e.parts].place end
+        end
         e.turnin = bestPlace(d[8], from) or e.pick or from
         if not (e.obj or e.turnin) then return false end
     elseif not e.pick then
@@ -310,6 +316,13 @@ local function addStops(ctx, e)
         local s = { qid = e.id, kind = "w", place = e.follow, goal = e.goal }
         if not e.pick and e.needs and #e.needs > 0 then s.needs = e.needs end
         ctx.stops[#ctx.stops + 1] = s
+        return
+    end
+    if e.parts then                                     -- one stop per open objective (663)
+        for _, p in ipairs(e.parts) do
+            ctx.stops[#ctx.stops + 1] = { qid = e.id, kind = "o", place = p.place, goal = e.goal, oi = p.oi }
+        end
+        stop("t", e.turnin)
         return
     end
     local first = #ctx.stops + 1

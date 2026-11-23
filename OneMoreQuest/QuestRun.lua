@@ -96,6 +96,23 @@ local function newSpots(id, d, pos, pick)
     return out
 end
 
+-- the open objectives of a quest with their places near me, each part { oi, spots = { place } } (decision 663)
+local function partSpots(id, pos)
+    local open = R.OpenParts(id)
+    if not open then return nil end
+    local out = {}
+    for _, p in ipairs(open) do
+        local list = {}
+        for _, sp in ipairs(p.spots) do
+            local q = placeOf(sp)
+            if q and dist(pos, q) < R.FAR then list[#list + 1] = q end
+        end
+        if #list > 0 then out[#out + 1] = { oi = p.oi, spots = list } end
+    end
+    return #out > 0 and out or nil
+end
+R._partSpots = partSpots
+
 -- the client's own point of a quest on my map (quests the data does not know)
 local function mapPoint(qid, pos)
     if not (pos and pos.map and C_QuestLog and C_QuestLog.GetQuestsOnMap) then return nil end
@@ -171,6 +188,147 @@ function R.OpenObjective(id)
     end
 end
 
+----------------------------------------------------------------------
+-- Objectives that lie apart (decision 663)
+----------------------------------------------------------------------
+-- Data/ObjectiveParts.lua knows the places of each objective of quests whose objectives lie apart (the mushrooms in
+-- one corner, the gnolls in another). Such a quest gets one objective stop per open objective (a stop's oi = the
+-- data's objective numbers it covers; objectives within PART_MERGE yards share one stop). The stops of different
+-- quests may mix freely (the first objective of A, then B, then the second of A). A part stop is done when the game
+-- says its objectives are finished (in a group: for every dad of the run who reports them).
+-- The data's order of objectives may differ from the game's: each data objective takes the game objective of the same
+-- kind and amount (C_QuestLog.GetQuestObjectives type/numRequired; the same on every client language).
+R.PART_MERGE = 60
+local PART_TYPE = { m = "monster", i = "item", o = "object", e = "event" }
+function R.Parts(id) return OMQ.ObjParts and OMQ.ObjParts[id] end
+
+-- the game's objectives of a quest in my log: { { type, need, finished, text } } (nil when the client has none)
+function R.GameObjectives(id)
+    local CQ = C_QuestLog
+    if not (CQ and CQ.GetQuestObjectives) then return nil end
+    local ok, list = pcall(CQ.GetQuestObjectives, id)
+    if not ok or type(list) ~= "table" or #list == 0 then return nil end
+    local out = {}
+    for i, o in ipairs(list) do
+        if type(o) ~= "table" then return nil end
+        local text = (type(o.text) == "string" and not isSecret(o.text)) and o.text or nil
+        out[i] = { type = (not isSecret(o.type)) and o.type or nil, need = number(o.numRequired) and o.numRequired or nil,
+                   finished = o.finished == true and not isSecret(o.finished), text = text }
+    end
+    return out
+end
+
+-- data objective j -> game objective i (pure): same kind and amount first, then same kind, then the same place in the
+-- list when both lists are equally long
+function R.MatchParts(parts, game)
+    local map, used = {}, {}
+    if not (parts and game) then return map end
+    for j, p in ipairs(parts) do
+        for i, g in ipairs(game) do
+            if not used[i] and g.type == PART_TYPE[p[1]] and g.need == p[2] then map[j], used[i] = i, true; break end
+        end
+    end
+    for j, p in ipairs(parts) do
+        if not map[j] then
+            for i, g in ipairs(game) do
+                if not used[i] and g.type == PART_TYPE[p[1]] then map[j], used[i] = i, true; break end
+            end
+        end
+    end
+    if #parts == #game then
+        for j in ipairs(parts) do if not map[j] and not used[j] then map[j], used[j] = j, true end end
+    end
+    return map
+end
+
+-- the game objectives (my client) of the data objectives oi: list of indexes, nil when one is unknown
+local function partGame(qid, oi, game)
+    local parts = R.Parts(qid)
+    if not (parts and game) then return nil end
+    local map = R.MatchParts(parts, game)
+    local out = {}
+    for _, j in ipairs(oi or {}) do
+        if not map[j] then return nil end
+        out[#out + 1] = map[j]
+    end
+    return out
+end
+
+-- are the objectives oi of a quest finished for me? (false while unknown)
+function R.PartDone(qid, oi, game)
+    game = game or R.GameObjectives(qid)
+    local idx = partGame(qid, oi, game)
+    if not idx or #idx == 0 then return false end
+    for _, i in ipairs(idx) do if not (game[i] and game[i].finished) then return false end end
+    return true, idx
+end
+
+-- the words of the client for the open objectives oi ("Rotflesh Mushroom: 3/8"), nil when unknown
+function R.PartText(qid, oi)
+    local game = R.GameObjectives(qid)
+    local idx = partGame(qid, oi, game)
+    if not idx then return nil end
+    local t = {}
+    for _, i in ipairs(idx) do
+        local g = game[i]
+        if g and not g.finished and g.text and g.text ~= "" then t[#t + 1] = g.text end
+    end
+    return #t > 0 and table.concat(t, ", ") or nil
+end
+
+-- what an objective stop says: its own objectives, else the first open one of the quest
+function R.StopWhat(s)
+    if s and s.oi then
+        local t = R.PartText(s.qid, s.oi)
+        if t then return t end
+    end
+    return R.OpenObjective(s.qid)
+end
+
+-- the open objectives of a quest that have places: { { oi = { j }, spots = { spot } } }, nil when the quest has no
+-- parts or none of its open objectives has a place (then the quest keeps its one stop)
+function R.OpenParts(qid)
+    local parts = R.Parts(qid)
+    if not parts then return nil end
+    local game = R.GameObjectives(qid)
+    local map = game and R.MatchParts(parts, game) or {}
+    local out = {}
+    for j, p in ipairs(parts) do
+        local i = map[j]
+        local fin = i and game[i] and game[i].finished
+        if not fin and p[3] and #p[3] > 0 then out[#out + 1] = { oi = { j }, spots = p[3] } end
+    end
+    if #out == 0 then return nil end
+    return out
+end
+
+-- one stop per open objective, chosen by pick(spots) -> place, alts; objectives whose places lie within PART_MERGE
+-- yards share a stop. Returns { { oi, place, alts } } or nil
+function R.PartPlaces(qid, pick)
+    local open = R.OpenParts(qid)
+    if not open then return nil end
+    local out = {}
+    for _, p in ipairs(open) do
+        local place, alts = pick(p.spots)
+        if place then
+            local host
+            for _, o in ipairs(out) do
+                if o.place.inst == place.inst and math.sqrt((o.place.a - place.a) ^ 2 + (o.place.b - place.b) ^ 2) <= R.PART_MERGE then host = o; break end
+            end
+            if host then
+                for _, j in ipairs(p.oi) do host.oi[#host.oi + 1] = j end
+                host.alts = nil
+            else
+                local oi = {}
+                for _, j in ipairs(p.oi) do oi[#oi + 1] = j end
+                out[#out + 1] = { oi = oi, place = place, alts = alts }
+            end
+        end
+    end
+    if #out == 0 then return nil end
+    return out
+end
+
 -- The candidates. opts: { log, titles, members, doneBy = guid -> set, availBy = guid -> set, solo }
 -- returns the list { id, new, pick = place, spots = { place } } and the room for new quests
 function R.Pool(pos, opts)
@@ -201,7 +359,7 @@ function R.Pool(pos, opts)
             end
             local near = {}
             for _, p in ipairs(spots) do if dist(pos, p) < R.FAR then near[#near + 1] = p end end
-            if #near > 0 and (d and d[9] or not d) then out[#out + 1] = { id = id, spots = near } end
+            if #near > 0 and (d and d[9] or not d) then out[#out + 1] = { id = id, spots = near, parts = partSpots(id, pos) } end
         end
     end
     -- new quests I could pick up
@@ -234,6 +392,7 @@ function R.Pool(pos, opts)
         for i = 1, math.min(#news, max) do
             local e = news[i]
             e.spots = newSpots(e.id, data(e.id), pos, e.pick)
+            e.parts = partSpots(e.id, pos)
             if #e.spots > 0 then out[#out + 1] = e end
         end
     end
@@ -508,6 +667,60 @@ function R.TryFollow(pos, stops, e, sp)
     return bestC, bestArr
 end
 
+-- a quest with objective parts (663): its pick up where it makes the way least longer, then each objective where it
+-- does (after the pick up, anywhere between the other stops); objectives within PART_MERGE yards share a stop.
+-- Returns the added yards and the new list, nil when a part fits nowhere
+function R.PlaceParts(pos, stops, e)
+    local arr = {}
+    for i, s in ipairs(stops) do arr[i] = s end
+    local function at(i) if i == 0 then return pos end return arr[i] and arr[i].place end
+    local function seg(i, x)
+        local nxt = at(i + 1)
+        if not nxt then return dist(at(i), x) end
+        return dist(at(i), x) + dist(x, nxt) - dist(at(i), nxt)
+    end
+    local c, lo = 0, 0
+    if e.new then
+        if not e.pick then return nil end
+        local bi, bc
+        for i = 0, #arr do
+            local v = seg(i, e.pick)
+            if not bc or v < bc - 0.01 then bi, bc = i, v end
+        end
+        table.insert(arr, bi + 1, { qid = e.id, kind = "p", place = e.pick })
+        c, lo = bc, bi + 1
+    end
+    local mine = {}
+    for _, p in ipairs(e.parts) do
+        local host
+        for _, o in ipairs(mine) do
+            for _, sp in ipairs(p.spots) do
+                if not host and o.place.inst == sp.inst and math.sqrt((o.place.a - sp.a) ^ 2 + (o.place.b - sp.b) ^ 2) <= R.PART_MERGE then host = o end
+            end
+        end
+        if host then
+            for _, j in ipairs(p.oi) do host.oi[#host.oi + 1] = j end
+        else
+            local bj, bc, bsp
+            for _, sp in ipairs(p.spots) do
+                for j = lo, #arr do
+                    local v = seg(j, sp)
+                    if not bc or v < bc - 0.01 then bj, bc, bsp = j, v, sp end
+                end
+            end
+            if not bj then return nil end
+            local oi = {}
+            for _, j in ipairs(p.oi) do oi[#oi + 1] = j end
+            local o = { qid = e.id, kind = "o", place = bsp, oi = oi }
+            table.insert(arr, bj + 1, o)
+            mine[#mine + 1] = o
+            c = c + bc
+        end
+    end
+    if #mine == 0 then return nil end
+    return c, arr
+end
+
 -- choose n quests of the pool and their order. Returns { stops, quests = { entry }, length }
 function R.Plan(pos, pool, n, free)
     local stops, chosen, used = {}, {}, {}
@@ -523,6 +736,9 @@ function R.Plan(pos, pool, n, free)
                         if c and (not best or c < best.c - 0.01) then best = { c = c, e = e, arr = arr } end
                     end
                 end
+            elseif e.parts and not used[e.id] and (not e.new or newCount < free) then
+                local c, arr = R.PlaceParts(pos, stops, e)          -- one stop per objective (663)
+                if c and (not best or c < best.c - 0.01) then best = { c = c, e = e, arr = arr, parts = true } end
             elseif not used[e.id] and (not e.new or newCount < free) then
                 for _, sp in ipairs(e.spots) do
                     local m = #stops
@@ -559,6 +775,7 @@ function R.Plan(pos, pool, n, free)
         local o = { qid = e.id, kind = "o", place = best.sp }
         if best.arr then
             stops = best.arr                      -- a follow-up: turn-in, pick up and objectives already placed
+            if best.parts and e.new then newCount = newCount + 1 end
         elseif e.new then
             newCount = newCount + 1
             table.insert(stops, best.j + 1, o)
@@ -676,7 +893,7 @@ local function save()
     local s = { id = run.id, leader = run.leader, started = run.started, total = run.total, group = run.group,
                 quests = {}, stops = {}, kind = run.kind, dungeon = run.dungeon, info = run.info, zone = run.zone, allow = run.allow }
     for qid, q in pairs(run.quests) do s.quests[#s.quests + 1] = { qid, q.new and 1 or 0, q.done and 1 or 0, q.picked and 1 or 0, q.dropped and 1 or 0, q.follow or 0, q.goal } end
-    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after, st.goal, st.needs, st.clear, st.glue and 1 or nil, st.wait } end
+    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after, st.goal, st.needs, st.clear, st.glue and 1 or nil, st.wait, st.oi } end
     OMQ.db.questRun[g] = s
 end
 
@@ -749,7 +966,7 @@ end
 
 local function sendStop(s)
     OMQ:Send("RN", "p", run.id, tostring(s.i), s.kind, b36(s.qid), string.format("%.1f", s.place.a), string.format("%.1f", s.place.b),
-        tostring(s.place.inst or 0), tostring(s.place.map or 0), s.after and b36(s.after) or "")
+        tostring(s.place.inst or 0), tostring(s.place.map or 0), s.after and b36(s.after) or "", s.oi and list36(s.oi) or "")
 end
 
 local function sendState()
@@ -788,7 +1005,7 @@ function R:Start(plan)
         run.members, run.pool = plan.members or {}, {}
         run.group = #run.members > 0
     end
-    for _, s in ipairs(plan.stops) do addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs, late = s.late, clear = s.clear, glue = s.glue, wait = s.wait }) end
+    for _, s in ipairs(plan.stops) do addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs, late = s.late, clear = s.clear, glue = s.glue, wait = s.wait, oi = s.oi }) end
     run.total = 0
     for _ in pairs(run.quests) do run.total = run.total + 1 end
     run.startedAt = now()
@@ -855,7 +1072,7 @@ function R:Skip(qid)
             local dup = false
             if s.kind == "t" then for _, x in ipairs(run.stops) do if x.kind == "t" and x.qid == s.qid then dup = true end end end
             if not dup then
-                addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after })
+                addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, oi = s.oi })
                 if run.group then sendStop(run.stops[#run.stops]) end
             end
         end
@@ -949,7 +1166,7 @@ function R:AddStops(stops)
     for qid in pairs(run.quests) do before[qid] = true end
     for _, s in ipairs(stops) do
         addStop(run, { qid = s.qid, kind = s.kind, place = s.place, after = s.after, goal = s.goal, needs = s.needs, late = s.late,
-                       clear = s.clear, glue = s.glue, wait = s.wait })
+                       clear = s.clear, glue = s.glue, wait = s.wait, oi = s.oi })
         if run.group then sendStop(run.stops[#run.stops]) end
     end
     local n = 0
@@ -1050,11 +1267,77 @@ local function pickedByAll(qid)
     return true
 end
 
+local reportParts, partsDone
 local function report(qid, state)
     run.sent = run.sent or {}                -- qid -> state sent in this run
     if run.sent[qid] == state then return end
     run.sent[qid] = state
     OMQ:Send("RN", "c", run.id, myGuid() or "?", b36(qid), state)
+end
+
+-- objective parts (663): a dad tells the leader which game objectives of the run's part quests he has finished
+--   RN|proto|f|run|guid|qid|indexes
+function reportParts()
+    run.sentF = run.sentF or {}
+    local want = {}
+    for _, s in ipairs(run.stops) do if s.oi then want[s.qid] = true end end
+    for qid in pairs(want) do
+        local game = R.GameObjectives(qid)
+        if game then
+            local fin = {}
+            for i, g in ipairs(game) do if g.finished then fin[#fin + 1] = i end end
+            local text = list36(fin)
+            if run.sentF[qid] ~= text then
+                run.sentF[qid] = text
+                OMQ:Send("RN", "f", run.id, myGuid() or "?", b36(qid), text)
+            end
+        end
+    end
+end
+
+-- part stops whose objectives are finished (for me and every dad of the run who reports them) go; a quest that has
+-- open objectives left but no stop any more (an objective the data has no place for) gets one objective stop at the
+-- game's map point or where its last part was
+function partsDone()
+    local changed, last = false, {}
+    for k = #run.stops, 1, -1 do
+        local s = run.stops[k]
+        if s.kind == "o" and s.oi then
+            local mine, idx = R.PartDone(s.qid, s.oi)
+            local all = mine
+            if mine and run.group then
+                for _, u in ipairs(present()) do
+                    local rep = run.partRep and run.partRep[u.guid]
+                    local st = run.reports[u.guid] and run.reports[u.guid][s.qid]
+                    if rep and not (st == "d" or st == "t") then           -- a dad without reports (older version) does not hold it
+                        local set = rep[s.qid] or {}
+                        for _, i in ipairs(idx) do if not set[i] then all = false end end
+                    end
+                end
+            end
+            if all then
+                table.remove(run.stops, k)
+                last[s.qid] = s.place
+                changed = true
+                if OMQ.Sound then OMQ.Sound:Play("update") end
+            end
+        end
+    end
+    for qid, place in pairs(last) do
+        local left = false
+        for _, s in ipairs(run.stops) do if s.qid == qid and (s.kind == "o" or s.kind == "w") then left = true end end
+        local turnin = false                                          -- the turn-in stop shows open objectives itself (619)
+        for _, s in ipairs(run.stops) do if s.qid == qid and s.kind == "t" then turnin = true end end
+        if not left and not turnin and not complete(qid) and R.OpenObjective(qid) then
+            local q = run.quests[qid]
+            local pos = NQ().MyPos()
+            local p = (pos and mapPoint(qid, pos)) or place
+            local o = { qid = qid, kind = "o", place = p, goal = q and q.goal }
+            addStop(run, o)
+            if run.group then sendStop(o) end
+        end
+    end
+    return changed
 end
 
 -- the clock: checks the stops, sorts the rest again, ends the run
@@ -1076,6 +1359,7 @@ function R:Tick()
     end
     if run.group and not R:IsLeader() then
         for qid in pairs(run.doors) do if turnedIn(qid) then report(qid, "t") end end
+        reportParts()
     end
     if run.group and not R:IsLeader() then return end        -- the leader decides
     local function removeStops(qid, kinds)
@@ -1084,6 +1368,7 @@ function R:Tick()
             if s.qid == qid and (not kinds or kinds[s.kind]) then table.remove(run.stops, k) end
         end
     end
+    if partsDone() then changed = true end                    -- objectives that lie apart (663)
     local DR = OMQ.DungeonRun
     for qid, q in pairs(run.quests) do
         local step = DR and DR.ItemStep and DR.ItemStep(qid)
@@ -1230,7 +1515,7 @@ function R:Target()
         view.near = view.straight <= calm and view.distance <= calm + 10 or nil       -- decision 477
     end
     local inside = false
-    if view.kind == "o" and C_Minimap and C_Minimap.IsInsideQuestBlob then
+    if view.kind == "o" and not s.oi and C_Minimap and C_Minimap.IsInsideQuestBlob then   -- a part: its own place (663)
         local ok, v = pcall(C_Minimap.IsInsideQuestBlob, s.qid)
         inside = ok and v == true and not isSecret(v)
     end
@@ -1245,7 +1530,7 @@ function R:Target()
         local nxt = R.FollowUpIn(run, s.qid)
         view.what = "turn in" .. (nxt and (", then pick up " .. R.Title(nxt)) or "")
         if not nxt and run.kind == "dungeon" then view.what = "turn in the pre-quest" end
-    else view.what = R.OpenObjective(s.qid) or "objectives" end
+    else view.what = R.StopWhat(s) or "objectives"; view.oi = s.oi end
     local step = OMQ.DungeonRun and OMQ.DungeonRun.ItemStep and OMQ.DungeonRun.ItemStep(s.qid)
     if step then view.what, view.open, view.item = (s.kind == "o") and step.kill or step.use, nil, true end   -- 628
     if view.open and OMQ.AreaRun and OMQ.AreaRun.IsBuy(s.qid) then          -- bought or crafted items (622)
@@ -1399,7 +1684,9 @@ OMQ:RegisterMessage("RN", function(f)
         if not (i and qid and a and b) or run.all[i] then return end
         local kind = (f[4] == "p" or f[4] == "t") and f[4] or "o"
         local after = f[10] and f[10] ~= "" and tonumber(f[10], 36) or nil
-        addStop(run, { i = i, qid = qid, kind = kind, after = after, goal = run.kind == "area" and "turnin" or nil,
+        local oi = (kind == "o" and f[11] and f[11] ~= "") and parse36(f[11]) or nil      -- the stop's objectives (663)
+        if oi and #oi == 0 then oi = nil end
+        addStop(run, { i = i, qid = qid, kind = kind, after = after, goal = run.kind == "area" and "turnin" or nil, oi = oi,
                        place = { a = a, b = b, inst = tonumber(f[8]) or 0, map = tonumber(f[9]) } })
         fire()
     elseif op == "o" then
@@ -1426,6 +1713,16 @@ OMQ:RegisterMessage("RN", function(f)
         if not (guid and qid) then return end
         run.reports[guid] = run.reports[guid] or {}
         run.reports[guid][qid] = f[5]
+        R:Tick()
+    elseif op == "f" then                                         -- a dad's finished objectives (663)
+        if not R:IsLeader() then return end
+        local guid, qid = f[3], tonumber(f[4], 36)
+        if not (guid and qid) then return end
+        run.partRep = run.partRep or {}
+        run.partRep[guid] = run.partRep[guid] or {}
+        local set = {}
+        for _, i in ipairs(parse36(f[5])) do set[i] = true end
+        run.partRep[guid][qid] = set
         R:Tick()
     elseif op == "x" then
         if R:IsLeader() then local qid = tonumber(f[3], 36); if qid then R:Skip(qid) end end
@@ -1466,7 +1763,7 @@ local function restore()
     run.kind, run.dungeon, run.info, run.zone, run.allow = s.kind, s.dungeon, s.info, s.zone, s.allow
     for _, st in ipairs(s.stops) do
         addStop(run, { qid = st[1], kind = st[2], place = { a = st[3], b = st[4], inst = st[5], map = st[6] }, i = st[7], after = st[8],
-                       goal = st[9], needs = st[10], clear = st[11], glue = st[12] == 1 or nil, wait = st[13] })
+                       goal = st[9], needs = st[10], clear = st[11], glue = st[12] == 1 or nil, wait = st[13], oi = st[14] })
     end
     run.members = members()
     run.pool, run.skip = {}, {}
