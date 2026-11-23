@@ -386,6 +386,10 @@ local function paintRow(b, l, route)
             b.name:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
             local t = st[5] == "D" and ("until " .. st[2]) or string.format("~%dx left", math.ceil((l.left or 0) - 1e-6))
             if (l.extraNow or 0) > 0 then t = t .. string.format(" (+%d later)", l.extraNow) end
+            if current.ready == st[3] then       -- decision 665: the intermediates are made, the next click crafts
+                b.bg:SetColorTexture(0.75, 0.58, 0.18, 0.8)
+                t = "click again"
+            end
             b.count:SetText(t)
         elseif st[5] ~= "D" then
             local t = string.format("%dx", math.max(1, math.floor(st[4] + 0.5)))
@@ -528,6 +532,111 @@ function SR.Craft(spell, n)
     return n
 end
 
+-- decision 665: a click on the current step first makes the intermediates its crafts lack (Cured Light Hide, bolts,
+-- ...) when the route makes them itself, then starts the step on its own once those crafts are done. The game starts
+-- one craft per click; if it does not take the automatic start, the step lights up and says "click again".
+SR.CHAIN_WAIT = 0.8      -- seconds after the last intermediate craft before the step starts (the bags update first)
+SR.CHAIN_CHECK = 2       -- seconds without a cast of the step after the automatic start: the game did not take it
+
+local function reagentsOf(spell)
+    local r = (OMQ.ProfRecipes or {})[spell]
+    if r then return r[3] end
+    r = (OMQ.ProfSkillUp or {})[spell]
+    if r then return r[4] end
+end
+-- the intermediates n crafts of a step lack that the route makes itself: { { spell, n, item } }, n at most what
+-- the bags allow (nothing when they allow none)
+function SR.Missing(route, spell, n, idx)
+    local reag = reagentsOf(spell)
+    local out = {}
+    if not (route and route.steps and reag and n and n > 0) then return out end
+    for k = 1, #reag, 2 do
+        local item, need = reag[k], reag[k + 1] * n
+        local have = bagCount(item)
+        if have < need then
+            local _, mspell, my = makerBefore(route, item, idx or (#route.steps + 1))
+            if mspell and mspell ~= spell and SR.Learned(mspell) ~= false then
+                local make = math.ceil((need - have) / my - 1e-6)
+                local can = SR.Craftable(mspell)
+                if can then make = math.min(make, can) end
+                if make > 0 then out[#out + 1] = { spell = mspell, n = make, item = item } end
+            end
+        end
+    end
+    return out
+end
+
+-- starts the next craft of the chain: the next intermediate, or the step itself when all are made
+function SR.ChainNext()
+    local c = current.chain
+    if not c then return nil end
+    local m = c.queue[c.at]
+    if m then
+        SR.Select(m.spell)
+        local got = SR.Craft(m.spell, m.n)
+        if type(got) ~= "number" then current.chain = nil; return got end
+        c.left = got
+        SR.Note(string.format("Making %dx %s first, then %s", got, OMQ.ProfCheck.ItemName(m.item),
+            OMQ.ProfCheck.RecipeName(c.step)))
+        return got
+    end
+    current.chain = nil
+    SR.Select(c.step)
+    local got = SR.Craft(c.step, c.n)
+    if type(got) == "number" then
+        local w = { spell = c.step, at = GetTime() }
+        current.watch = w
+        if C_Timer and C_Timer.After then C_Timer.After(SR.CHAIN_CHECK, function() SR.CheckStarted(w) end) end
+    end
+    return got
+end
+
+function SR.StartChain(route, l, n)
+    local miss = SR.Missing(route, l.st[3], n, l.idx)
+    if #miss == 0 then return nil end
+    current.chain = { queue = miss, step = l.st[3], n = n, at = 1 }
+    return SR.ChainNext()
+end
+
+-- the automatic start of the step did not begin a cast: the step lights up, the next click starts it
+function SR.Ready(spell)
+    current.watch, current.ready = nil, spell
+    SR.Refresh()
+    SR.Note(string.format("%s: materials made - click the gold step again", OMQ.ProfCheck.RecipeName(spell)))
+end
+function SR.CheckStarted(w)
+    if current.watch == w then SR.Ready(w.spell) end
+end
+
+-- the player's casts while a chain runs
+function SR.OnCast(event, unit, spell)
+    if unit ~= "player" then return end
+    spell = num(spell)
+    local c, w = current.chain, current.watch
+    if w and (event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_SUCCEEDED") and (not spell or spell == w.spell) then
+        current.watch = nil
+    end
+    local m = c and c.queue[c.at]
+    if not m or (spell and spell ~= m.spell) then return end
+    if event == "UNIT_SPELLCAST_INTERRUPTED" then
+        current.chain = nil
+        SR.Note("Stopped - click the step to go on")
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+        c.left = (c.left or 1) - 1
+        if c.left <= 0 then
+            c.at = c.at + 1
+            if C_Timer and C_Timer.After then
+                C_Timer.After(SR.CHAIN_WAIT, function() if current.chain == c then SR.ChainNext() end end)
+            else SR.ChainNext() end
+        end
+    end
+end
+-- the game blocked the automatic start, or the window closed
+function SR.OnBlocked(addon)
+    if addon == ADDON and current.watch then SR.Ready(current.watch.spell) end
+end
+function SR.StopChain() current.chain, current.watch = nil, nil end
+
 function SR.Click(l, button)
     -- decision 566: a material the route makes itself and that is missing: the click makes it
     if l and l.kind == "mat" and l.make then
@@ -539,7 +648,13 @@ function SR.Click(l, button)
     local spell = l.st[3]
     SR.Select(spell)
     if button == "RightButton" or l.state ~= "cur" or l.learn then return "select" end
-    return SR.Craft(spell, math.ceil((l.left or 0) - 1e-6))
+    local n = math.ceil((l.left or 0) - 1e-6)
+    current.ready, current.watch = nil, nil
+    if n > 0 then
+        local chained = SR.StartChain(current.route, l, n)   -- decision 665
+        if chained ~= nil then return chained end
+    end
+    return SR.Craft(spell, n)
 end
 
 function SR.MakeList(col)
@@ -769,5 +884,19 @@ frame:SetScript("OnEvent", function(_, event, name)
     local pf = host()
     if not (pf and pf:IsShown()) and event ~= "ADDON_LOADED" then return end
     if event == "BAG_UPDATE_DELAYED" then safe(SR.Refresh) else safe(SR.Update) end
+end)
+-- decision 665: the casts of a running chain
+local casts = CreateFrame("Frame")
+for _, e in ipairs({ "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_INTERRUPTED" }) do
+    if casts.RegisterUnitEvent then pcall(casts.RegisterUnitEvent, casts, e, "player") else pcall(casts.RegisterEvent, casts, e) end
+end
+for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "TRADE_SKILL_CLOSE" }) do pcall(casts.RegisterEvent, casts, e) end
+casts:SetScript("OnEvent", function(_, event, a, b, c)
+    local ok, err = pcall(function()
+        if event == "ADDON_ACTION_BLOCKED" then SR.OnBlocked(a)
+        elseif event == "TRADE_SKILL_CLOSE" then SR.StopChain()
+        else SR.OnCast(event, a, c) end
+    end)
+    if not ok then OMQ:Error("skill route", err) end
 end)
 OMQ:On("READY", function() if host() and host():IsShown() then safe(SR.Update) end end)
