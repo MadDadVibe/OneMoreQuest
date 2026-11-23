@@ -108,21 +108,36 @@ local function classHex(class)
     return "ffffffff"
 end
 
--- the cells of the table: header, one row per character, total; { cells = {4 texts}, me = bool }
+-- the cells of the table: header, one row per character, total; { cells = {texts}, me = bool }
+-- a fifth column "Cooldowns" (profession cooldowns, decision 662) only when a character has one
 function A.Rows()
     local list = A.List()
     local myGuid = UnitGUID("player")
     local myRealm = text(call(GetRealmName))
-    local rows = { { cells = { "|cffffd100Character|r", "|cffffd100Level|r", "|cffffd100Gold|r", "|cffffd100Location|r" }, head = true } }
+    local PCD = OMQ.ProfCD
+    local cdText, anyCd = {}, false
+    if PCD and PCD.AltText then
+        for _, e in ipairs(list) do
+            local ok, t = pcall(PCD.AltText, e.guid)
+            if ok and t then cdText[e.guid] = t; anyCd = true end
+        end
+    end
+    local head = { "|cffffd100Character|r", "|cffffd100Level|r", "|cffffd100Gold|r", "|cffffd100Location|r" }
+    if anyCd then head[5] = "|cffffd100Cooldowns|r" end
+    local rows = { { cells = head, head = true } }
     local total = 0
     for _, e in ipairs(list) do
         local name = "|c" .. classHex(e.class) .. e.name .. "|r"
         if e.realm and myRealm and e.realm ~= myRealm then name = name .. " |cff808080(" .. e.realm .. ")|r" end
         local where = e.zone and (e.sub and (e.zone .. " - " .. e.sub) or e.zone) or "|cff808080?|r"
-        rows[#rows + 1] = { cells = { name, tostring(e.level), A.Money(e.money), where }, me = (e.guid == myGuid) }
+        local cells = { name, tostring(e.level), A.Money(e.money), where }
+        if anyCd then cells[5] = cdText[e.guid] or "" end
+        rows[#rows + 1] = { cells = cells, me = (e.guid == myGuid) }
         if type(e.money) == "number" then total = total + e.money end
     end
-    rows[#rows + 1] = { cells = { "|cffffd100Total|r", "", A.Money(total), "" }, total = true }
+    local tot = { "|cffffd100Total|r", "", A.Money(total), "" }
+    if anyCd then tot[5] = "" end
+    rows[#rows + 1] = { cells = tot, total = true }
     return rows, #list
 end
 
@@ -161,9 +176,11 @@ end
 function A.Fill()
     local f = A.Build()
     local rows = A.Rows()
-    local widths = { 0, 0, 0, 0 }
+    local cols = #rows[1].cells
+    local widths = {}
+    for c = 1, cols do widths[c] = 0 end
     for r, row in ipairs(rows) do
-        for c = 1, 4 do
+        for c = 1, cols do
             local fs = cell(f, r, c)
             fs:SetText(row.cells[c])
             fs:Show()
@@ -173,14 +190,18 @@ function A.Fill()
         end
     end
     -- rows left over from a longer list
-    for r = #rows + 1, #f.cells do for c = 1, 4 do f.cells[r][c]:Hide() end end
+    for r = 1, #f.cells do
+        for c, fs in pairs(f.cells[r]) do
+            if r > #rows or c > cols then fs:Hide() end
+        end
+    end
     local x = { A.PAD }
-    for c = 2, 4 do x[c] = x[c - 1] + widths[c - 1] + A.GAP end
+    for c = 2, cols do x[c] = x[c - 1] + widths[c - 1] + A.GAP end
     if f.mark.Hide then f.mark:Hide() end
     for r, row in ipairs(rows) do
         -- the total row sits a little lower, below a gap
         local y = -A.PAD - (r - 1) * A.ROW_H - (row.total and 4 or 0)
-        for c = 1, 4 do
+        for c = 1, cols do
             local fs = f.cells[r][c]
             fs:ClearAllPoints()
             -- level and gold right aligned, name and place left aligned
@@ -199,7 +220,7 @@ function A.Fill()
         end
     end
     f.rows = rows
-    f:SetSize(x[4] + widths[4] + A.PAD, A.PAD * 2 + #rows * A.ROW_H + 4)
+    f:SetSize(x[cols] + widths[cols] + A.PAD, A.PAD * 2 + #rows * A.ROW_H + 4)
     return f
 end
 

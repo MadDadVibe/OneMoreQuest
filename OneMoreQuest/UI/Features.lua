@@ -74,6 +74,7 @@ FE.SECTIONS = {
         { "Cheapest skill-up: two badges mark the cheapest recipe to skill up, by cost and by profit, and every recipe shows its skill-up chance", unlock = "profession" },
         { "Prices of the whole auction house in one scan, plus the vendor prices you have seen; every item tooltip shows the latest price", unlock = "auction" },
         { "Who in the group needs a crafting material, and who carries the materials of a recipe", unlock = "profession" },
+        { "Profession cooldowns: a card when a transmute, Mooncloth, the Salt Shaker or another recipe with a day cooldown is ready again; the cooldowns of your other characters on the XP bar and with /omq cd", unlock = "profession" },
     } },
     { "Fun between the dads", {
         { "Bets between the dads, decided automatically, debts paid by mail", unlock = "bets" },
