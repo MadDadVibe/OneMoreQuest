@@ -621,7 +621,7 @@ local function build(pf)
             if not GameTooltip then return end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:AddLine("Shopping list: cheapest " .. (self.n == "major" and ("skill-ups to " .. (self.to or "")) or (self.n .. " skill-ups")))
-            GameTooltip:AddLine("Materials of the cheapest plan, +40% for green and +20% for yellow crafts so one trip to the auction house is enough.", 1, 1, 1, true)
+            GameTooltip:AddLine("Materials of the cheapest plan with a buffer from the skill-up chances, enough in about 9 of 10 cases, so one trip to the auction house is enough.", 1, 1, 1, true)
             GameTooltip:Show()
         end)
         b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)

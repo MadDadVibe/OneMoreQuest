@@ -130,7 +130,7 @@ end
 -- opts.green: the factor for the crafts of the green part of a step (the shopping list, decision 551)
 function PC.Compute(route, opts)
     local R = OMQ.ProfRecipes or {}
-    local greenF = opts and opts.green
+    local safe = opts and opts.safe
     local own = makers(route)
     local stock = {}
     local res = { id = route.id, name = route.name, brackets = {}, total = 0, complete = true }
@@ -187,7 +187,7 @@ function PC.Compute(route, opts)
         local b = res.brackets[bracketOf(st[1])]
         b.steps[#b.steps + 1] = st
         if st[5] == "D" then b.de = true
-        else craft(b, st[3], st[4] * (greenF and (1 + (greenF - 1) * PC.GreenShare(st)) or 1), 0) end
+        else craft(b, st[3], safe and PC.SafeCrafts(st) or st[4], 0) end
     end
     for _, b in ipairs(res.brackets) do
         res.total = res.total + b.cost
@@ -261,7 +261,38 @@ end
 ----------------------------------------------------------------------
 -- Shopping list of a cell (decision 551)
 ----------------------------------------------------------------------
+-- Decision 660: the buffer of a shopping list comes from the skill-up chances of the step (Data/SkillThresholds.lua):
+-- every skill point needs 1/p crafts on average with a spread of sqrt((1-p)/p^2); the list buys the average plus
+-- PC.SAFE_Z (1.28) times the spread of the whole step, enough in about 9 of 10 cases. Orange points add nothing,
+-- uncertain ones (green, or a short yellow step) a lot. Never less than the guide's crafts. Without thresholds:
+-- the guide's crafts +25% for the green part (the old rule of decision 551).
+PC.SAFE_Z = 1.28
 PC.GREEN = 1.25
+-- the chance of a skill-up at skill s: 1 below yellow, then linear down to 0 at gray
+function PC.Chance(s, t)
+    if s < t[2] then return 1 end
+    if s >= t[4] then return 0 end
+    return (t[4] - s) / (t[4] - t[2])
+end
+-- average crafts and their variance for the skill points from..to-1 of a recipe; nil when a point gives no skill-up
+function PC.StepSpread(spell, from, to)
+    local t = (OMQ.SkillThresholds or {})[spell]
+    if not (t and t[2] and t[4]) then return nil end
+    local mean, var = 0, 0
+    for s = from, to - 1 do
+        local p = PC.Chance(s, t)
+        if p <= 0 then return nil end
+        mean = mean + 1 / p
+        var = var + (1 - p) / (p * p)
+    end
+    return mean, var
+end
+-- the crafts a shopping list buys for a route step
+function PC.SafeCrafts(st)
+    local mean, var = PC.StepSpread(st[3], st[1], st[2])
+    if not mean then return st[4] * (1 + (PC.GREEN - 1) * PC.GreenShare(st)) end
+    return math.max(st[4], mean) + PC.SAFE_Z * math.sqrt(var)
+end
 PC.TOTAL = 0                      -- the column "1-300"
 -- the list of one cell (col = bracket, PC.TOTAL = everything): { key, title, items = { { itemID, n, plan, vendor } } }
 -- The cell is counted alone: a route of only its steps. Amounts are rounded up; plan = the price per piece the check
@@ -271,7 +302,7 @@ function PC.ShoppingList(route, col)
     for _, st in ipairs(route.steps) do
         if col == PC.TOTAL or bracketOf(st[1]) == col then steps[#steps + 1] = st end
     end
-    local res = PC.Compute({ id = route.id, name = route.name, steps = steps }, { green = PC.GREEN })
+    local res = PC.Compute({ id = route.id, name = route.name, steps = steps }, { safe = true })
     local sum = {}
     for _, b in ipairs(res.brackets) do
         for item, n in pairs(b.buy) do sum[item] = (sum[item] or 0) + n end

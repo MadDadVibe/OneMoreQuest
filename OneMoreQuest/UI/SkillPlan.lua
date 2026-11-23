@@ -7,7 +7,8 @@
 -- out. Material costs: the cheaper of the known price (OMQ.ProfCheck.Price) and making it with a recipe of the same
 -- profession from priced materials (3 deep); a made intermediate goes into the shopping list as its raw materials.
 -- Decision 639: an intermediate is made only when buying it costs more than 20% above making it.
--- Shopping lists from the plan buy more than the expected crafts: +40% for crafts at a green skill, +20% at yellow.
+-- Shopping lists from the plan buy more than the expected crafts: decision 660, the average plus 1.28 times the
+-- spread of the step's skill-up chances (enough in about 9 of 10 cases; before: +40% green, +20% yellow).
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -15,7 +16,8 @@ local SP = {}
 OMQ.SkillPlan = SP
 
 SP.DEPTH = 3
-SP.BUY_GREEN, SP.BUY_YELLOW = 1.4, 1.2
+-- decision 660: the list buys the average crafts plus 1.28 times their spread (OMQ.ProfCheck.SAFE_Z), like the cells
+function SP.SAFE_Z() return (OMQ.ProfCheck and OMQ.ProfCheck.SAFE_Z) or 1.28 end
 SP.MAJORS = { 75, 150, 225, 300 }
 
 local function chance(s, t)
@@ -123,14 +125,16 @@ function SP.Plan(line, skill, target, max, learned)
         end
         if not best then plan.stop = "none"; break end
         local ch = chance(s, best.t)
-        local buy = (s >= best.t[3] and SP.BUY_GREEN) or (s >= best.t[2] and SP.BUY_YELLOW) or 1
+        local var = (1 - ch) / (ch * ch)
         local last = plan.steps[#plan.steps]
         if last and last[3] == best.id and last[2] == s then
-            last[2] = s + 1; last[4] = last[4] + 1 / ch; last[5] = last[5] + buy / ch
+            last[2] = s + 1; last[4] = last[4] + 1 / ch; last.var = last.var + var
         else
-            plan.steps[#plan.steps + 1] = { s, s + 1, best.id, 1 / ch, buy / ch,
+            last = { s, s + 1, best.id, 1 / ch, 0, var = var,
                 learn = (not best.known) and { OMQ.ProfSkillUp[best.id][5], best.from } or nil }
+            plan.steps[#plan.steps + 1] = last
         end
+        last[5] = last[4] + SP.SAFE_Z() * math.sqrt(last.var)
         plan.total = plan.total + bestPer
         s = s + 1
     end
