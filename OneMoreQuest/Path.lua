@@ -29,7 +29,7 @@ P.DIRECT = 150              -- closer than this: straight
 P.NEAR = 5                  -- anchors tried around a place
 P.NEAR_MAX = 1200           -- yards to an anchor at most
 P.BOUND = 3000              -- yards searched for the planner
-P.WAY_KEEP = 4                -- targets whose search back is kept
+P.WAY_KEEP = 4                -- targets whose search back over the network is kept
 P.WAY_BOUND = 40000         -- yards searched back from the arrow's target
 P.SLACK, P.SLACK_YD = 1.12, 25   -- a part of the way this close to the straight line is walked straight
 P.ISLAND, P.ISLAND_YD = 1.5, 600 -- target in ground the network does not join (an island): boat, a guess
@@ -591,7 +591,8 @@ end
 -- (P.Stand): the floors I can have walked or dropped to from where I was.
 local CELL = TILE / 64
 P.CELL = CELL
-P.FINE_KEEP = 96                -- unpacked tiles kept
+P.FINE_KEEP = 48                -- unpacked tiles kept (fix 653: was 96, about 18 MB; 32 made long searches unpack
+                                -- the same tiles over and over)
 P.SWIM = 1.5                    -- a swum cell costs this much more
 P.EDGE = 0.4                    -- a ground cell next to a wall costs this much more: ways keep off walls
 P.DROP = 0.5                    -- a safe fall costs this many cells more than the step
@@ -622,6 +623,15 @@ local function nodeRC(n)
     return (cc - c) / 16384, c, k
 end
 P.Node, P.NodeRC = nodeOf, nodeRC
+-- st.g holds the yards (in cells) of every node a search has met: an open node's as they are (0 or more), a
+-- finished (closed) node's as -1 - yards (fix 653: one table less than a separate `closed`, about 10 MB per search)
+local function gOf(g, n)
+    local v = g[n]
+    if v and v < 0 then return -1 - v end
+    return v
+end
+local function isClosed(g, n) local v = g[n]; return v ~= nil and v < 0 end
+P.GOf, P.IsClosed = function(st, n) return gOf(st.g, n) end, function(st, n) return isClosed(st.g, n) end
 
 local rasterTiles, rasterRecs, rasterOrder = {}, {}, {}
 local function unpackTile(str)
@@ -907,7 +917,8 @@ local function sightLine(inst, from, pa, pb, qa, qb, st, glim)
         end
         if st then
             for n in pairs(nxt) do
-                if not (st.closed[n] and st.g[n] <= glim) then nxt[n] = nil end
+                local v = st.g[n]
+                if not (v and v < 0 and -1 - v <= glim) then nxt[n] = nil end
             end
         end
         if not next(nxt) then return nil end
@@ -920,7 +931,7 @@ P.SIGHT_WIDE = 0.4              -- the line keeps this many cells off walls on b
 -- a wide line of sight from node n0 at (pa, pb) to node n1 at (qa, qb): the line itself must end on n1, and a line
 -- on each side of it must be walkable too (ending on n1 or right next to it), so the walk does not brush a wall
 function P.Sees(inst, n0, pa, pb, n1, qa, qb, st)
-    local glim = st and (st.g[n0] or 0) + 1.5
+    local glim = st and (gOf(st.g, n0) or 0) + 1.5
     local from = { [n0] = true }
     local mid = sightLine(inst, from, pa, pb, qa, qb, st, glim)
     if not (mid and mid[n1]) then return false end
@@ -967,6 +978,7 @@ end
 -- It runs in small slices (ROUTE_MS per frame); until it has reached me the arrow uses the network's way.
 P.ROUTES = true
 P.ROUTE_NODES = 150000          -- nodes a search finishes at most
+P.ROUTE_KEEP = 2                -- arrow targets whose fine search is kept (fix 653: was 4; a full search holds ~20 MB)
 P.ROUTE_MS = 3                  -- milliseconds of search per frame
 P.ROUTE_SLICE = 400             -- nodes per slice without a clock
 P.ROUTE_FIRST_MS, P.ROUTE_FIRST_SLICE = 8, 3000   -- the first slice of a search, right when it starts
@@ -982,6 +994,7 @@ P.LOOK = 40                     -- nodes ahead on the way the arrow may head for
 P.CARROT_MOVE, P.CARROT_AGE = 2, 0.3   -- the arrow's point is found again after these yards moved or seconds
 
 local function clockMs() return debugprofilestop and debugprofilestop() or nil end
+
 
 -- a heap of nodes by key, in two arrays
 local function hpush(hk, hv, key, val)
@@ -1045,7 +1058,7 @@ P._Corridor = corridor
 
 -- a new search back from the goal (ga, gb): its state
 local function newSearch(inst, ga, gb, blocks)
-    local st = { inst = inst, ga = ga, gb = gb, g = {}, par = {}, closed = {}, hk = {}, hv = {}, count = 0,
+    local st = { inst = inst, ga = ga, gb = gb, g = {}, par = {}, hk = {}, hv = {}, count = 0,
         blocks = blocks, hr = 0, hc = 0, sources = 0 }
     local r1, c1 = rc(ga, gb)
     local at = P.Floors(inst, r1, c1)
@@ -1073,7 +1086,7 @@ end
 -- point the search at cell (r, c): the keys of the open nodes are made anew (the yards found so far stay true)
 local function aim(st, r, c)
     st.hr, st.hc = r, c
-    local g, closed = st.g, st.closed
+    local g = st.g
     local list = {}
     if st.fresh then
         for n in pairs(g) do list[#list + 1] = n end
@@ -1082,7 +1095,7 @@ local function aim(st, r, c)
         local hv, seen = st.hv, {}
         for i = 1, #hv do
             local n = hv[i]
-            if not closed[n] and not seen[n] then seen[n] = true; list[#list + 1] = n end
+            if not isClosed(g, n) and not seen[n] then seen[n] = true; list[#list + 1] = n end
         end
     end
     local hk, hv = {}, {}
@@ -1099,8 +1112,10 @@ end
 -- the node of the set the search has finished with the fewest yards to the target, nil when none yet
 local function reached(st, set)
     local best, bg = nil, nil
+    local g = st.g
     for n in pairs(set) do
-        if st.closed[n] and (not bg or st.g[n] < bg) then best, bg = n, st.g[n] end
+        local v = g[n]
+        if v and v < 0 and (not bg or -1 - v < bg) then best, bg = n, -1 - v end
     end
     return best
 end
@@ -1108,14 +1123,19 @@ end
 -- run a search for a while toward the nodes of `set`: true when it has ended (they are reached, or it gave up)
 local function stepSearch(st, set, budgetMs, slice)
     if st.ended then return true end
-    local inst, g, par, closed, hk, hv, blocks = st.inst, st.g, st.par, st.closed, st.hk, st.hv, st.blocks
+    local inst, g, par, hk, hv, blocks = st.inst, st.g, st.par, st.hk, st.hv, st.blocks
     local hr, hc = st.hr, st.hc
     local t0 = clockMs()
     local steps = 0
     local SWIM, EDGE, DROP, BLOCK = P.SWIM, P.EDGE, P.DROP, P.ROUTE_BLOCK
     while hk[1] do
         if st.stopAt and hk[1] > st.stopAt then break end
-        if st.count >= P.ROUTE_NODES then st.full = true; break end
+        if st.count >= P.ROUTE_NODES then
+            -- a full search never goes on: its open nodes are not needed any more (fix 653)
+            st.full = true
+            st.hk, st.hv = {}, {}
+            break
+        end
         steps = steps + 1
         if steps % 64 == 0 then
             if t0 then
@@ -1125,8 +1145,9 @@ local function stepSearch(st, set, budgetMs, slice)
             end
         end
         local key, n = hpop(hk, hv)
-        if not closed[n] then
-            closed[n] = true
+        local gi = g[n]
+        if gi >= 0 then
+            g[n] = -1 - gi
             st.count = st.count + 1
             -- I am reached: a little farther still (the ground beside me), then the search rests
             if not st.stopAt and set[n] then st.stopAt = key + P.ROUTE_MARGIN end
@@ -1134,7 +1155,7 @@ local function stepSearch(st, set, budgetMs, slice)
             local cc = (n - k) / 8
             local c = cc % 16384
             local r = (cc - c) / 16384
-            local v, gi = cellAt(inst, r, c), g[n]
+            local v = cellAt(inst, r, c)
             local rec = v >= MORE and recAt(inst, r, c, k) or nil
             local last = rec and #rec or 0
             -- the nodes that walk (or fall) to this one: its walks (they go both ways), the drops onto it
@@ -1153,7 +1174,8 @@ local function stepSearch(st, set, budgetMs, slice)
                     local nr, nc = r, c
                     if d <= 8 then nr, nc = r + DR[d], c + DC[d] end
                     local u = (nr * 16384 + nc) * 8 + f
-                    if not closed[u] and (not blocks or blocks[floor(nr / BLOCK) * 4096 + floor(nc / BLOCK)]) then
+                    local og = g[u]
+                    if not (og and og < 0) and (not blocks or blocks[floor(nr / BLOCK) * 4096 + floor(nc / BLOCK)]) then
                         local stepc = (d > 4 and d <= 8) and SQ2 or 1
                         if d > 8 then stepc = 0 end
                         if drop then stepc = stepc + DROP end
@@ -1166,7 +1188,6 @@ local function stepSearch(st, set, budgetMs, slice)
                             if ur and ur.swum then stepc = stepc * SWIM end
                         end
                         local ng = gi + stepc
-                        local og = g[u]
                         if og == nil or ng < og then
                             g[u], par[u] = ng, n
                             local a, b = nr - hr, nc - hc
@@ -1230,9 +1251,12 @@ local function routeFor(q)
     end
     local x = { qa = q.a, qb = q.b, inst = q.inst }
     table.insert(routes, 1, x)
-    local old = routes[P.WAY_KEEP + 1]
-    routes[P.WAY_KEEP + 1] = nil
-    if old then old.st, old.nx = nil, nil end
+    local keep = P.ROUTE_KEEP
+    for i = #routes, keep + 1, -1 do
+        local old = routes[i]
+        routes[i] = nil
+        old.st, old.nx, old.carrot, old.last = nil, nil, nil, nil
+    end
     return x
 end
 
@@ -1360,7 +1384,7 @@ function P.RouteWay(p, q, w)
     end
     x.fails = nil
     -- the next leg, while I walk on this one
-    local left = st.g[n] * CELL
+    local left = gOf(st.g, n) * CELL
     if st.goal.leg and not x.nx and left < P.ROUTE_RENEW
         and not (x.nxFailed and now >= x.nxFailed and now - x.nxFailed < P.ROUTE_RETRY) then
         startSearch(x, p, q, w, 1, "nx")
@@ -1599,7 +1623,7 @@ function P.Diag()
     if st then
         local n = P._Reached(st, stand)
         out[#out + 1] = string.format("way of the last arrow target: %s, %d cells searched%s%s%s",
-            n and string.format("%.0f yd left", st.g[n] * P.CELL) or (st.ended and "has not reached me" or "searching"), st.count,
+            n and string.format("%.0f yd left", P.GOf(st, n) * P.CELL) or (st.ended and "has not reached me" or "searching"), st.count,
             st.wide == 2 and ", wide corridor" or st.wide == 3 and ", searched anywhere" or "",
             st.goal.leg and ", a leg (the next is searched on the way)" or "",
             st.goal.flight and (", to the flight master " .. st.goal.flight) or "")
