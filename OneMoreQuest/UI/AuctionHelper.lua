@@ -811,6 +811,11 @@ local function postDone()
     AH.Ready()
 end
 -- no sign from the game: did the bags lose it? else it comes back
+-- what a posted flag sticks to over a bag scan: the commodity, or the one bag slot of a single item (fix 664)
+function AH.PostedKey(e)
+    if e.commodity then return e.key end
+    return e.key .. "@" .. tostring(e.bag) .. ":" .. tostring(e.slot)
+end
 local function postCheck()
     local p = posting
     if not p then return end
@@ -1470,11 +1475,13 @@ ev:SetScript("OnEvent", function(_, event, a1)
             AH.Refresh()
         elseif event == "AUCTION_HOUSE_POST_WARNING" then AH.Refresh()
         elseif event == "BAG_UPDATE_DELAYED" then
-            -- keep what is known: the posted flags go with the bag contents
+            -- keep what is known: the posted flags go with the bag contents. A commodity is one entry for all
+            -- of it; a single item (gear) only for its own bag slot, so the other copies of the same crafted
+            -- piece stay on the list (fix 664)
             local keep = {}
-            for _, e in ipairs(entries) do if e.posted then keep[e.key] = true end end
+            for _, e in ipairs(entries) do if e.posted then keep[AH.PostedKey(e)] = true end end
             AH.Scan()
-            for _, e in ipairs(entries) do if keep[e.key] then e.posted = true end end
+            for _, e in ipairs(entries) do if keep[AH.PostedKey(e)] then e.posted = true end end
             postCheck()                                  -- the bags lost it: the post went through
             AH.Refresh()
             AH.Pump()
