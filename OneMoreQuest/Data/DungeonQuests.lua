@@ -8,7 +8,8 @@
 --   Not listed here: class-only quests (paladin, mage, warlock).
 -- The Drowned City: all eight quests from the Factoruide Forever data of 2026-11-13 (decision 594).
 -- Krol'dok Stronghold: nine quests from the Factoruide Forever data of 2026-11-16 (escort quests without a known giver left out).
--- Dungeons that the page does not cover (Alcaz, Blackmaw Hold, Shaper's Terrace, Stratholme, Upper
+-- Alcaz Island Prison: nine quests from the Factoruide Forever data of 2026-11-23 (follow-ups outside only as chain steps).
+-- Dungeons that the page does not cover (Blackmaw Hold, Shaper's Terrace, Stratholme, Upper
 -- Blackrock Spire) keep their earlier values (decision 143: in-game dungeon browser).
 -- Quest: { id, name, level, faction } faction "A" Alliance only, "H" Horde only, nil = both.
 --   alt = further ids of the same quest (the game has one id per faction version); a dad has it with any of them.
@@ -296,6 +297,14 @@ OMQ.Dungeons = {
         { id = 94980, name = "Krol'dok Moulding", level = 41, faction = "A" },
     } },
     { key = "alc", abbr = "Alc", name = "Alcaz Island Prison", min = 48, max = 53, quests = {
+        { id = 95262, name = "The Secret Prison", level = 53, faction = "A" },
+        { id = 96381, name = "A Bit of Wet Work", level = 53, faction = "A" },
+        { id = 96772, name = "The Dragon's Journal", level = 53, faction = "A" },
+        { id = 95309, name = "No Orc Left Behind", level = 53, faction = "H" },
+        { id = 96332, name = "A Little Payback", level = 53, faction = "H" },
+        { id = 96334, name = "Blood Red Bandanas", level = 53, faction = "H" },
+        { id = 95454, name = "The Honor of the Kor'kron", level = 53, faction = "H" },
+        { id = 96335, name = "The Man in the Iron Chains", level = 53 },
     } },
     { key = "bmh", abbr = "BMH", name = "Blackmaw Hold", min = 55, max = 60, quests = {
     } },

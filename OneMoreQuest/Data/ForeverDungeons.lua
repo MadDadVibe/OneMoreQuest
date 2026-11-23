@@ -147,6 +147,24 @@ OMQ.QuestRewards[94982] = { 279852, 279853, 279480 }
 OMQ.QuestRewards[94972] = { 279859, 279860 }
 OMQ.QuestRewards[94984] = { 279854, 279855 }
 OMQ.QuestRewards[94975] = { 267090 }
+-- Alcaz Island Prison (Dustwallow Marsh). Quest chains and outside givers are in Data/ForeverQuests.lua (Factoruide data);
+-- here the two givers inside (Commander Folkar, Mason Connery), the entrance, quest rewards and boss loot. Boss creature
+-- ids: Factoruide; boss loot item ids: forever.warcraftdb.com of 2026-11-23 (unverified in the game). The last boss is
+-- Zarla Ober, who turns into Blazeroar (the game statistic counts Blazeroar).
+S[95454] = { 95454, "The Honor of the Kor'kron", "Commander Folkar", nil, 0, 0.0, 0.0, "inside" }
+S[96335] = { 96335, "The Man in the Iron Chains", "Mason Connery", nil, 0, 0.0, 0.0, "inside" }
+OMQ.DungeonEntrances.alc = OMQ.DungeonEntrances.alc or { { 1445, 75.0, 15.0 } }
+OMQ.DungeonEntranceNotes.alc = "Alcaz Island off the north-east coast of Dustwallow Marsh: swim over, the way in is the basement of the keep on the island"
+OMQ.DungeonLoot.alc = {
+    { 255997, 276737, 276735, 276736 },           -- Tidemistress Ca'zass
+    { 255391, 276732, 276733, 276734 },           -- Overseer Wrex
+    { 256236, 276741, 276742, 276743 },           -- The Questioner
+    { 257016, 276738, 276739, 276740 },           -- Katerina the Cleaner
+    { 255702, 276745, 276746, 276744 },           -- Zarla Ober / Blazeroar
+}
+OMQ.QuestRewards[96332] = { 279824, 279826, 279829 }
+OMQ.QuestRewards[96381] = { 279825, 279826, 279829 }
+OMQ.QuestRewards[96334] = { 279448, 279473 }
 -- extra facts for the dungeon window and the boss kills (Stats/DungeonWin.lua, Stats/Tally.lua)
 -- names: English boss names; rare: rares (not needed for a full clear); opt: bosses only some runs meet (not needed either);
 -- alias: further creature ids the game has for a boss (staging copies, a second form) -> the id of the loot list
@@ -154,12 +172,14 @@ OMQ.DungeonWinExtra = {
     names = { [258905] = "Zul'Alai", [258924] = "Var'Taka", [260042] = "Captain Dreadrise", [260202] = "Deathless Marrow",
               [260243] = "Min'loth the Serpent", [270887] = "Primeval Elemental", [264177] = "Gill", [264172] = "Umbra",
               [258966] = "Slavecrusher Grox", [258972] = "Twilight Commander Zarmok", [259281] = "War Handler Ashka",
-              [258964] = "Nar'gurk", [264773] = "Bossman Toof", [258968] = "Overlord Mugg" },
+              [258964] = "Nar'gurk", [264773] = "Bossman Toof", [258968] = "Overlord Mugg",
+              [255997] = "Tidemistress Ca'zass", [255391] = "Overseer Wrex", [256236] = "The Questioner",
+              [257016] = "Katerina the Cleaner", [255702] = "Blazeroar", [255707] = "Zarla Ober" },
     rare = { [264177] = true, [264172] = true },
     opt = { [270887] = true, [264773] = true },
     alias = { [270882] = 258905, [270883] = 258924, [270884] = 260042, [270885] = 260202, [269586] = 260202,
               [260274] = 260243, [267852] = 260243, [269466] = 260243, [270886] = 260243,
-              [263886] = 270887, [273738] = 270887, [270888] = 264177 },
+              [263886] = 270887, [273738] = 270887, [270888] = 264177, [255707] = 255702 },
 }
 -- the creature id a boss is counted under (its alias resolved)
 function OMQ.BossNpc(id)

@@ -433,8 +433,16 @@ end
 local function byName(name)
     local v = W.Inside()
     if not (v and v.key and str(name)) then return nil end
-    for _, b in ipairs((W.Bosses(v.key))) do
+    local bosses = W.Bosses(v.key)
+    for _, b in ipairs(bosses) do
         if W.Name(b.npc) == name then return b.npc end
+    end
+    -- a second form of a boss under its own name (Zarla Ober -> Blazeroar): the alias names of the hand-kept data
+    local X = extra()
+    for id, nm in pairs(X.names or {}) do
+        if nm == name and canon(id) ~= id then
+            for _, b in ipairs(bosses) do if b.npc == canon(id) then return b.npc end end
+        end
     end
     return nil
 end
