@@ -477,6 +477,11 @@ local function allSections()
               tip = "Soft sounds of the game when something changes: a new alert card or popup, quest tracker progress, a stamp, a milestone or a won bet, and when a bet or vote starts. They follow your effects volume.",
               get = function() return OMQ.db.options.sound == true end,
               set = function(v) OMQ.db.options.sound = v and true or false end },
+            -- decision 655
+            { type = "check", label = "Spell preview tab on the spellbook",
+              tip = "A tab on the right edge of the spellbook (P) folds out which spells and ranks your class trainer teaches at every coming level and what they cost. Hover a spell for its tooltip. It stays closed until you click the tab.",
+              get = function() return OMQ.db.options.spellPreview ~= false end,
+              set = function(v) OMQ.db.options.spellPreview = v and true or false; if OMQ.SpellPreview then pcall(OMQ.SpellPreview.Update) end end },
             { type = "check", label = "Hide Objective Tracker",
               tip = "Hides the quest tracker on the screen. The game shows it again after login, reload and quest changes; the addon hides it each time. Switch off to see it again.",
               get = function() return OMQ.Tracker:Wanted() end,
