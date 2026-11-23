@@ -49,6 +49,15 @@ end
 
 local makeButton
 
+-- the grey quest number also sits on the always shown Group Check icon while the bar is collapsed, so the
+-- dad sees from outside that the Old Quest Check has something to do (decision 650)
+local function showCounts()
+    local n = badges.old and badges.old > 0 and tostring(badges.old) or ""
+    local old, ready = buttons.old, buttons.ready
+    if old and old.count then old.count:SetText(n) end
+    if ready and ready.count then ready.count:SetText(expanded and "" or n) end
+end
+
 local function layout()
     if not frame then return end
     items = currentItems()
@@ -82,6 +91,7 @@ local function layout()
         end
     end
     for id, b in pairs(buttons) do if not used[id] then b:Hide() end end
+    showCounts()
 end
 
 local function click(item)
@@ -138,11 +148,11 @@ function makeButton(item)
         b.label:SetTextColor(0.94, 0.78, 0.38)
     end
     b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-    if item.id == "old" then                                   -- the number of grey quests (decision 601)
+    if item.id == "old" or item.id == "ready" then             -- the number of grey quests (decision 601, 650)
         b.count = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         b.count:SetPoint("BOTTOMRIGHT", -2, 2)
         b.count:SetTextColor(1, 1, 1)
-        b.count:SetText(badges.old and badges.old > 0 and tostring(badges.old) or "")
+        b.count:SetText("")
     end
     b.item = item
     b:SetScript("OnClick", function(self) click(self.item) end)
@@ -151,6 +161,10 @@ function makeButton(item)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:SetText(self.item.label)
         GameTooltip:AddLine(self.item.tip, 0.8, 0.8, 0.8)
+        if self.item.id == "ready" and (badges.old or 0) > 0 then   -- decision 650
+            GameTooltip:AddLine(badges.old == 1 and "1 grey quest - the Old Quest Check in this bar abandons it"
+                or (badges.old .. " grey quests - the Old Quest Check in this bar abandons them"), 1, 0.82, 0)
+        end
         if self.item.id == "bet" and OMQ.Bets and OMQ.Bets.FillTooltip then pcall(OMQ.Bets.FillTooltip, OMQ.Bets, GameTooltip) end
         GameTooltip:Show()
     end)
@@ -199,8 +213,7 @@ function CB:Refresh() layout() end
 function CB:Button(id) return buttons[id] end
 function CB:SetBadge(id, n)
     badges[id] = n
-    local b = buttons[id]
-    if b and b.count then b.count:SetText(n and n > 0 and tostring(n) or "") end
+    showCounts()
 end
 function CB:Badge(id) return badges[id] end
 
