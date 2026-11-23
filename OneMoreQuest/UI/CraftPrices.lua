@@ -755,6 +755,8 @@ end
 -- tooltip's owner. Anything unreadable or secret counts as one piece.
 local function stackCount(tt, data)
     local n
+    local own = tt and rawget(tt, "omqCount")                     -- the recipe item tooltip: pieces per craft (decision 661)
+    if type(own) == "number" and own > 1 then return math.floor(own) end
     local C = C_Item
     if data and data.guid and not isSecret(data.guid) and C and C.GetItemLocation and C.GetStackCount then
         local ok, loc = pcall(C.GetItemLocation, data.guid)

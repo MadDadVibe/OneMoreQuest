@@ -423,6 +423,11 @@ local function allSections()
               tip = "Shows next to every recipe what it earns on the auction house (product price minus 5% cut minus the materials, from the scanned prices and the vendor prices you have seen) and a block with the numbers under the materials of the selected recipe.",
               get = function() return OMQ.db.options.craftProfit ~= false end,
               set = function(v) OMQ.db.options.craftProfit = v and true or false end },
+            -- decision 661
+            { type = "check", label = "Crafted item next to trainer recipes",
+              tip = "Hovering a recipe at a profession trainer shows the item it makes in a second tooltip beside it, with all item lines of the addon (auction house and vendor price, the price of the whole batch). /omq recipetip shows what was found for the last recipe.",
+              get = function() return OMQ.db.options.recipeItemTip ~= false end,
+              set = function(v) OMQ.db.options.recipeItemTip = v and true or false end },
             -- decision 558
             { type = "check", label = "Skill route next to the profession window",
               tip = "A tab on the right edge of the profession window folds out the route of the Profession Check: which recipe to make how often, your current step with the crafts and materials still needed. A click on a step selects its recipe.",
