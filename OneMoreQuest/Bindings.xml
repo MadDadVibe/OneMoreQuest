@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="CLICK OneMoreQuestWeaponSet1:LeftButton" header="ONEMOREQUEST" category="ADDONS"/>
+	<Binding name="CLICK OneMoreQuestWeaponSet2:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK OneMoreQuestWeaponSwap:LeftButton" category="ADDONS"/>
+</Bindings>

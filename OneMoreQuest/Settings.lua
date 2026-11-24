@@ -126,6 +126,13 @@ end
 local function classItems()
     local out = {}
     local function add(list) append(out, list) end
+    -- decision 669: two weapon set buttons right of the main action bar (every class)
+    add({
+        { type = "check", label = "Weapon set buttons",
+          tip = "Two buttons right of the main action bar, one per weapon set (main hand + off hand). Left click puts the set on, also in a fight; Shift + left click stores the weapons you wear now. Sets are filled on their own when your weapons leave no choice. Keys: game key bindings, AddOns > One More Quest. /omq wset shows the sets.",
+          get = function() return OMQ.db.options.weaponSets ~= false end,
+          set = function(v) OMQ.db.options.weaponSets = v and true or false; if OMQ.WeaponSets then OMQ.WeaponSets.Apply() end end },
+    })
     add(mark({ "WARRIOR" }, {
         { type = "check", label = "Battle Shout card at enough rage",
           tip = "Warriors: a card reminds you of Battle Shout when it is missing and you have at least 15 rage, out of a fight. It only reminds and takes no clicks. Follows the master switch of the alerts.",
