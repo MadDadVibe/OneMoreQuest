@@ -1,5 +1,5 @@
 -- One More Quest - disenchant value in the item tooltip (decision 670)
--- Green, blue and purple armor and weapons get one line "Disenchant: ~X": the expected worth of the materials,
+-- Green, blue and purple armor and weapons get the line "Disenchant: ~X" in the price block: the expected worth of the materials,
 -- from the classic disenchant tables (item level, quality, weapon or armor) and the scanned auction prices.
 -- Shift shows every material with its chance. A material without an auction price: "(prices incomplete)".
 local OMQ = OneMoreQuest
@@ -116,43 +116,26 @@ end
 
 function D.On() return not (OMQ.db and OMQ.db.options and OMQ.db.options.disenchantTip == false) end
 
-function D.Lines(id, shift)
+-- the value for the price block of the tooltip (UI/CraftPrices.lua, decision 675) and, with Shift, the materials
+function D.Text(id, shift)
     if not D.On() then return nil end
     local v, rows, missing, priced = D.Value(id)
     if not v then return nil end
-    local lines = {}
-    if priced == 0 then
-        lines[1] = { "Disenchant: no auction prices of the materials yet", 0.6, 0.5, 0.85 }
-    else
-        lines[1] = { "Disenchant: ~" .. money(v) .. (missing and "  (prices incomplete)" or ""), 0.75, 0.55, 1 }
-    end
+    local text
+    if priced == 0 then text = "no auction prices of the materials yet"
+    else text = "~" .. money(v) .. (missing and "  (prices incomplete)" or "") end
+    local more = {}
     if shift then
         for _, r in ipairs(rows) do
             local pct = math.floor(r.chance * 1000 + 0.5) / 10
             local pctText = (pct == math.floor(pct)) and string.format("%d%%", pct) or string.format("%.1f%%", pct)
             local count = r.min == r.max and tostring(r.min) or (r.min .. "-" .. r.max)
-            lines[#lines + 1] = { string.format("   %s  %sx %s  %s", pctText, count, matName(r.item),
+            more[#more + 1] = { string.format("   %s  %sx %s  %s", pctText, count, matName(r.item),
                 r.price and r.price > 0 and money(r.price) .. " each" or "no price"), 0.6, 0.6, 0.6 }
         end
     end
-    return lines
+    return text, more
 end
-
-function D.OnItem(tt, data)
-    if not tt or (tt.IsForbidden and tt:IsForbidden()) then return end
-    local id = data and data.id
-    if not id and tt.GetItem then
-        local _, link = tt:GetItem()
-        id = link and tonumber(tostring(link):match("item:(%d+)"))
-    end
-    if not id or isSecret(id) then return end
-    local lines = D.Lines(id, IsShiftKeyDown and IsShiftKeyDown() or false)
-    if not lines then return end
-    D.last = id
-    for _, l in ipairs(lines) do tt:AddLine(l[1], l[2], l[3], l[4]) end
-    if tt.Show then tt:Show() end
-end
-
 OMQ:RegisterCommand("de", function(arg)
     local id = tonumber(arg or "") or D.last
     if not id then OMQ:Print("de: hover an item or give an item id: /omq de <item id>"); return end
@@ -167,17 +150,4 @@ OMQ:RegisterCommand("de", function(arg)
     end
 end, "de [item id] - disenchant value of the last hovered item", true)
 
-OMQ:On("READY", function()
-    if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType
-        and Enum.TooltipDataType.Item then
-        TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tt, data)
-            local ok, err = pcall(D.OnItem, tt, data)
-            if not ok then OMQ:Error("disenchant tooltip", err) end
-        end)
-    elseif GameTooltip and GameTooltip.HookScript then
-        GameTooltip:HookScript("OnTooltipSetItem", function(tt)
-            local ok, err = pcall(D.OnItem, tt, nil)
-            if not ok then OMQ:Error("disenchant tooltip", err) end
-        end)
-    end
-end)
+-- the tooltip line itself comes with the price block of UI/CraftPrices.lua (decision 675)

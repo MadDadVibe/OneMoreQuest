@@ -737,15 +737,19 @@ function P.LearnVendor()
     return n
 end
 
--- the latest scanned price in every item tooltip (decision 345): the cheaper of auction house and vendor
+-- the latest scanned price in every item tooltip (decision 345)
 local function agoText(at)
     if not at then return "" end
     local d = (time and time() or 0) - at
     if d < 120 then return "just now" end
     if d < 7200 then return math.floor(d / 60) .. " min ago" end
-    if d < 172800 then return math.floor(d / 3600) .. " h ago" end
+    if d < 172800 then
+        local h = math.floor(d / 3600)
+        return h .. (h == 1 and " hour ago" or " hours ago")
+    end
     return math.floor(d / 86400) .. " days ago"
 end
+P._agoText = agoText
 local function money(c)
     local C = OMQ.CraftProfit
     if C and C.Money then return C.Money(c) end
@@ -785,24 +789,80 @@ local function stackCount(tt, data)
     return math.floor(n)
 end
 P._stackCount = stackCount
--- the price of the whole stack like the game's own vendor line, one piece behind it (decision 430)
-function P.TooltipLines(id, count)
-    local a, q, at = P.Auction(id)
-    local v = P.Vendor(id)
-    if not a and not v then return nil end
-    count = math.max(1, math.floor(tonumber(count) or 1))
-    local best, src = P.Cost(id)
-    local tag = src == "vendor" and "  (vendor)" or "  (auction house)"
-    local first = count > 1 and ("Price: " .. money(best * count) .. "  (" .. money(best) .. " each)" .. tag)
-        or ("Price: " .. money(best) .. tag)
-    local lines = { { first, 0.85, 0.75, 0.4 } }
-    if a and v then
-        lines[#lines + 1] = { string.format("Auction house %s - vendor %s%s", money(a), money(v), count > 1 and " each" or ""), 0.6, 0.6, 0.6 }
+-- the price block of the item tooltip (decision 675): a header "OMQ (scanned 4 hours ago, 413 items)", then
+-- Vendor (white, what the vendor pays), Auction (green, the scanned price) and Disenchant (purple, UI/DisenchantValue.lua)
+-- one below the other, the values in one column. A stack shows the whole stack and one piece in brackets (decision 430).
+P.COLORS = { head = { 1, 0.82, 0 }, vendor = { 1, 1, 1 }, auction = { 0.25, 1, 0.25 }, disenchant = { 0.78, 0.45, 1 } }
+-- what the vendor pays for one piece (copper), nil when he buys nothing or the game has not loaded the item
+function P.SellPrice(itemID)
+    local function try(fn)
+        if not fn then return nil end
+        local ok, name, _, _, _, _, _, _, _, _, _, sell = pcall(fn, itemID)
+        if ok and type(name) == "string" and name ~= "" and type(sell) == "number" and not isSecret(sell) then return sell end
     end
+    local v = try(C_Item and C_Item.GetItemInfo)
+    if v == nil then v = try(GetItemInfo) end
+    if type(v) == "number" and v > 0 then return v end
+end
+-- the width of a text in the tooltip font, to put the values in one column; without a font: 6 per letter
+local meter
+local function width(s)
+    if meter == nil then
+        meter = false
+        if UIParent and UIParent.CreateFontString then
+            local ok, fs = pcall(UIParent.CreateFontString, UIParent, nil, "OVERLAY", "GameTooltipText")
+            if ok and fs then meter = fs; if fs.Hide then fs:Hide() end end
+        end
+    end
+    if meter and meter.SetText and meter.GetStringWidth then
+        meter:SetText(s)
+        local ok, w = pcall(meter.GetStringWidth, meter)
+        if ok and type(w) == "number" and not isSecret(w) and w > 0 then return w end
+    end
+    return #s * 6
+end
+-- labels padded with spaces so that the texts behind them start in one column
+function P.PadLabels(labels)
+    local sp = width("a a") - width("aa")
+    if sp <= 0 then sp = 3 end
+    local wide = 0
+    for _, l in ipairs(labels) do wide = math.max(wide, width(l)) end
+    local out = {}
+    for i, l in ipairs(labels) do
+        local n = math.max(1, math.floor((wide - width(l)) / sp + 0.5) + 2)
+        out[i] = l .. string.rep(" ", n)
+    end
+    return out
+end
+local function stackText(each, count)
+    if count > 1 then return money(each * count) .. "  (" .. money(each) .. " each)" end
+    return money(each)
+end
+function P.TooltipLines(id, count, shift)
+    count = math.max(1, math.floor(tonumber(count) or 1))
+    local a, q, at = P.Auction(id)
+    local sell = P.SellPrice(id)
+    local D = OMQ.Disenchant
+    local deText, deMore
+    if D and D.Text then deText, deMore = D.Text(id, shift) end
+    if not a and not sell and not deText then return nil end
+    local head = "OMQ"
     if a then
         local live = store().items[id] and store().items[id].t
-        lines[#lines + 1] = { string.format("%s %s%s", live and "seen" or "scanned", agoText(at), q and (", " .. q .. " on offer") or ""), 0.5, 0.5, 0.5 }
+        head = head .. string.format("  |cff9d9d9d(%s %s%s)|r", live and "seen" or "scanned", agoText(at),
+            q and (", " .. q .. (q == 1 and " item" or " items")) or "")
     end
+    local C = P.COLORS
+    local rows = {}
+    if sell then rows[#rows + 1] = { "Vendor:", stackText(sell, count), C.vendor } end
+    if a then rows[#rows + 1] = { "Auction:", stackText(a, count), C.auction } end
+    if deText then rows[#rows + 1] = { "Disenchant:", deText, C.disenchant }; if D then D.last = id end end
+    local labels = {}
+    for i, r in ipairs(rows) do labels[i] = r[1] end
+    labels = P.PadLabels(labels)
+    local lines = { { head, C.head[1], C.head[2], C.head[3] } }
+    for i, r in ipairs(rows) do lines[#lines + 1] = { labels[i] .. r[2], r[3][1], r[3][2], r[3][3] } end
+    for _, l in ipairs(deMore or {}) do lines[#lines + 1] = l end
     return lines
 end
 local function onTip(tt, data)
@@ -813,7 +873,7 @@ local function onTip(tt, data)
         id = link and tonumber(tostring(link):match("item:(%d+)"))
     end
     if not id or isSecret(id) then return end
-    local lines = P.TooltipLines(id, stackCount(tt, data))
+    local lines = P.TooltipLines(id, stackCount(tt, data), IsShiftKeyDown and IsShiftKeyDown() or false)
     if not lines then return end
     for _, l in ipairs(lines) do tt:AddLine(l[1], l[2], l[3], l[4]) end
     if tt.Show then tt:Show() end
