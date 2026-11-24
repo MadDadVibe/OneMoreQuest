@@ -429,6 +429,22 @@ local function build()
     tb:SetPoint("TOPLEFT", -1, 1)
     tb:SetPoint("BOTTOMRIGHT", 1, -1)
     tb:SetColorTexture(0.64, 0.50, 0.21, 1)
+    -- fix 679: the one button glows green while one of the sets is worn (MadDadVibe)
+    toggle.glow = toggle:CreateTexture(nil, "OVERLAY")
+    toggle.glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+    toggle.glow:SetBlendMode("ADD")
+    toggle.glow:SetVertexColor(0.3, 1, 0.35)
+    toggle.glow:SetPoint("CENTER")
+    toggle.glow:SetSize(W.SIZE * 1.85, W.SIZE * 1.85)
+    toggle.glow:Hide()
+    if toggle.CreateAnimationGroup then
+        local g = toggle:CreateAnimationGroup()
+        g:SetLooping("BOUNCE")
+        local a = g:CreateAnimation("Alpha")
+        a:SetFromAlpha(1); a:SetToAlpha(0.45); a:SetDuration(1.2)
+        a:SetTarget(toggle.glow)
+        toggle.pulse = g
+    end
     toggle.num = toggle:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
     toggle.num:SetPoint("BOTTOMRIGHT", -3, 3)
     local th = toggle:CreateTexture(nil, "HIGHLIGHT")
@@ -489,6 +505,13 @@ function W.Paint()
         toggle.icon:SetTexture(W.SetIcon(set) or W.SetIcon(worn) or W.QUESTION)
         if toggle.icon.SetDesaturated then toggle.icon:SetDesaturated(false) end
         toggle.num:SetText(active and tostring(active) or "")
+        if active then
+            toggle.glow:Show()
+            if toggle.pulse and not toggle.pulse:IsPlaying() then pcall(toggle.pulse.Play, toggle.pulse) end
+        else
+            toggle.glow:Hide()
+            if toggle.pulse then pcall(toggle.pulse.Stop, toggle.pulse) end
+        end
     end
     W.active = active
 end
