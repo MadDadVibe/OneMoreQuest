@@ -2,10 +2,10 @@
 -- Next to "vendor" and "auction house" there is "disenchant". It exists only when a character of the account on the
 -- same realm and faction has Enchanting (read at every login, UI/Alts.lua: OMQDB.alts[guid].ench and .faction), or
 -- when I have it myself. On WoW Forever every enchanter can disenchant every item (no skill or level needed).
--- An item goes this way when its disenchant value (UI/DisenchantValue.lua, scanned auction prices) is at least
--- 5 silver above the better of the two others: the vendor price, or what the auction house brings after its 5% cut
--- (no auction price of the item: the vendor price alone). Such an item is not sold: the vendor helper and the
--- automatic sale leave it, the auction house list keeps it in the bags ("disenchant").
+-- An item goes this way when its disenchant value (UI/DisenchantValue.lua, scanned auction prices) is higher than the
+-- vendor price and not 10 silver or more below the item's auction price (fix 683). The vendor helper and the automatic
+-- sale leave it; the auction house list still offers it unless disenchanting brings more than 5 silver over the
+-- auction price (then it stays in the bags, "disenchant").
 --   * I am no enchanter: only items that are not bound. Within 60 yards of a mailbox OMQ knows (UI places: every
 --     mailbox I or a dad opened once) a card says to send them to the enchanter. At the open mailbox a window lists
 --     them: left click puts the item into a new letter to the enchanter (name and subject filled in, not sent),
@@ -119,18 +119,29 @@ end
 ----------------------------------------------------------------------
 -- Which items
 ----------------------------------------------------------------------
--- the disenchant value when it is at least 5 silver above the better of vendor and auction house; also that other value
+-- the disenchant value when the item goes the third way (fix 683, MadDadVibe): more than the vendor price and not
+-- 10 silver or more below the auction price of the item (the auction house has fees and does not always sell, the
+-- materials sell without them); no auction price: more than the vendor price is enough. Also the higher of the
+-- other two values and the auction price.
+DS.AH_SLACK = 1000               -- disenchant still wins up to 9s99 below the auction price
+DS.AH_SHOW = 500                 -- the auction house list still offers it unless disenchanting brings more than 5s over its price
 function DS.Verdict(id, vendor)
     local D = OMQ.Disenchant
     if not (D and D.Value) then return nil end
     local v, _, _, priced = D.Value(id)
     if not v or not priced or priced == 0 or v <= 0 then return nil end
-    local P, AH = OMQ.Prices, OMQ.AuctionHelper
+    local P = OMQ.Prices
     local p = P and P.Auction and P.Auction(id)
-    local net = (type(p) == "number" and not isSecret(p) and p > 0) and math.floor(p * (1 - ((AH and AH.CUT) or 0.05))) or 0
-    local other = math.max(tonumber(vendor) or 0, net)
-    if v >= other + DS.MIN_LEAD then return v, other end
-    return nil
+    if type(p) ~= "number" or isSecret(p) or p <= 0 then p = nil end
+    vendor = tonumber(vendor) or 0
+    if v <= vendor then return nil end
+    if p and v <= p - DS.AH_SLACK then return nil end
+    return v, math.max(vendor, p or 0), p
+end
+-- the auction house list keeps the item in the bags only when disenchanting brings more than 5 silver over its price
+function DS.HideFromAH(v, _, p)          -- the three values of DS.Takes
+    if not v then return false end
+    return not p or v > p + DS.AH_SHOW
 end
 
 -- the context of the vendor helper (equipment sets, professions...), built once per scan
@@ -248,7 +259,7 @@ function DS.Card()
             sub = "~" .. money(e.value) .. " - left click: " .. spell .. (rest > 0 and string.format(" (%d more)", rest) or ""),
             macro = "/cast " .. spell .. "\n/use " .. e.bag .. " " .. e.slot,
             tipLink = e.link or false,
-            tipLines = { string.format("Disenchant value ~%s, at most %s at the vendor or the auction house.", money(e.value), money(e.other or 0)) },
+            tipLines = { string.format("Disenchant value ~%s; vendor / auction house %s.", money(e.value), money(e.other or 0)) },
         }
     end
     if DS.mailOpen then return nil end

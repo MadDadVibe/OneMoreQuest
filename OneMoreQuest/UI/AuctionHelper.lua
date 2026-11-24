@@ -198,7 +198,7 @@ function AH.Scan()
                         -- a material a dad needs is sold like anything else (decision 301)
                         if upgradeForMe(link, equipLoc) then e.out = "upgrade"
                         -- worth more disenchanted (decision 675): stays in the bags for the enchanter
-                        elseif deMode and DS.Takes(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, nil, deMode) then
+                        elseif deMode and DS.HideFromAH(DS.Takes(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, nil, deMode)) then
                             e.out = "disenchant"
                         end
                         local k = A.GetItemKeyFromItem and A.GetItemKeyFromItem(loc)
