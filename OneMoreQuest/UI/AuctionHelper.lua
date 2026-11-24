@@ -167,6 +167,8 @@ function AH.Scan()
     local A = CA()
     if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo and A) then return entries end
     local byId = {}
+    local DS = OMQ.DESell
+    local deMode = DS and DS.Mode and DS.Mode()
     for bag = 0, OMQ.LastBag() do
         for slot = 1, C.GetContainerNumSlots(bag) or 0 do
             local it = C.GetContainerItemInfo(bag, slot)
@@ -194,7 +196,11 @@ function AH.Scan()
                                     commodity = comm, equipLoc = equipLoc, classID = classID }
                         if comm then byId[it.itemID] = e end
                         -- a material a dad needs is sold like anything else (decision 301)
-                        if upgradeForMe(link, equipLoc) then e.out = "upgrade" end
+                        if upgradeForMe(link, equipLoc) then e.out = "upgrade"
+                        -- worth more disenchanted (decision 675): stays in the bags for the enchanter
+                        elseif deMode and DS.Takes(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, nil, deMode) then
+                            e.out = "disenchant"
+                        end
                         local k = A.GetItemKeyFromItem and A.GetItemKeyFromItem(loc)
                         e.itemKey = k or (A.MakeItemKey and A.MakeItemKey(it.itemID)) or { itemID = it.itemID }
                         e.key = comm and ("c" .. it.itemID) or ("i" .. keyString(e.itemKey))
@@ -1120,7 +1126,7 @@ local function outText(L)
     for i = 1, math.min(3, #L.out) do
         local e = L.out[i]
         local low = e.lowGain and "under 3s more" or string.format("under +%d%%", math.floor(((e.margin or AH.MARGIN) - 1) * 100 + 0.5))
-        local why = ({ low = low, noprice = "no price yet", upgrade = "upgrade for you", needed = "a dad needs it" })[e.state] or e.state
+        local why = ({ low = low, noprice = "no price yet", upgrade = "upgrade for you", disenchant = "worth more disenchanted", needed = "a dad needs it" })[e.state] or e.state
         names[#names + 1] = e.name .. " (" .. why .. ")"
     end
     local more = #L.out > 3 and (" and " .. (#L.out - 3) .. " more") or ""

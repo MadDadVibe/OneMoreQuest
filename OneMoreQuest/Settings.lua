@@ -33,6 +33,7 @@ local LABEL = {
     soulstone = "Healer in a dungeon: ask the warlock for a Soulstone",
     ghostwolf = "Ghost Wolf while running (instant wolf)",
     shadowform = "Shadowform missing (out of a fight)",
+    disenchant = "Disenchant: items worth more disenchanted (send to your enchanter / disenchant)",
 }
 
 -- decision 586: the class tab. These alert rules live there instead of the alerts tab, and every item of the

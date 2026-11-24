@@ -337,11 +337,20 @@ end
 -- the list: { bag, slot, itemID, link, name, icon, quality, qty, price, why, reason }
 local list = {}
 V._list = list
+-- what V.Reason needs to know besides the item (also asked by UI/DisenchantSell.lua)
+function V.BaseContext()
+    return { sets = setItems(), food = V.BestFood(), profs = V.MyProfs(), potions = V.BestPotions(), counts = {} }
+end
+-- kept with a right click: never offered
+function V.Kept(id) return id and db().keep[id] and true or false end
+
 function V.Scan()
     for i = #list, 1, -1 do list[i] = nil end
     local C = C_Container
     if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return list end
-    local ctx = { sets = setItems(), food = V.BestFood(), profs = V.MyProfs(), potions = V.BestPotions(), counts = {} }
+    local ctx = V.BaseContext()
+    local DS = OMQ.DESell
+    local deMode = DS and DS.Mode and DS.Mode()
     for bag = 0, OMQ.LastBag() do                         -- how many of each I carry (fix 593)
         for slot = 1, C.GetContainerNumSlots(bag) or 0 do
             local it = C.GetContainerItemInfo(bag, slot)
@@ -360,6 +369,10 @@ function V.Scan()
                 if name then
                     local why, reason = V.Reason(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, ctx)
                     if why and V.BoughtBack(it.itemID) then why, reason = "back", "you bought it back - sold only with a click" end
+                    -- worth more disenchanted (decision 675): not sold here
+                    if why and deMode and DS.Takes(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, ctx, deMode) then
+                        why = nil
+                    end
                     if why then
                         local qty = it.stackCount or 1
                         list[#list + 1] = { bag = bag, slot = slot, itemID = it.itemID, link = link, name = name,

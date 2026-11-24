@@ -32,6 +32,24 @@ local function call(fn, ...)
     if ok then return a, b end
 end
 
+-- my Enchanting skill (a number), false when the professions are readable and Enchanting is not among them,
+-- nil when the game does not tell yet (decision 675)
+function A.Enchanting()
+    local M = OMQ.Alerts
+    local lines = M and M.ProfessionLines and M.ProfessionLines()
+    if not lines then
+        if type(GetProfessions) == "function" then
+            local ok, a, b = pcall(GetProfessions)
+            if ok and a == nil and b == nil and A.moneyKnown then return false end
+        end
+        return nil
+    end
+    for _, l in ipairs(lines) do
+        if l.key == "Enchanting" then return type(l.rank) == "number" and not secret(l.rank) and l.rank or 0 end
+    end
+    return false
+end
+
 -- writes the row of the character I play; level from PLAYER_LEVEL_UP (UnitLevel can lag one event).
 -- src: the event. Gold is only taken while the game knows it (fix 587): at PLAYER_LOGOUT and before the first
 -- PLAYER_ENTERING_WORLD GetMoney can say 0, which wrote over the gold of every character that logged out.
@@ -49,6 +67,10 @@ function A.Save(level, src)
     local _, class = call(UnitClass, "player")
     e.class = text(class) or e.class
     e.realm = text(call(GetRealmName)) or e.realm
+    -- faction and Enchanting skill (decision 675: who disenchants for the account; mail stays inside realm and faction)
+    e.faction = text(call(UnitFactionGroup, "player")) or e.faction
+    local ench = A.Enchanting()
+    if ench ~= nil then e.ench = ench or nil end
     local lvl = level or call(UnitLevel, "player")
     if type(lvl) == "number" and not secret(lvl) and lvl > 0 then e.level = lvl end
     if src == "PLAYER_ENTERING_WORLD" or src == "PLAYER_MONEY" then A.moneyKnown = true end
@@ -350,6 +372,7 @@ ev:RegisterEvent("ZONE_CHANGED")
 ev:RegisterEvent("ZONE_CHANGED_INDOORS")
 ev:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 ev:RegisterEvent("PLAYER_LOGOUT")
+pcall(ev.RegisterEvent, ev, "SKILL_LINES_CHANGED")
 ev:SetScript("OnEvent", function(_, event, a1)
     if event == "PLAYER_ENTERING_WORLD" then A.Hook() end
     if event == "PLAYER_LEVEL_UP" then A.Save(type(a1) == "number" and not secret(a1) and a1 or nil, event)
