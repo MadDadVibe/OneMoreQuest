@@ -327,7 +327,7 @@ local function makeButton(i)
     b.glow = b:CreateTexture(nil, "OVERLAY")
     b.glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
     b.glow:SetBlendMode("ADD")
-    b.glow:SetVertexColor(1, 0.82, 0.3)
+    b.glow:SetVertexColor(0.3, 1, 0.35)          -- fix 674: green (MadDadVibe), was yellow
     b.glow:SetPoint("CENTER")
     b.glow:SetSize(W.SIZE * 1.85, W.SIZE * 1.85)
     b.glow:Hide()
