@@ -435,6 +435,11 @@ local function allSections()
               tip = "Hovering a recipe at a profession trainer shows the item it makes in a second tooltip beside it, with all item lines of the addon (auction house and vendor price, the price of the whole batch). /omq recipetip shows what was found for the last recipe.",
               get = function() return OMQ.db.options.recipeItemTip ~= false end,
               set = function(v) OMQ.db.options.recipeItemTip = v and true or false end },
+            -- decision 670
+            { type = "check", label = "Disenchant value in the item tooltip",
+              tip = "Green, blue and purple armor and weapons show what disenchanting them is worth: the expected materials (by item level, quality, weapon or armor) times their scanned auction prices. Hold Shift for each material with its chance. /omq de <item id> prints the numbers.",
+              get = function() return OMQ.db.options.disenchantTip ~= false end,
+              set = function(v) OMQ.db.options.disenchantTip = v and true or false end },
             -- decision 558
             { type = "check", label = "Skill route next to the profession window",
               tip = "A tab on the right edge of the profession window folds out the route of the Profession Check: which recipe to make how often, your current step with the crafts and materials still needed. A click on a step selects its recipe.",
