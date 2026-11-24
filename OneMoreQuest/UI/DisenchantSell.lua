@@ -77,7 +77,26 @@ function DS.KnowsSpell()
     if IsSpellKnown and call(IsSpellKnown, DS.SPELL) then return true end
     return false
 end
-function DS.MeEnchanter() return DS.MyEnchanting() ~= nil or DS.KnowsSpell() end
+-- my own row of the characters table (UI/Alts.lua)
+local function myRow()
+    local A = OMQ.Alts
+    local store = A and A.Store and A.Store()
+    local me = UnitGUID and call(UnitGUID, "player")
+    return store and me and store[me] or nil
+end
+-- fix 686: the skill stored at an earlier login counts too (the profession list is not always readable)
+function DS.MeEnchanter()
+    if DS.MyEnchanting() ~= nil or DS.KnowsSpell() then return true end
+    local r = myRow()
+    return r ~= nil and type(r.ench) == "number"
+end
+function DS.MyFaction()
+    local A = OMQ.Alts
+    local f = A and A.Faction and A.Faction()
+    if f then return f end
+    local r = myRow()
+    return r and r.faction or nil
+end
 
 function DS.SpellName()
     local n = (C_Spell and C_Spell.GetSpellName and call(C_Spell.GetSpellName, DS.SPELL))
@@ -91,17 +110,20 @@ function DS.Twink()
     local A = OMQ.Alts
     local store = A and A.Store and A.Store()
     if not store then return nil end
-    local me = UnitGUID and UnitGUID("player")
+    local me = UnitGUID and call(UnitGUID, "player")
     local realm = call(GetRealmName)
-    local faction = UnitFactionGroup and call(UnitFactionGroup, "player")
+    local faction = DS.MyFaction()
     local best
     for guid, e in pairs(store) do
+        -- fix 686: an unknown faction (mine or the row's) does not rule a character out
         if guid ~= me and type(e) == "table" and type(e.ench) == "number" and type(e.name) == "string"
-            and e.realm == realm and e.faction == faction then
+            and (not realm or not e.realm or e.realm == realm)
+            and (not faction or not e.faction or e.faction == faction) then
             local name = e.name:match("^(%S+)")
             if name and (not best or e.ench > best.ench or (e.ench == best.ench and (e.level or 0) > (best.level or 0))
                 or (e.ench == best.ench and (e.level or 0) == (best.level or 0) and name < best.name)) then
-                best = { guid = guid, name = name, ench = e.ench, class = e.class, level = e.level }
+                -- the mail goes to the whole name: WoW Forever names have two parts (fix 686)
+                best = { guid = guid, name = name, full = e.name, ench = e.ench, class = e.class, level = e.level }
             end
         end
     end
@@ -331,7 +353,8 @@ end
 local function sendTab(tw)
     if _G.MailFrameTab_OnClick then pcall(_G.MailFrameTab_OnClick, nil, 2) end
     local to = editText("SendMailNameEditBox")
-    if to ~= tw.name then setEdit("SendMailNameEditBox", tw.name) end
+    local full = tw.full or tw.name
+    if to ~= full then setEdit("SendMailNameEditBox", full) end
     setEdit("SendMailSubjectEditBox", DS.SUBJECT)
 end
 
@@ -412,7 +435,7 @@ function DS.SendAll()
     if not tw or #list == 0 then return 0 end
     local q = {}
     for _, e in ipairs(list) do q[#q + 1] = e end
-    DS.sending = { to = tw.name, queue = q, letters = 0, items = 0, parts = math.ceil(#q / DS.PER_MAIL) }
+    DS.sending = { to = tw.full or tw.name, queue = q, letters = 0, items = 0, parts = math.ceil(#q / DS.PER_MAIL) }
     sendTab(tw)
     sendNext()
     return #q
@@ -611,6 +634,7 @@ OMQ:RegisterCommand("desell", function()
     OMQ:Print("desell: " .. (mode == "self" and "you have Enchanting - you disenchant yourself"
         or mode == "mail" and ("enchanter " .. tw.name .. " (skill " .. tw.ench .. ")")
         or (DS.On() and "no enchanter on this realm and faction (log in with the enchanter once)" or "switched off")))
+    OMQ:Print(string.format("desell: you: %s, %s", tostring(call(GetRealmName)), tostring(DS.MyFaction() or "faction unknown")))
     -- what every character of the account wrote (fix 676)
     local A = OMQ.Alts
     for _, e in pairs(A and A.Store and A.Store() or {}) do

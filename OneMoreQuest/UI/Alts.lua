@@ -32,6 +32,17 @@ local function call(fn, ...)
     if ok then return a, b end
 end
 
+-- my faction ("Alliance"/"Horde"): the game's answer, else from my race (fix 686: a character's row stayed without one)
+A.RACE_FACTION = { Human = "Alliance", Dwarf = "Alliance", NightElf = "Alliance", Gnome = "Alliance", Draenei = "Alliance",
+                   Orc = "Horde", Scourge = "Horde", Undead = "Horde", Tauren = "Horde", Troll = "Horde", BloodElf = "Horde" }
+function A.Faction()
+    local f = text(call(UnitFactionGroup, "player"))
+    if f == "Alliance" or f == "Horde" then return f end
+    local _, race = call(UnitRace, "player")
+    race = text(race)
+    return race and A.RACE_FACTION[race] or nil
+end
+
 -- my Enchanting skill (a number; 0 when only the Disenchant spell tells), false when the professions are listed and
 -- Enchanting is not among them and Disenchant is not known, nil when the game does not tell (decision 675, fix 676:
 -- an empty or missing profession list at login or logout never clears a stored skill)
@@ -65,7 +76,7 @@ function A.Save(level, src)
     e.class = text(class) or e.class
     e.realm = text(call(GetRealmName)) or e.realm
     -- faction and Enchanting skill (decision 675: who disenchants for the account; mail stays inside realm and faction)
-    e.faction = text(call(UnitFactionGroup, "player")) or e.faction
+    e.faction = A.Faction() or e.faction
     if src ~= "PLAYER_LOGOUT" then
         local ench = A.Enchanting()
         -- 0 = only the spell tells: a skill read before stays
