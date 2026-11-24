@@ -32,22 +32,19 @@ local function call(fn, ...)
     if ok then return a, b end
 end
 
--- my Enchanting skill (a number), false when the professions are readable and Enchanting is not among them,
--- nil when the game does not tell yet (decision 675)
+-- my Enchanting skill (a number; 0 when only the Disenchant spell tells), false when the professions are listed and
+-- Enchanting is not among them and Disenchant is not known, nil when the game does not tell (decision 675, fix 676:
+-- an empty or missing profession list at login or logout never clears a stored skill)
 function A.Enchanting()
     local M = OMQ.Alerts
     local lines = M and M.ProfessionLines and M.ProfessionLines()
-    if not lines then
-        if type(GetProfessions) == "function" then
-            local ok, a, b = pcall(GetProfessions)
-            if ok and a == nil and b == nil and A.moneyKnown then return false end
-        end
-        return nil
-    end
-    for _, l in ipairs(lines) do
+    for _, l in ipairs(lines or {}) do
         if l.key == "Enchanting" then return type(l.rank) == "number" and not secret(l.rank) and l.rank or 0 end
     end
-    return false
+    local DS = OMQ.DESell
+    if DS and DS.KnowsSpell and DS.KnowsSpell() then return 0 end
+    if type(lines) == "table" and #lines > 0 then return false end
+    return nil
 end
 
 -- writes the row of the character I play; level from PLAYER_LEVEL_UP (UnitLevel can lag one event).
@@ -69,8 +66,12 @@ function A.Save(level, src)
     e.realm = text(call(GetRealmName)) or e.realm
     -- faction and Enchanting skill (decision 675: who disenchants for the account; mail stays inside realm and faction)
     e.faction = text(call(UnitFactionGroup, "player")) or e.faction
-    local ench = A.Enchanting()
-    if ench ~= nil then e.ench = ench or nil end
+    if src ~= "PLAYER_LOGOUT" then
+        local ench = A.Enchanting()
+        -- 0 = only the spell tells: a skill read before stays
+        if ench == 0 and type(e.ench) == "number" then ench = e.ench end
+        if ench ~= nil then e.ench = ench or nil end
+    end
     local lvl = level or call(UnitLevel, "player")
     if type(lvl) == "number" and not secret(lvl) and lvl > 0 then e.level = lvl end
     if src == "PLAYER_ENTERING_WORLD" or src == "PLAYER_MONEY" then A.moneyKnown = true end

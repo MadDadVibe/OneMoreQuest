@@ -587,6 +587,14 @@ OMQ:RegisterCommand("desell", function()
     OMQ:Print("desell: " .. (mode == "self" and "you have Enchanting - you disenchant yourself"
         or mode == "mail" and ("enchanter " .. tw.name .. " (skill " .. tw.ench .. ")")
         or (DS.On() and "no enchanter on this realm and faction (log in with the enchanter once)" or "switched off")))
+    -- what every character of the account wrote (fix 676)
+    local A = OMQ.Alts
+    for _, e in pairs(A and A.Store and A.Store() or {}) do
+        if type(e) == "table" and e.name then
+            OMQ:Print(string.format("  %s: %s, %s, Enchanting %s", e.name, tostring(e.realm), tostring(e.faction or "faction unknown - log in once"),
+                type(e.ench) == "number" and tostring(e.ench) or "no"))
+        end
+    end
     if not mode then return end
     local l = DS.Scan(mode)
     local d = DS.MailboxDistance()
