@@ -7,17 +7,17 @@
 -- Prices: the auction house scan (UI/CraftPrices.lua), a vendor price seen at a merchant, or the Forever vendor
 -- price of the item (Data/ProfRoutes.lua) - the cheapest of them. A price that nobody knows is never guessed:
 -- the cell shows the known sum and a grey "+?", and the tooltip names what is missing.
--- Intermediate products that the route makes itself (bolts, blasting powder, cured hides ...) count only through
--- their raw materials; what the route needs more of than it made is made from raw materials, too. Any other item
--- of the same profession without a price is made from its materials as well.
+-- Intermediate products that the route's skill steps make (bolts, blasting powder, cured hides ...) are used up by
+-- the later steps; what the route needs more of is bought finished (decision 673).
 -- Step 2 (decision 551): a click on a cell makes a shopping list of its materials for the Auction Helper's Shopping tab
 -- (UI/Shopping.lua). Decision 658: recipes of the cell's steps that are bought (vendor or drop recipes the character
 -- does not know yet and does not carry) go on the list too, one each, below "Buy at a vendor" unless the auction house
 -- is known to be cheaper. The list counts the cell alone (no intermediates left over from the cells before it) and adds 25%
 -- to the crafts of the part of a step where the recipe is already green (Data/SkillThresholds.lua).
--- Decision 639: an intermediate (bolts, blasting powder, cured hides ...) that the route needs beyond its own skill
--- crafts is bought finished when it costs at most 20% more than making it (PC.MAKE_MARGIN); only when buying is
--- dearer than that is it made from its raw materials. Making takes long, a few coppers more are worth it.
+-- Decision 673 (replaces 639): an intermediate (bolts, Medium Leather, cured hides, blasting powder ...) that the route
+-- needs beyond what its own skill crafts make is always bought finished, never made from its raw materials - also
+-- when nobody knows its price (it then stays a missing price). Raw materials are only bought for the recipes that
+-- give the skill-ups themselves. Cell costs and shopping lists count the same way.
 -- Decision 635: the tooltip of a cell also says what the crafted items bring back when they are sold - at the vendor
 -- (the game's sell price) and, as an expectation, at the auction house (the scanned price minus the 5% cut). Only
 -- what the cell's steps make and the route does not use up later counts (no bolts or cured hides).
@@ -28,7 +28,6 @@ local PC = {}
 OMQ.ProfCheck = PC
 
 PC.BRACKETS = { { 1, 75 }, { 75, 150 }, { 150, 225 }, { 225, 300 } }
-PC.DEPTH = 3                          -- how deep a missing price is replaced by the materials of the item
 
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
 
@@ -58,96 +57,28 @@ local function bracketOf(from)
     return #PC.BRACKETS
 end
 
--- the recipe of the same profession that makes an item: { [item] = recipe }
-local function makers(route)
-    local R, out = OMQ.ProfRecipes or {}, {}
-    for _, st in ipairs(route.steps) do
-        local r = R[st[3]]
-        if r and r[1] and r[1] > 0 then out[r[1]] = out[r[1]] or st[3] end
-    end
-    return out
-end
-local fallbackMakers
-local function fallbackMaker(item)
-    if not fallbackMakers then
-        fallbackMakers = {}
-        local ids = {}
-        for id in pairs(OMQ.ProfRecipes or {}) do ids[#ids + 1] = id end
-        table.sort(ids)
-        for _, id in ipairs(ids) do
-            local r = OMQ.ProfRecipes[id]
-            if r[1] and r[1] > 0 and not fallbackMakers[r[1]] then fallbackMakers[r[1]] = id end
-        end
-    end
-    return fallbackMakers[item]
-end
-
--- an item has a price, or the profession makes it from materials that have one (fix 539: Medium Leather without a
--- price became 3500 Ruined Leather Scraps without a price; now the item itself stays the missing one)
-function PC.CanPrice(item, depth)
-    depth = depth or 0
-    if PC.Price(item) then return true end
-    local other = fallbackMaker(item)
-    local r = other and (OMQ.ProfRecipes or {})[other]
-    if not r or depth >= PC.DEPTH then return false end
-    for k = 1, #r[3], 2 do
-        if not PC.CanPrice(r[3][k], depth + 1) then return false end
-    end
-    return true
-end
-
--- what one piece costs when this recipe makes it from priced materials; nil when a material has no price
-function PC.MakeCost(recipe, depth)
-    local r = (OMQ.ProfRecipes or {})[recipe]
-    if not r then return nil end
-    local sum = 0
-    for k = 1, #r[3], 2 do
-        local item = r[3][k]
-        local p = PC.Price(item)
-        if not p and (depth or 0) + 1 < PC.DEPTH and PC.CanPrice(item, (depth or 0) + 1) then
-            p = PC.MakeCost(fallbackMaker(item), (depth or 0) + 1)
-        end
-        if not p then return nil end
-        sum = sum + p * r[3][k + 1]
-    end
-    return sum / (r[2] or 1)
-end
-
--- buy the finished item or make it (decision 639): make only when buying costs more than 20% above making it.
--- No known buy price: make it. A buy price but no price for making it: buy it.
-PC.MAKE_MARGIN = 1.2
-function PC.MakeBeats(buy, make)
-    if not buy then return true end
-    if not make then return false end
-    return buy > make * PC.MAKE_MARGIN
-end
-function PC.PreferMake(item, recipe, depth)
-    return PC.MakeBeats(PC.Price(item), recipe and PC.MakeCost(recipe, depth or 0))
-end
-
 -- one profession: { id, name, brackets = { { cost, missing = {item = n}, buy = {item = n}, price = {item = p},
 -- steps = {...}, de = true }, ... }, total, complete }
 -- opts.green: the factor for the crafts of the green part of a step (the shopping list, decision 551)
 function PC.Compute(route, opts)
     local R = OMQ.ProfRecipes or {}
     local safe = opts and opts.safe
-    local own = makers(route)
     local stock = {}
     local res = { id = route.id, name = route.name, brackets = {}, total = 0, complete = true }
     for i = 1, #PC.BRACKETS do
         res.brackets[i] = { cost = 0, missing = {}, buy = {}, price = {}, steps = {}, nMissing = 0, made = {}, products = {} }
     end
     local need
-    local function craft(b, recipe, n, depth)
+    local function craft(b, recipe, n)
         local r = R[recipe]
         if not r then return end
-        for k = 1, #r[3], 2 do need(b, r[3][k], r[3][k + 1] * n, depth) end
+        for k = 1, #r[3], 2 do need(b, r[3][k], r[3][k + 1] * n) end
         if r[1] and r[1] > 0 then
             stock[r[1]] = (stock[r[1]] or 0) + (r[2] or 1) * n
-            if depth == 0 then b.made[r[1]] = (b.made[r[1]] or 0) + (r[2] or 1) * n end   -- a step's own crafts
+            b.made[r[1]] = (b.made[r[1]] or 0) + (r[2] or 1) * n
         end
     end
-    need = function(b, item, amount, depth)
+    need = function(b, item, amount)
         local have = stock[item] or 0
         if have > 0 then
             local take = math.min(have, amount)
@@ -155,28 +86,11 @@ function PC.Compute(route, opts)
             amount = amount - take
         end
         if amount <= 1e-6 then return end
-        local p = PC.Price(item)
-        local mine = own[item]
-        if mine and depth < PC.DEPTH then        -- the route makes it itself: more of it from the raw materials,
-            local make = PC.MakeCost(mine, depth)  -- unless buying costs at most 20% more (decision 639) or making it
-            if make and PC.MakeBeats(p, make) then  -- has no price (fix 539)
-                local r = R[mine]
-                craft(b, mine, amount / (r[2] or 1), depth + 1)
-                stock[item] = (stock[item] or 0) - amount
-                return
-            end
-        end
+        local p = PC.Price(item)                -- decision 673: what the skill crafts did not make is bought finished
         if p then
             b.cost = b.cost + p * amount
             b.buy[item] = (b.buy[item] or 0) + amount
             b.price[item] = p
-            return
-        end
-        local other = fallbackMaker(item)
-        if other and depth < PC.DEPTH and PC.CanPrice(item, depth) then   -- no price, but it can be made from priced materials
-            local r = R[other]
-            craft(b, other, amount / (r[2] or 1), depth + 1)
-            stock[item] = (stock[item] or 0) - amount
             return
         end
         b.buy[item] = (b.buy[item] or 0) + amount
@@ -187,7 +101,7 @@ function PC.Compute(route, opts)
         local b = res.brackets[bracketOf(st[1])]
         b.steps[#b.steps + 1] = st
         if st[5] == "D" then b.de = true
-        else craft(b, st[3], safe and PC.SafeCrafts(st) or st[4], 0) end
+        else craft(b, st[3], safe and PC.SafeCrafts(st) or st[4]) end
     end
     for _, b in ipairs(res.brackets) do
         res.total = res.total + b.cost

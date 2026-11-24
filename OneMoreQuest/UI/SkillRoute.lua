@@ -183,9 +183,8 @@ function SR.Later(route)
     for i, e in pairs(out) do
         local made = (route.steps[i][4] or 0) * e.yield
         e.extra = math.max(0, math.ceil((e.need - made) / e.yield - 1e-6))
-        -- decision 639: what the skill crafts do not make is bought when that costs at most 20% more than making it
-        local PC = OMQ.ProfCheck
-        if e.extra > 0 and PC and not PC.PreferMake(e.item, route.steps[i][3]) then e.extra, e.buy = 0, true end
+        -- decision 673: what the skill crafts do not make is bought finished, never made in extra crafts
+        if e.extra > 0 then e.extra, e.buy = 0, true end
     end
     return out
 end
@@ -239,8 +238,10 @@ function SR.Lines(route, skill)
                     local m = { kind = "mat", item = item, need = r[3][k + 1] * n, have = bagCount(item),
                                 vendor = (from == "vendor") or nil }
                     local mi, mspell, my = makerBefore(route, item, idx)
-                    if mi and m.have < m.need and OMQ.ProfCheck.PreferMake(item, mspell) then   -- decision 639
-                        m.make, m.makeSpell = math.ceil((m.need - m.have) / my - 1e-6), mspell
+                    -- decision 673: made only when the raw materials for it are in the bags, else bought finished
+                    local can = mi and m.have < m.need and SR.Learned(mspell) ~= false and SR.Craftable(mspell)
+                    if can and can > 0 then
+                        m.make, m.makeSpell = math.min(math.ceil((m.need - m.have) / my - 1e-6), can), mspell
                     end
                     out[#out + 1] = m
                 end
@@ -505,16 +506,31 @@ function SR.RowTooltip(b)
             lines[#lines + 1] = string.format("%d-%d %s: %d", st[1], st[2], OMQ.ProfCheck.RecipeName(st[3]), u[2])
         end
         if l.later.extra > 0 then lines[#lines + 1] = string.format("Make %d more than the skill needs.", l.later.extra) end
-        if l.later.buy then lines[#lines + 1] = "Buy the rest finished: not more than 20% dearer than making it." end
+        if l.later.buy then lines[#lines + 1] = "Buy the rest finished (the shopping lists do, too)." end
     elseif l.kind == "mat" and l.make then
         lines[1] = string.format("Click: make %d %s", l.make, OMQ.ProfCheck.ItemName(l.item))
         lines[2] = "Right click: only select the recipe"
+    elseif l.kind == "head" and l.plan then
+        return SR.CostTooltip(b, l)
     end
     if #lines == 0 then return nil end
     GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
     for i, t in ipairs(lines) do GameTooltip:AddLine(t, i == 1 and 1 or 0.9, i == 1 and 0.82 or 0.9, i == 1 and 0.4 or 0.9, true) end
     GameTooltip:Show()
     return lines
+end
+
+-- decision 673: the gold cost at the top of the cheapest plan, on hover also what its crafted items bring back
+-- at the vendor and at the auction house (the same lines as a Profession Check cell)
+function SR.CostTooltip(b, l)
+    local PC, SP, plan = OMQ.ProfCheck, OMQ.SkillPlan, l.plan
+    GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+    GameTooltip:AddLine(l.label, 1, 0.82, 0.4)
+    GameTooltip:AddDoubleLine("Materials (expected)", plan.total > 0 and PC.Money(plan.total) or "|cff8a8f99?|r", 0.85, 0.85, 0.85, 1, 1, 1)
+    local r = PC.Returns({ products = SP.Products(plan) })
+    PC.ReturnLines(GameTooltip, r)
+    GameTooltip:Show()
+    return r
 end
 
 -- crafts n of a recipe now (at most what the materials allow); the count field shows it
@@ -557,8 +573,7 @@ function SR.Missing(route, spell, n, idx)
             local _, mspell, my = makerBefore(route, item, idx or (#route.steps + 1))
             if mspell and mspell ~= spell and SR.Learned(mspell) ~= false then
                 local make = math.ceil((need - have) / my - 1e-6)
-                local can = SR.Craftable(mspell)
-                if can then make = math.min(make, can) end
+                make = math.min(make, SR.Craftable(mspell) or 0)   -- decision 673: only from raw materials in the bags
                 if make > 0 then out[#out + 1] = { spell = mspell, n = make, item = item } end
             end
         end
@@ -784,7 +799,7 @@ function SR.CheapLines(route, skill, max)
     local to = SP.NextMajor(skill, max)
     local plan = SP.Plan(route.id, skill, to, max)
     current.plan = plan
-    local out = { { kind = "head", label = string.format("Cheapest %d - %d", skill, to),
+    local out = { { kind = "head", label = string.format("Cheapest %d - %d", skill, to), plan = plan,
                     right = plan.total > 0 and ("~" .. OMQ.ProfCheck.Money(plan.total)) or "" } }
     for i, ps in ipairs(plan.steps) do
         local st = { ps[1], ps[2], ps[3], ps[4], "T" }

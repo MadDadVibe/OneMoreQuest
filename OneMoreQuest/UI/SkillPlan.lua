@@ -4,9 +4,9 @@
 -- Recipes: the ones the player knows, plus the ones a trainer teaches from their trainer skill on (Data/ProfSkillUp.lua,
 -- SkillUp Forever). Vendor and drop recipes only when known. The trainer fee does not count in the choice; the plan
 -- names it. The plan stops at the rank cap (max skill) or the target. A recipe with a material nobody prices is left
--- out. Material costs: the cheaper of the known price (OMQ.ProfCheck.Price) and making it with a recipe of the same
--- profession from priced materials (3 deep); a made intermediate goes into the shopping list as its raw materials.
--- Decision 639: an intermediate is made only when buying it costs more than 20% above making it.
+-- out. Material costs: the known price of the finished material (OMQ.ProfCheck.Price, else the Forever vendor price).
+-- Decision 673 (replaces 639): an intermediate (Medium Leather, bolts, cured hides ...) is never made from its raw
+-- materials for the plan; it is bought finished and goes into the shopping list as itself.
 -- Shopping lists from the plan buy more than the expected crafts: decision 660, the average plus 1.28 times the
 -- spread of the step's skill-up chances (enough in about 9 of 10 cases; before: +40% green, +20% yellow).
 local ADDON, OMQ = ...
@@ -15,7 +15,6 @@ OMQ = _G.OneMoreQuest
 local SP = {}
 OMQ.SkillPlan = SP
 
-SP.DEPTH = 3
 -- decision 660: the list buys the average crafts plus 1.28 times their spread (OMQ.ProfCheck.SAFE_Z), like the cells
 function SP.SAFE_Z() return (OMQ.ProfCheck and OMQ.ProfCheck.SAFE_Z) or 1.28 end
 SP.MAJORS = { 75, 150, 225, 300 }
@@ -52,41 +51,20 @@ local function price(item)
     if v and v > 0 then return v end
 end
 
--- a cost context for one plan: cost(item) = cheapest of buying and making; make(item) = recipe that makes it cheaper
+-- a cost context for one plan: cost(item) = the price of the finished item (decision 673: never made)
 local function context(line)
-    local makers = {}
-    for _, id in ipairs(SP.Recipes(line)) do
-        local r = OMQ.ProfSkillUp[id]
-        if r[2] > 0 and not makers[r[2]] then makers[r[2]] = id end
-    end
-    local memo, how = {}, {}
-    local cost
-    local function recipeCost(id, depth)
+    local function recipeCost(id)
         local r = OMQ.ProfSkillUp[id]
         if not r then return nil end
         local sum = 0
         for k = 1, #r[4], 2 do
-            local c = cost(r[4][k], depth + 1)
+            local c = price(r[4][k])
             if not c then return nil end
             sum = sum + c * r[4][k + 1]
         end
         return sum
     end
-    cost = function(item, depth)
-        depth = depth or 0
-        if memo[item] ~= nil and depth <= 1 then return memo[item] or nil end
-        local best = price(item)
-        local m = makers[item]
-        if m and depth < SP.DEPTH then
-            local c = recipeCost(m, depth)
-            local y = OMQ.ProfSkillUp[m][3] or 1
-            -- made only when buying costs more than 20% above making it (decision 639)
-            if c and (not best or best > c / y * (OMQ.ProfCheck and OMQ.ProfCheck.MAKE_MARGIN or 1)) then best = c / y; how[item] = m end
-        end
-        if depth <= 1 then memo[item] = best or false end
-        return best
-    end
-    return { cost = cost, recipeCost = function(id) return recipeCost(id, 0) end, how = how }
+    return { cost = price, recipeCost = recipeCost }
 end
 SP.Context = context
 
@@ -143,26 +121,23 @@ function SP.Plan(line, skill, target, max, learned)
     return plan
 end
 
--- the materials to buy for a plan: { [item] = pieces } (intermediates made cheaper go in as their materials)
+-- the materials to buy for a plan: { [item] = pieces }, intermediates as themselves (decision 673)
 function SP.Materials(plan)
-    local ctx, out = plan.ctx, {}
-    local function add(item, n, depth)
-        local m = ctx.how[item]
-        if m and depth < SP.DEPTH then
-            local r = OMQ.ProfSkillUp[m]
-            local crafts = n / (r[3] or 1)
-            for k = 1, #r[4], 2 do add(r[4][k], r[4][k + 1] * crafts, depth + 1) end
-        else
-            out[item] = (out[item] or 0) + n
-        end
-    end
+    local out = {}
     for _, st in ipairs(plan.steps) do
         local r = OMQ.ProfSkillUp[st[3]]
         local crafts = math.ceil(st[5] - 1e-6)
-        for k = 1, #r[4], 2 do
-            ctx.cost(r[4][k])
-            add(r[4][k], r[4][k + 1] * crafts, 0)
-        end
+        for k = 1, #r[4], 2 do out[r[4][k]] = (out[r[4][k]] or 0) + r[4][k + 1] * crafts end
+    end
+    return out
+end
+
+-- what the plan's expected crafts make, to sell (decision 673): { [item] = pieces }; for OMQ.ProfCheck.Returns
+function SP.Products(plan)
+    local out = {}
+    for _, st in ipairs(plan and plan.steps or {}) do
+        local r = OMQ.ProfSkillUp[st[3]]
+        if r and r[2] and r[2] > 0 then out[r[2]] = (out[r[2]] or 0) + (r[3] or 1) * st[4] end
     end
     return out
 end
