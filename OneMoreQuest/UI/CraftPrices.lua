@@ -792,7 +792,8 @@ P._stackCount = stackCount
 -- the price block of the item tooltip (decision 675): a header "OMQ (scanned 4 hours ago, 413 items)", then
 -- Vendor (white, what the vendor pays), Auction (green, the scanned price) and Disenchant (purple, UI/DisenchantValue.lua)
 -- one below the other, the values in one column. A stack shows the whole stack and one piece in brackets (decision 430).
-P.COLORS = { head = { 1, 0.82, 0 }, vendor = { 1, 1, 1 }, auction = { 0.25, 1, 0.25 }, disenchant = { 0.78, 0.45, 1 } }
+P.COLORS = { head = { 1, 0.82, 0 }, vendor = { 1, 1, 1 }, auction = { 0.25, 1, 0.25 }, disenchant = { 0.78, 0.45, 1 },
+    buy = { 0.4, 0.8, 1 }, where = { 0.62, 0.62, 0.62 } }
 -- what the vendor pays for one piece (copper), nil when he buys nothing or the game has not loaded the item
 function P.SellPrice(itemID)
     local function try(fn)
@@ -834,6 +835,82 @@ function P.PadLabels(labels)
     end
     return out
 end
+-- decision 688: with Shift the block also says what a vendor asks for the item and the nearest vendor of my faction
+-- that sells it (Data/ItemVendors.lua). The price is the one OMQ learned at a merchant (P.LearnVendor) or the fixed
+-- profession list; no data source knows the buy price otherwise.
+function P.BuyPrice(itemID)
+    local v = vendorStore()[itemID] or (OMQ.ProfVendorPrices or {})[itemID]
+    if type(v) == "number" and v > 0 then return v end
+end
+local function myFaction()
+    local f = UnitFactionGroup and UnitFactionGroup("player")
+    if f == "Alliance" then return "A" elseif f == "Horde" then return "H" end
+end
+local worldCache = {}
+local function worldPos(map, x, y)
+    local k = map .. ":" .. x .. ":" .. y
+    local w = worldCache[k]
+    if w == nil then
+        w = false
+        if C_Map and C_Map.GetWorldPosFromMapPos and CreateVector2D then
+            local ok, inst, vec = pcall(C_Map.GetWorldPosFromMapPos, map, CreateVector2D(x / 100, y / 100))
+            if ok and type(vec) == "table" then
+                local a, b
+                if vec.GetXY then a, b = vec:GetXY() else a, b = vec.x, vec.y end
+                if type(a) == "number" and type(b) == "number" and not isSecret(a) and not isSecret(b) then
+                    w = { a = a, b = b, inst = inst }
+                end
+            end
+        end
+        worldCache[k] = w
+    end
+    return w or nil
+end
+-- the vendor of my faction nearest to me that sells the item: npc entry, npc id, limited stock, yards (nil = other
+-- continent or my place unknown). Without a vendor on my continent the first one of my faction.
+function P.NearestVendor(itemID)
+    local list = OMQ.ItemVendors and OMQ.ItemVendors[itemID]
+    local npcs = OMQ.VendorNPCs
+    if not (list and npcs) then return nil end
+    local fac = myFaction()
+    local me
+    if UnitPosition then
+        local ok, a, b, _, inst = pcall(UnitPosition, "player")
+        if ok and type(a) == "number" and type(b) == "number" and not isSecret(a) and not isSecret(b) then
+            me = { a = a, b = b, inst = inst }
+        end
+    end
+    local best, bestId, bestLim, bestD
+    for _, v in ipairs(list) do
+        local id = math.abs(v)
+        local n = npcs[id]
+        if n and (fac == nil or n[6] == "AH" or n[6] == fac) then
+            local d
+            local w = me and worldPos(n[3], n[4], n[5])
+            if w and (me.inst == nil or w.inst == nil or me.inst == w.inst) then
+                d = math.sqrt((me.a - w.a) ^ 2 + (me.b - w.b) ^ 2)
+            end
+            if best == nil or (d and (bestD == nil or d < bestD)) then
+                best, bestId, bestLim, bestD = n, id, v < 0, d
+            end
+        end
+    end
+    return best, bestId, bestLim, bestD
+end
+local function mapName(map)
+    if C_Map and C_Map.GetMapInfo then
+        local ok, info = pcall(C_Map.GetMapInfo, map)
+        if ok and type(info) == "table" and type(info.name) == "string" and info.name ~= "" then return info.name end
+    end
+    return "?"
+end
+-- "Innkeeper Gryshka - Orgrimmar 54,68 (limited)", the German name on a German client
+function P.VendorText(n, limited)
+    local name = n[1]
+    if GetLocale and GetLocale() == "deDE" and n[2] then name = n[2] end
+    return string.format("%s - %s %d,%d%s", name, mapName(n[3]), math.floor(n[4]), math.floor(n[5]),
+        limited and " (limited)" or "")
+end
 local function stackText(each, count)
     if count > 1 then return money(each * count) .. "  (" .. money(each) .. " each)" end
     return money(each)
@@ -845,7 +922,13 @@ function P.TooltipLines(id, count, shift)
     local D = OMQ.Disenchant
     local deText, deMore
     if D and D.Text then deText, deMore = D.Text(id, shift) end
-    if not a and not sell and not deText then return nil end
+    local buy, vendor, vLimited
+    if shift then
+        local _
+        vendor, _, vLimited = P.NearestVendor(id)
+        if vendor then buy = P.BuyPrice(id) end
+    end
+    if not a and not sell and not deText and not vendor then return nil end
     local head = "OMQ"
     if a then
         local live = store().items[id] and store().items[id].t
@@ -857,11 +940,16 @@ function P.TooltipLines(id, count, shift)
     if sell then rows[#rows + 1] = { "Vendor:", stackText(sell, count), C.vendor } end
     if a then rows[#rows + 1] = { "Auction:", stackText(a, count), C.auction } end
     if deText then rows[#rows + 1] = { "Disenchant:", deText, C.disenchant }; if D then D.last = id end end
+    if vendor then
+        rows[#rows + 1] = { "Buy:", buy and stackText(buy, count)
+            or (vLimited and "unknown (limited stock)" or "unknown (learned at the next vendor visit)"), C.buy }
+    end
     local labels = {}
     for i, r in ipairs(rows) do labels[i] = r[1] end
     labels = P.PadLabels(labels)
     local lines = { { head, C.head[1], C.head[2], C.head[3] } }
     for i, r in ipairs(rows) do lines[#lines + 1] = { labels[i] .. r[2], r[3][1], r[3][2], r[3][3] } end
+    if vendor then lines[#lines + 1] = { "  " .. P.VendorText(vendor, vLimited), C.where[1], C.where[2], C.where[3] } end
     for _, l in ipairs(deMore or {}) do lines[#lines + 1] = l end
     return lines
 end
