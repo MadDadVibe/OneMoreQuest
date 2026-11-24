@@ -879,7 +879,30 @@ local function onTip(tt, data)
     if tt.Show then tt:Show() end
 end
 P._onTip = onTip
+-- the game's own sell price line goes away (decision 680): the Vendor line of the block shows the same, stack included.
+-- Only when the block has a Vendor line for that item, so the price never disappears altogether.
+function P.SkipSellLine(tt)
+    if not tt or (tt.IsForbidden and tt:IsForbidden()) then return false end
+    local id
+    if tt.GetPrimaryTooltipData then
+        local ok, d = pcall(tt.GetPrimaryTooltipData, tt)
+        if ok and type(d) == "table" then id = d.id end
+    end
+    if not id and tt.GetItem then
+        local ok, _, link = pcall(tt.GetItem, tt)
+        id = ok and link and tonumber(tostring(link):match("item:(%d+)"))
+    end
+    if not id or isSecret(id) then return false end
+    return P.SellPrice(id) ~= nil
+end
 OMQ:On("READY", function()
+    local L = Enum and Enum.TooltipDataLineType
+    if TooltipDataProcessor and TooltipDataProcessor.AddLinePreCall and L and L.SellPrice then
+        TooltipDataProcessor.AddLinePreCall(L.SellPrice, function(tt)
+            local ok, skip = pcall(P.SkipSellLine, tt)
+            return ok and skip or nil
+        end)
+    end
     if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
         TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tt, data)
             local ok, err = pcall(onTip, tt, data)
