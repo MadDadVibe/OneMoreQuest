@@ -407,7 +407,7 @@ function B.Build()
     -- buff food (decision 431): the cheapest food with Well Fed, and the class food under the limit;
     -- the class food alone when it costs at most 50% more
     for _, f in ipairs(foods) do f.xp = nil end
-    local xp = B.CheapestFood(lvl)
+    local xp = B.CheapestFood(lvl, prof)
     local fg = { line = R.FoodLine(prof), kind = "food", cap = R.CapFor("food", lvl) }
     local fids = {}
     for _, id in ipairs(R.Candidates(fg, lvl)) do
@@ -1179,21 +1179,28 @@ function B.Bags()
 end
 
 -- buff foods I can eat: their prices are looked at once, the cheapest per piece becomes a row
-function B.FoodCandidates(lvl)
+-- (only foods whose buff fits my class, BuyRules.FoodFits; prof nil: every food)
+function B.MyProfile()
+    local SC = OMQ.Score
+    local class = SC and SC.MyClass() or select(2, UnitClass("player"))
+    local role = SC and SC.MyRole() or "damage"
+    return OMQ.BuyRules.Profile(class, role)
+end
+function B.FoodCandidates(lvl, prof)
     for i = #foods, 1, -1 do foods[i] = nil end
     for _, f in ipairs(OMQ.BuyFoods or {}) do
-        if f[2] <= lvl and not B.NoXP(f[1]) then
+        if f[2] <= lvl and not B.NoXP(f[1]) and OMQ.BuyRules.FoodFits(prof, f[1]) then
             local r = rowFor(f[1], "food", nil, B.TARGET.food or 10, false)
             foods[#foods + 1] = r
         end
     end
     return foods
 end
-function B.CheapestFood(lvl)
+function B.CheapestFood(lvl, prof)
     local best
     for _, r in ipairs(foods) do
         local o = r.offers and r.offers[1]
-        if r.state == "ok" and o and not B.NoXP(r.itemID) and (not best or o.unit < best.offers[1].unit) then best = r end
+        if r.state == "ok" and o and not B.NoXP(r.itemID) and OMQ.BuyRules.FoodFits(prof, r.itemID) and (not best or o.unit < best.offers[1].unit) then best = r end
     end
     return best
 end
@@ -1633,7 +1640,7 @@ function B.Open()
     resetBags()
     for _, r in pairs(byId) do r.state, r.live = "price", nil end
     B.LearnBags()
-    B.FoodCandidates(level())
+    B.FoodCandidates(level(), B.MyProfile())
     B.Build()
 end
 

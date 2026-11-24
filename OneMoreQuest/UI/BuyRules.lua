@@ -12,6 +12,8 @@
 --   Health and mana potions: at most 5s; a weaker one when needed, but none that needs 20 levels less than mine.
 --   Buff food: the cheapest food with Well Fed (+5% XP on WoW Forever), and a food for the class under 3s.
 --     When the class food costs at most 50% more than the cheapest one, only the class food is shown.
+--     The cheapest food only from the foods whose buff fits the class: mana and Intellect foods only for classes
+--     with mana, Strength and Agility foods not for casters and healers (a warrior got Smoked Sagefish).
 --   From level 30 on the consumables there cost more (decision 590): every limit doubles, the oil goes to 5s per use
 --     (25s per oil); armor kits and shield spikes keep theirs.
 --   Armor kits and shield spikes stay, at most 15s each. WoW Forever's new kits from level 15 on: casters and
@@ -102,6 +104,25 @@ function R.FoodLine(p)
     if p.agi and not p.str then return "f_agi" end
     if p.str then return "f_str" end
     return "f_std"
+end
+
+-- buff foods of OMQ.BuyFoods whose buff only helps some classes; every other one gives Stamina (and Spirit)
+-- and fits everybody. mana = mana per 5 seconds or Intellect, phys = Strength or Agility
+R.FOOD_STAT = {
+    [21072] = "mana",   -- Smoked Sagefish: mana per 5 seconds
+    [21217] = "mana",   -- Sagefish Delight: mana per 5 seconds
+    [13931] = "mana",   -- Nightfin Soup: mana per 5 seconds
+    [18254] = "mana",   -- Runn Tum Tuber Surprise: Intellect
+    [13928] = "phys",   -- Grilled Squid: Agility
+    [20452] = "phys",   -- Smoked Desert Dumplings: Strength
+}
+-- does the buff of a food help this class? p from R.Profile; no profile: every food
+function R.FoodFits(p, id)
+    if not p then return true end
+    local s = R.FOOD_STAT[id]
+    if s == "mana" then return p.mana and true or false end
+    if s == "phys" then return not (p.caster or p.healer) end
+    return true
 end
 
 -- the level an item of a line needs (spikes go by their item level)
