@@ -13,7 +13,7 @@
 --   * I am an enchanter: the card comes at once, wherever I am (not in a fight), "Disenchant <item>"; a left click
 --     disenchants it, then the next one. Bound items too, but only those the vendor helper would sell (worse than
 --     what I wear, or my class cannot use them).
--- Never: upgrades for me, items of an equipment set, items kept with a right click in the vendor helper, items
+-- Never: upgrades for me that I can wear now (one I cannot wear yet goes too, fix 685), items of an equipment set, items kept with a right click in the vendor helper, items
 -- bought back. Right click on a card: away until the items are gone; Shift + right click: 5 minutes.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
@@ -150,6 +150,16 @@ local function context()
     return V and V.BaseContext and V.BaseContext() or {}
 end
 
+-- an upgrade for me that I cannot put on yet (level, armor type at my level, red tooltip line): disenchanted anyway
+-- (fix 685: MadDadVibe wants it flagged; when I can wear it, it stays an upgrade)
+function DS.UpgradeNotYet(link, equipLoc)
+    local AH, B = OMQ.AuctionHelper, OMQ.AuctionBuy
+    if not (link and AH and AH.UpgradeForMe and B and B.CanEquipNow) then return false end
+    if not AH.UpgradeForMe(link, equipLoc) then return false end
+    local ok, can = pcall(B.CanEquipNow, link)
+    return ok and can == false
+end
+
 -- it: bag slot info; extra: { vendor, equipLoc, classID, link }; mode: DS.Mode() (asked when nil)
 -- returns the disenchant value and the other value when this item goes the third way
 function DS.Takes(it, extra, ctx, mode)
@@ -170,11 +180,14 @@ function DS.Takes(it, extra, ctx, mode)
         if mode ~= "self" or not (V and V.Reason) then return nil end
         ctx = ctx or context()
         local ok, why = pcall(V.Reason, it, { vendor = extra.vendor, equipLoc = equipLoc, classID = extra.classID, link = link }, ctx)
-        if not ok or (why ~= "worse" and why ~= "unusable") then return nil end
+        if not ok or (why ~= "worse" and why ~= "unusable") then
+            -- an upgrade I cannot wear yet goes too (fix 685, MadDadVibe)
+            if (ctx.sets or {})[id] or not DS.UpgradeNotYet(link, equipLoc) then return nil end
+        end
     else
         ctx = ctx or context()
         if (ctx.sets or {})[id] then return nil end
-        if AH and AH.UpgradeForMe and link and AH.UpgradeForMe(link, equipLoc) then return nil end
+        if AH and AH.UpgradeForMe and link and AH.UpgradeForMe(link, equipLoc) and not DS.UpgradeNotYet(link, equipLoc) then return nil end
     end
     local vendor = extra.vendor
     if vendor == nil then vendor = select(11, info(link or id)) end

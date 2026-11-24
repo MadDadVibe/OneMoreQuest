@@ -196,10 +196,12 @@ function AH.Scan()
                                     commodity = comm, equipLoc = equipLoc, classID = classID }
                         if comm then byId[it.itemID] = e end
                         -- a material a dad needs is sold like anything else (decision 301)
-                        if upgradeForMe(link, equipLoc) then e.out = "upgrade"
+                        local deNotYet = deMode and DS.UpgradeNotYet and DS.UpgradeNotYet(link, equipLoc)
+                        if upgradeForMe(link, equipLoc) and not deNotYet then e.out = "upgrade"
                         -- worth more disenchanted (decision 675): stays in the bags for the enchanter
                         elseif deMode and DS.HideFromAH(DS.Takes(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, nil, deMode)) then
                             e.out = "disenchant"
+                        elseif deNotYet then e.out = "upgrade"          -- not worth disenchanting: kept as before
                         end
                         local k = A.GetItemKeyFromItem and A.GetItemKeyFromItem(loc)
                         e.itemKey = k or (A.MakeItemKey and A.MakeItemKey(it.itemID)) or { itemID = it.itemID }
