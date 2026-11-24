@@ -526,11 +526,22 @@ function SR.CostTooltip(b, l)
     local PC, SP, plan = OMQ.ProfCheck, OMQ.SkillPlan, l.plan
     GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
     GameTooltip:AddLine(l.label, 1, 0.82, 0.4)
-    GameTooltip:AddDoubleLine("Materials (expected)", plan.total > 0 and PC.Money(plan.total) or "|cff8a8f99?|r", 0.85, 0.85, 0.85, 1, 1, 1)
+    local function m(c) return (c and c > 0) and PC.Money(c) or "-" end
+    -- decision 677: the net cost the plan chose by
+    GameTooltip:AddDoubleLine("Materials (expected)", m(plan.mats or plan.total), 0.85, 0.85, 0.85, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Trainer fees", m(plan.fees), 0.85, 0.85, 0.85, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Back: vendor or disenchant", (plan.ret or 0) > 0 and ("-" .. PC.Money(plan.ret)) or "-", 0.85, 0.85, 0.85, 0.5, 0.82, 0.42)
+    GameTooltip:AddDoubleLine("Net cost", SR.NetText(plan.total), 1, 0.82, 0.4, 1, 1, 1)
     local r = PC.Returns({ products = SP.Products(plan) })
     PC.ReturnLines(GameTooltip, r)
     GameTooltip:Show()
     return r
+end
+-- the net cost of a plan as text: "~1g 20s", or "+50s profit" when the returns are higher
+function SR.NetText(total)
+    if not total or math.abs(total) < 1 then return "" end
+    if total < 0 then return "|cff7fd16b+" .. OMQ.ProfCheck.Money(-total) .. " profit|r" end
+    return "~" .. OMQ.ProfCheck.Money(total)
 end
 
 -- crafts n of a recipe now (at most what the materials allow); the count field shows it
@@ -800,7 +811,7 @@ function SR.CheapLines(route, skill, max)
     local plan = SP.Plan(route.id, skill, to, max)
     current.plan = plan
     local out = { { kind = "head", label = string.format("Cheapest %d - %d", skill, to), plan = plan,
-                    right = plan.total > 0 and ("~" .. OMQ.ProfCheck.Money(plan.total)) or "" } }
+                    right = SR.NetText(plan.total) } }
     for i, ps in ipairs(plan.steps) do
         local st = { ps[1], ps[2], ps[3], ps[4], "T" }
         local line = { kind = "step", st = st, state = i == 1 and "cur" or "todo", cheap = true }
@@ -832,7 +843,7 @@ function SR.CheapFooter(plan)
     local t = {}
     if plan.stop == "cap" then t[#t + 1] = "|cffff9933Rank up at the trainer at " .. plan.reached .. ".|r" end
     if plan.missing > 0 then t[#t + 1] = plan.missing .. " recipes without a price left out." end
-    t[#t + 1] = "Prices: auction scan and vendors. Click the gold step to craft it."
+    t[#t + 1] = "Cost: materials + trainer fees - vendor or disenchant return. Click the gold step to craft it."
     return table.concat(t, " ")
 end
 function SR.MakeCheapList(n)

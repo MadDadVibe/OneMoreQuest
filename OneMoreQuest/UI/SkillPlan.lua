@@ -7,6 +7,11 @@
 -- out. Material costs: the known price of the finished material (OMQ.ProfCheck.Price, else the Forever vendor price).
 -- Decision 673 (replaces 639): an intermediate (Medium Leather, bolts, cured hides ...) is never made from its raw
 -- materials for the plan; it is bought finished and goes into the shopping list as itself.
+-- Decision 677: the choice counts the net cost per skill-up: materials minus what the crafted item brings back
+-- (the higher of its vendor price and its disenchant value, OMQ.Disenchant.Value; unknown = 0), plus the trainer fee
+-- of a recipe not known yet, spread over the skill points it can still give up to gray and paid once (a recipe the plan
+-- has chosen is free after that). A profit (return above the materials) counts once per skill-up, not per craft, so the
+-- plan does not chase recipes that are nearly gray. The auction house return is only shown, not chosen by.
 -- Shopping lists from the plan buy more than the expected crafts: decision 660, the average plus 1.28 times the
 -- spread of the step's skill-up chances (enough in about 9 of 10 cases; before: +40% green, +20% yellow).
 local ADDON, OMQ = ...
@@ -68,8 +73,18 @@ local function context(line)
 end
 SP.Context = context
 
+-- what one craft of a recipe brings back: pieces times the higher of vendor price and disenchant value (copper)
+function SP.Return(id)
+    local r = OMQ.ProfSkillUp[id]
+    if not (r and r[2] and r[2] > 0) then return 0 end
+    local PC, D = OMQ.ProfCheck, OMQ.Disenchant
+    local v = PC and PC.SellPrice and PC.SellPrice(r[2]) or 0
+    local de = D and D.Value and D.Value(r[2]) or 0
+    return (r[3] or 1) * math.max(v or 0, de or 0)
+end
+
 -- the plan from skill to target (stops at max): { steps = { { from, to, spell, crafts, buy, learn = { fee, skill } } },
--- reached, total (expected cost), missing (recipes left out for a missing price), stop ("cap", "none", nil) }
+-- reached, total (expected net cost: mats + fees - ret, decision 677), mats, ret, fees, missing (recipes left out for a missing price), stop ("cap", "none", nil) }
 function SP.Plan(line, skill, target, max, learned)
     learned = learned or function(id) return OMQ.SkillRoute and OMQ.SkillRoute.Learned(id) end
     local ctx = context(line)
@@ -81,12 +96,13 @@ function SP.Plan(line, skill, target, max, learned)
             local known = learned(id) == true
             if known or r[5] then
                 local c = ctx.recipeCost(id)
-                if c then cands[#cands + 1] = { id = id, t = t, cost = c, known = known, from = known and 0 or (r[6] or t[1]) }
+                if c then cands[#cands + 1] = { id = id, t = t, cost = c, ret = SP.Return(id), known = known,
+                    fee = (not known) and (r[5] or 0) or 0, from = known and 0 or (r[6] or t[1]) } 
                 else missing = missing + 1 end
             end
         end
     end
-    local plan = { steps = {}, total = 0, missing = missing }
+    local plan = { steps = {}, total = 0, mats = 0, ret = 0, fees = 0, missing = missing }
     local stopAt = target
     if max and max > 0 and max < 300 and max <= stopAt then stopAt = max; plan.stop = "cap" end
     local s = skill
@@ -96,7 +112,9 @@ function SP.Plan(line, skill, target, max, learned)
             if s >= c.from and s >= (c.t[1] or 0) then
                 local ch = chance(s, c.t)
                 if ch > 0 then
-                    local per = c.cost / ch
+                    local net = c.cost - c.ret
+                    local per = math.max(net, 0) / ch + math.min(net, 0)
+                    if not c.paid and c.fee > 0 then per = per + c.fee / math.max(1, c.t[4] - s) end
                     if not bestPer or per < bestPer - 1e-9 then best, bestPer = c, per end
                 end
             end
@@ -109,13 +127,16 @@ function SP.Plan(line, skill, target, max, learned)
             last[2] = s + 1; last[4] = last[4] + 1 / ch; last.var = last.var + var
         else
             last = { s, s + 1, best.id, 1 / ch, 0, var = var,
-                learn = (not best.known) and { OMQ.ProfSkillUp[best.id][5], best.from } or nil }
+                learn = (not best.known and not best.paid) and { OMQ.ProfSkillUp[best.id][5], best.from } or nil }
             plan.steps[#plan.steps + 1] = last
         end
         last[5] = last[4] + SP.SAFE_Z() * math.sqrt(last.var)
-        plan.total = plan.total + bestPer
+        plan.mats = plan.mats + best.cost / ch
+        plan.ret = plan.ret + best.ret / ch
+        if not best.paid then best.paid = true; plan.fees = plan.fees + best.fee end
         s = s + 1
     end
+    plan.total = plan.mats + plan.fees - plan.ret
     plan.reached = s
     plan.ctx = ctx
     return plan
