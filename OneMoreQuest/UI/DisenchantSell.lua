@@ -90,6 +90,20 @@ function DS.MeEnchanter()
     local r = myRow()
     return r ~= nil and type(r.ench) == "number"
 end
+-- my realm: the game can answer with an empty name (fix 687, seen on WoW Forever); then my own row, else unknown
+function DS.MyRealm()
+    for _, fn in ipairs({ GetRealmName, GetNormalizedRealmName }) do
+        local r = call(fn)
+        if type(r) == "string" and r ~= "" then
+            -- the normalized name has no spaces: only take it when it matches my row that way
+            if fn == GetRealmName then return r end
+            local row = myRow()
+            if row and type(row.realm) == "string" and row.realm:gsub("[%s%-']", "") == r then return row.realm end
+        end
+    end
+    local row = myRow()
+    return row and type(row.realm) == "string" and row.realm ~= "" and row.realm or nil
+end
 function DS.MyFaction()
     local A = OMQ.Alts
     local f = A and A.Faction and A.Faction()
@@ -111,7 +125,7 @@ function DS.Twink()
     local store = A and A.Store and A.Store()
     if not store then return nil end
     local me = UnitGUID and call(UnitGUID, "player")
-    local realm = call(GetRealmName)
+    local realm = DS.MyRealm()
     local faction = DS.MyFaction()
     local best
     for guid, e in pairs(store) do
@@ -634,7 +648,7 @@ OMQ:RegisterCommand("desell", function()
     OMQ:Print("desell: " .. (mode == "self" and "you have Enchanting - you disenchant yourself"
         or mode == "mail" and ("enchanter " .. tw.name .. " (skill " .. tw.ench .. ")")
         or (DS.On() and "no enchanter on this realm and faction (log in with the enchanter once)" or "switched off")))
-    OMQ:Print(string.format("desell: you: %s, %s", tostring(call(GetRealmName)), tostring(DS.MyFaction() or "faction unknown")))
+    OMQ:Print(string.format("desell: you: %s, %s", tostring(DS.MyRealm() or "realm unknown"), tostring(DS.MyFaction() or "faction unknown")))
     -- what every character of the account wrote (fix 676)
     local A = OMQ.Alts
     for _, e in pairs(A and A.Store and A.Store() or {}) do
