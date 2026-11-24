@@ -19,51 +19,73 @@ D.MATS = {
     [11139] = "Large Glowing Shard", [11177] = "Small Radiant Shard", [11178] = "Large Radiant Shard",
     [14343] = "Small Brilliant Shard", [14344] = "Large Brilliant Shard", [20725] = "Nexus Crystal",
 }
--- uncommon: { max item level, dust, dust min, dust max, essence, ess min, ess max, shard (5%) }
--- armor: 75% dust, 20% essence; weapons: 20% dust, 75% essence (5-10: 80/20 without shard)
-D.GREEN = {
-    { 10, 10940, 1, 2, 10938, 1, 2, nil },
-    { 15, 10940, 2, 3, 10939, 1, 2, 10978 },
-    { 20, 10940, 4, 6, 10998, 1, 2, 10978 },
-    { 25, 11083, 1, 2, 11082, 1, 2, 11084 },
-    { 30, 11083, 2, 5, 11134, 1, 2, 11138 },
-    { 35, 11137, 1, 2, 11135, 1, 2, 11139 },
-    { 40, 11137, 2, 5, 11174, 1, 2, 11177 },
-    { 45, 11176, 1, 2, 11175, 1, 2, 11178 },
-    { 50, 11176, 2, 5, 16202, 1, 2, 14343 },
-    { 55, 16204, 1, 2, 16203, 1, 2, 14344 },
-    { 999, 16204, 2, 5, 16203, 2, 3, 14344 },
+-- The tables are copied from warcraft.wiki.gg "Disenchanting tables" (by item level), only the brackets whose
+-- materials exist in classic (fix 681). A row: { lowest item level, highest item level, { chance, item, min, max }, ... }
+-- uncommon armor
+D.GREEN_ARMOR = {
+    { 5, 15,  { 0.80, 10940, 1, 2 }, { 0.20, 10938, 1, 2 } },
+    { 16, 20, { 0.75, 10940, 2, 3 }, { 0.20, 10939, 1, 2 }, { 0.05, 10978, 1, 1 } },
+    { 21, 25, { 0.75, 10940, 4, 6 }, { 0.15, 10998, 1, 2 }, { 0.10, 10978, 1, 1 } },
+    { 26, 30, { 0.75, 11083, 1, 2 }, { 0.20, 11082, 1, 2 }, { 0.05, 11084, 1, 1 } },
+    { 31, 35, { 0.75, 11083, 2, 5 }, { 0.20, 11134, 1, 2 }, { 0.05, 11138, 1, 1 } },
+    { 36, 40, { 0.75, 11137, 1, 2 }, { 0.20, 11135, 1, 2 }, { 0.05, 11139, 1, 1 } },
+    { 41, 45, { 0.75, 11137, 2, 5 }, { 0.20, 11174, 1, 2 }, { 0.05, 11177, 1, 1 } },
+    { 46, 50, { 0.75, 11176, 1, 2 }, { 0.20, 11175, 1, 2 }, { 0.05, 11178, 1, 1 } },
+    { 51, 55, { 0.75, 11176, 2, 5 }, { 0.20, 16202, 1, 2 }, { 0.05, 14343, 1, 1 } },
+    { 56, 60, { 0.75, 16204, 1, 2 }, { 0.20, 16203, 1, 2 }, { 0.05, 14344, 1, 1 } },
+    { 61, 65, { 0.75, 16204, 2, 5 }, { 0.20, 16203, 2, 3 }, { 0.05, 14344, 1, 1 } },
 }
--- rare: { max item level, shard } (one shard; 56+ has 0.5% Nexus Crystal)
+-- uncommon weapons
+D.GREEN_WEAPON = {
+    { 6, 15,  { 0.20, 10940, 1, 2 }, { 0.80, 10938, 1, 2 } },
+    { 16, 20, { 0.20, 10940, 2, 3 }, { 0.75, 10939, 1, 2 }, { 0.05, 10978, 1, 1 } },
+    { 21, 25, { 0.15, 10940, 4, 6 }, { 0.75, 10998, 1, 2 }, { 0.10, 10978, 1, 1 } },
+    { 26, 30, { 0.20, 11083, 1, 2 }, { 0.75, 11082, 1, 2 }, { 0.05, 11084, 1, 1 } },
+    { 31, 35, { 0.20, 11083, 2, 5 }, { 0.75, 11134, 1, 2 }, { 0.05, 11138, 1, 1 } },
+    { 36, 40, { 0.20, 11137, 1, 2 }, { 0.75, 11135, 1, 2 }, { 0.05, 11139, 1, 1 } },
+    { 41, 45, { 0.20, 11137, 2, 5 }, { 0.75, 11174, 1, 2 }, { 0.05, 11177, 1, 1 } },
+    { 46, 50, { 0.20, 11176, 1, 2 }, { 0.75, 11175, 1, 2 }, { 0.05, 11178, 1, 1 } },
+    { 51, 55, { 0.22, 11176, 2, 5 }, { 0.75, 16202, 1, 2 }, { 0.03, 14343, 1, 1 } },
+    { 56, 60, { 0.22, 16204, 1, 2 }, { 0.75, 16203, 1, 2 }, { 0.03, 14344, 1, 1 } },
+    { 61, 65, { 0.22, 16204, 2, 5 }, { 0.75, 16203, 2, 3 }, { 0.03, 14344, 1, 1 } },
+}
+-- rare, armor and weapons alike
 D.BLUE = {
-    { 20, 10978 }, { 25, 11084 }, { 30, 11138 }, { 35, 11139 }, { 40, 11177 }, { 45, 11178 }, { 50, 14343 }, { 999, 14344 },
+    { 1, 25,  { 1, 10978, 1, 1 } },
+    { 26, 30, { 1, 11084, 1, 1 } },
+    { 31, 35, { 1, 11138, 1, 1 } },
+    { 36, 40, { 1, 11139, 1, 1 } },
+    { 41, 45, { 1, 11177, 1, 1 } },
+    { 46, 50, { 1, 11178, 1, 1 } },
+    { 51, 55, { 1, 14343, 1, 1 } },
+    { 56, 65, { 0.995, 14344, 1, 1 }, { 0.005, 20725, 1, 1 } },
 }
--- epic: { max item level, material, min, max }
+-- epic, armor and weapons alike (the wiki: 76-80 weapons give 1 Nexus Crystal 33%, 2 at 67%)
 D.EPIC = {
-    { 45, 11177, 2, 4 }, { 50, 11178, 2, 4 }, { 55, 14343, 2, 4 }, { 60, 20725, 1, 1 }, { 999, 20725, 1, 2 },
+    { 40, 45, { 1, 11177, 2, 4 } },
+    { 46, 50, { 1, 11178, 2, 4 } },
+    { 51, 55, { 1, 14343, 2, 4 } },
+    { 56, 60, { 1, 20725, 1, 1 } },
+    { 61, 88, { 1, 20725, 1, 2 } },
 }
 local NO_LOC = { [""] = true, INVTYPE_BODY = true, INVTYPE_TABARD = true, INVTYPE_NON_EQUIP_IGNORE = true, INVTYPE_BAG = true, INVTYPE_AMMO = true }
 
-local function row(t, lvl)
-    for _, r in ipairs(t) do if lvl <= r[1] then return r end end
-end
--- the outcomes { chance, item, min, max } of one item, or nil when it cannot be disenchanted
+-- the outcomes { chance, item, min, max, average } of one item, or nil when the tables have no row for it
 function D.Outcomes(quality, ilvl, weapon)
-    if type(quality) ~= "number" or type(ilvl) ~= "number" or ilvl < 1 then return nil end
-    if quality == 2 then
-        if ilvl < 5 then return nil end
-        local r = row(D.GREEN, ilvl)
-        if not r[8] then return { { weapon and 0.2 or 0.8, r[2], r[3], r[4] }, { weapon and 0.8 or 0.2, r[5], r[6], r[7] } } end
-        return { { weapon and 0.2 or 0.75, r[2], r[3], r[4] }, { weapon and 0.75 or 0.2, r[5], r[6], r[7] }, { 0.05, r[8], 1, 1 } }
-    elseif quality == 3 then
-        if ilvl < 11 then return nil end
-        local r = row(D.BLUE, ilvl)
-        if ilvl >= 56 then return { { 0.995, r[2], 1, 1 }, { 0.005, 20725, 1, 1 } } end
-        return { { 1, r[2], 1, 1 } }
-    elseif quality == 4 then
-        if ilvl < 40 then return nil end
-        local r = row(D.EPIC, ilvl)
-        return { { 1, r[2], r[3], r[4] } }
+    if type(quality) ~= "number" or type(ilvl) ~= "number" then return nil end
+    local t = quality == 2 and (weapon and D.GREEN_WEAPON or D.GREEN_ARMOR) or quality == 3 and D.BLUE or quality == 4 and D.EPIC
+    if not t then return nil end
+    for _, r in ipairs(t) do
+        if ilvl >= r[1] and ilvl <= r[2] then
+            local outs = {}
+            for i = 3, #r do
+                local o = r[i]
+                local avg = o[5] or (o[3] + o[4]) / 2
+                if quality == 4 and weapon and ilvl >= 76 and ilvl <= 80 then avg = 0.33 * 1 + 0.67 * 2 end
+                outs[#outs + 1] = { o[1], o[2], o[3], o[4], avg }
+            end
+            return outs
+        end
     end
 end
 
@@ -102,7 +124,7 @@ function D.Value(id)
     local total, missing, priced, rows = 0, false, 0, {}
     for _, o in ipairs(outs) do
         local price = P and P.Auction and P.Auction(o[2])
-        local avg = (o[3] + o[4]) / 2
+        local avg = o[5] or (o[3] + o[4]) / 2
         local worth
         if type(price) == "number" and price > 0 then
             worth = o[1] * avg * price
