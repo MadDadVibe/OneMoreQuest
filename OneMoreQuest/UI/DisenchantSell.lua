@@ -429,7 +429,7 @@ local function sendNext()
                 s.to, s.letters, s.letters == 1 and "" or "s"))
         end
         DS.sending = nil
-        DS.Refresh()
+        DS.Reload()
         return
     end
     s.letters, s.items, s.waiting = s.letters + 1, s.items + n, true
@@ -442,6 +442,13 @@ local function sendNext()
     end
 end
 DS.SendNext = sendNext
+
+-- the list read again from the bags, now and once more when the game has moved the sent items (fix 689: sent items stayed listed)
+function DS.Reload()
+    local function again() if DS.open then DS.Fill(); DS.Refresh() end end
+    again()
+    if C_Timer and C_Timer.After then C_Timer.After(0.5, again); C_Timer.After(1.5, again) end
+end
 
 function DS.SendAll()
     if not DS.mailOpen or DS.sending then return 0 end
@@ -592,7 +599,7 @@ function DS.Refresh()
         panel.all:ClearAllPoints(); panel.all:SetPoint("TOPLEFT", 16, -y)
         panel.all.title:SetText(string.format("Send all - %d item%s%s", #list, #list == 1 and "" or "s",
             letters > 1 and string.format(" (%d letters)", letters) or ""))
-        panel.all.price:SetText("~" .. money(total(list)))
+        panel.all.price:SetText("")                -- no sum here: it read like the cost of sending (fix 689, MadDadVibe)
         y = y + 48
     end
     panel.hint:ClearAllPoints(); panel.hint:SetPoint("TOPLEFT", 16, -(y + 4))
@@ -609,6 +616,16 @@ function DS.Open()
     DS.open = true
     panel.offset = 0
     anchor()
+    -- fix 689: closes together with the mailbox window (MAIL_CLOSED alone did not always come on WoW Forever)
+    local mf = _G.MailFrame
+    if mf and mf.HookScript and not DS.hookedMail then
+        DS.hookedMail = true
+        mf:HookScript("OnHide", function()
+            DS.mailOpen = false
+            DS.sending = nil
+            DS.Close()
+        end)
+    end
     panel:Show()
     DS.Refresh()
 end
@@ -618,7 +635,8 @@ function DS.Close()
 end
 
 local ev = CreateFrame("Frame")
-for _, e in ipairs({ "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS", "MAIL_FAILED", "BAG_UPDATE_DELAYED" }) do
+for _, e in ipairs({ "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS", "MAIL_FAILED", "BAG_UPDATE_DELAYED",
+                    "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 local pending = false
@@ -627,11 +645,13 @@ ev:SetScript("OnEvent", function(_, event)
         if event == "MAIL_SHOW" then
             DS.mailOpen = true
             DS.Open()
-        elseif event == "MAIL_CLOSED" then
+        elseif event == "MAIL_CLOSED" or (event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" and DS.mailOpen
+                and (not _G.MailFrame or not _G.MailFrame:IsShown())) then
             DS.mailOpen = false
             DS.sending = nil
             DS.Close()
-        elseif event == "MAIL_SEND_SUCCESS" then onSent(true)
+        elseif event == "MAIL_SEND_SUCCESS" then
+            if DS.sending then onSent(true) else DS.Reload() end        -- a letter sent by hand (fix 689)
         elseif event == "MAIL_FAILED" then onSent(false)
         elseif DS.open and not pending and not DS.sending then
             pending = true
