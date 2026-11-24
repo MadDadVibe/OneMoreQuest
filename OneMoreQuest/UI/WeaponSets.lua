@@ -445,8 +445,6 @@ local function build()
         a:SetTarget(toggle.glow)
         toggle.pulse = g
     end
-    toggle.num = toggle:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
-    toggle.num:SetPoint("BOTTOMRIGHT", -3, 3)
     local th = toggle:CreateTexture(nil, "HIGHLIGHT")
     th:SetAllPoints()
     th:SetColorTexture(1, 1, 1, 0.15)
@@ -499,12 +497,11 @@ function W.Paint()
             if b.pulse then pcall(b.pulse.Stop, b.pulse) end
         end
     end
-    -- decision 678: the one button shows the worn set (MadDadVibe's choice) and its number
+    -- decision 678: the one button shows the worn set (MadDadVibe's choice); no number since fix 684 (MadDadVibe)
     if toggle then
         local set = active and d.sets[active]
         toggle.icon:SetTexture(W.SetIcon(set) or W.SetIcon(worn) or W.QUESTION)
         if toggle.icon.SetDesaturated then toggle.icon:SetDesaturated(false) end
-        toggle.num:SetText(active and tostring(active) or "")
         if active then
             toggle.glow:Show()
             if toggle.pulse and not toggle.pulse:IsPlaying() then pcall(toggle.pulse.Play, toggle.pulse) end

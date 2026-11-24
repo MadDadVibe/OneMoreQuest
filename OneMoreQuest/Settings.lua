@@ -135,7 +135,7 @@ local function classItems()
           set = function(v) OMQ.db.options.weaponSets = v and true or false; if OMQ.WeaponSets then OMQ.WeaponSets.Apply() end end },
         -- decision 678: one button that swaps (default) or the two buttons
         { type = "check", indent = true, label = "One button instead of two",
-          tip = "One button swaps between the two sets with each click, also in a fight; its icon and number show the set you wear. Shift + left click stores the weapons you wear now as that set. Off: two buttons, one per set.",
+          tip = "One button swaps between the two sets with each click, also in a fight; its icon shows the set you wear and it glows green. Shift + left click stores the weapons you wear now as that set. Off: two buttons, one per set.",
           get = function() return OMQ.db.options.weaponOneButton ~= false end,
           set = function(v) OMQ.db.options.weaponOneButton = v and true or false; if OMQ.WeaponSets then OMQ.WeaponSets.Apply() end end },
     })
