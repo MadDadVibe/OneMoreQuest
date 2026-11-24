@@ -57,7 +57,7 @@ FE.SECTIONS = {
         "Buy drinks, and a reminder to drink when your mana is low; mages conjure water with one click instead",
         "Profession training and the tool a profession needs",
         "Find Minerals and Find Herbs switched on with one click",
-        "Two weapon set buttons right of the action bar: one click (or a key) swaps your weapons, also in a fight; filled on their own or with Shift-click",
+        "A weapon set button right of the action bar: one click (or a key) swaps between your two weapon sets, also in a fight; filled on their own or with Shift-click (two buttons as an option)",
         "The bag key (B) opens the reagent bag together with your bags, like Shift-B (/omq qol bags)",
         "Pet basics: hunters call, revive and feed their pet, warlocks summon one of their last three demons",
         "Unspent talent points, opens the talent tree",

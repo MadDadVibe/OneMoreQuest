@@ -130,9 +130,14 @@ local function classItems()
     -- decision 669: two weapon set buttons right of the main action bar (every class)
     add({
         { type = "check", label = "Weapon set buttons",
-          tip = "Two buttons right of the main action bar, one per weapon set (main hand + off hand). Left click puts the set on, also in a fight; Shift + left click stores the weapons you wear now. Sets are filled on their own when your weapons leave no choice. Keys: game key bindings, AddOns > One More Quest. /omq wset shows the sets.",
+          tip = "A button right of the main action bar swaps between two weapon sets (main hand + off hand), also in a fight; or two buttons, one per set (switch below). Shift + left click stores the weapons you wear now. Sets are filled on their own when your weapons leave no choice. Keys: game key bindings, AddOns > One More Quest. /omq wset shows the sets.",
           get = function() return OMQ.db.options.weaponSets ~= false end,
           set = function(v) OMQ.db.options.weaponSets = v and true or false; if OMQ.WeaponSets then OMQ.WeaponSets.Apply() end end },
+        -- decision 678: one button that swaps (default) or the two buttons
+        { type = "check", indent = true, label = "One button instead of two",
+          tip = "One button swaps between the two sets with each click, also in a fight; its icon and number show the set you wear. Shift + left click stores the weapons you wear now as that set. Off: two buttons, one per set.",
+          get = function() return OMQ.db.options.weaponOneButton ~= false end,
+          set = function(v) OMQ.db.options.weaponOneButton = v and true or false; if OMQ.WeaponSets then OMQ.WeaponSets.Apply() end end },
     })
     add(mark({ "WARRIOR" }, {
         { type = "check", label = "Battle Shout card at enough rage",

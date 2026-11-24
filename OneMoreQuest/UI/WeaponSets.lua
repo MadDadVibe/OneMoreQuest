@@ -1,4 +1,4 @@
--- One More Quest: two weapon set buttons right of the main action bar (decision 669)
+-- One More Quest: weapon set buttons right of the main action bar (decision 669; one swap button by default, decision 678)
 -- Each button stands for one set of weapons (main hand + off hand). A left click or its key (game key bindings,
 -- AddOns > One More Quest) puts the set on, also in a fight: the buttons are secure macro buttons with
 -- "/equipslot 16 item:<id>" lines, the game's own secure command. The set shown on a button is the main hand's icon,
@@ -29,7 +29,7 @@ _G["BINDING_NAME_CLICK OneMoreQuestWeaponSet1:LeftButton"] = "Weapon set 1"
 _G["BINDING_NAME_CLICK OneMoreQuestWeaponSet2:LeftButton"] = "Weapon set 2"
 _G["BINDING_NAME_CLICK OneMoreQuestWeaponSwap:LeftButton"] = "Swap weapon sets"
 
-local buttons, holder, header, swap = {}, nil, nil, nil
+local buttons, holder, header, swap, toggle = {}, nil, nil, nil, nil
 local pending = false        -- attributes or visibility wait for the end of the fight
 local moveMode = false
 
@@ -48,6 +48,12 @@ function W.Data()
     d.combos = d.combos or {}      -- fix 672: every main + off hand pair worn together
     d.sets = d.sets or {}
     return d
+end
+
+-- decision 678: one button that swaps between the sets (default); off = the two buttons of decision 669
+function W.OneButton()
+    local o = OMQ.db and OMQ.db.options
+    return not o or o.weaponOneButton ~= false
 end
 
 function W.Enabled()
@@ -257,6 +263,17 @@ W.SET_SNIPPET = [[
     owner:SetAttribute("omq-cur", self:GetID())
 ]]
 
+-- decision 678: the one visible button. Like the swap key, but Shift + click stores and does not swap.
+W.TOGGLE_SNIPPET = [[
+    if down or button ~= "LeftButton" or IsShiftKeyDown() then return end
+    local cur = owner:GetAttribute("omq-cur") or 1
+    local nxt = (cur == 1) and 2 or 1
+    local m = owner:GetAttribute("omq-macro" .. nxt)
+    if not m then return false end
+    self:SetAttribute("macrotext1", m)
+    owner:SetAttribute("omq-cur", nxt)
+]]
+
 W.DEFAULT_ANCHOR = { "BOTTOMLEFT", "BOTTOMRIGHT", 8, 0 }
 local function anchorBar() return _G.MainActionBar or _G.MainMenuBar or _G.ActionButton12 end
 
@@ -301,6 +318,31 @@ local function tooltip(b)
     end
     GameTooltip:AddLine("Left click: put these weapons on (also in a fight)", 0.7, 0.85, 1)
     GameTooltip:AddLine("Shift + left click: store the weapons you wear now", 0.7, 0.85, 1)
+    GameTooltip:AddLine("Keys: game key bindings, AddOns > One More Quest", 0.6, 0.6, 0.6)
+    if combat() and pending then GameTooltip:AddLine("Changed sets take effect after the fight", 1, 0.8, 0.3) end
+    GameTooltip:Show()
+end
+
+-- the one button: the worn set, what a click puts on
+local function toggleTooltip(b)
+    if not GameTooltip then return end
+    local d = W.Data()
+    if not d then return end
+    local cur = W.ActiveIndex(d.sets, W.Worn())
+    local nxt = (cur == 1) and 2 or 1
+    GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+    GameTooltip:AddLine(cur and ("Weapon set " .. cur .. " (worn)") or "Weapon sets")
+    local function name(id) return (C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(id)) or (GetItemInfo and GetItemInfo(id)) or ("item " .. id) end
+    local set = cur and d.sets[cur]
+    if set then
+        GameTooltip:AddDoubleLine("Main hand", name(set.mh), 0.8, 0.8, 0.8, 1, 1, 1)
+        if set.oh then GameTooltip:AddDoubleLine("Off hand", name(set.oh), 0.8, 0.8, 0.8, 1, 1, 1) end
+    end
+    local other = d.sets[nxt]
+    if other then
+        GameTooltip:AddLine("Left click: switch to set " .. nxt .. " (" .. name(other.mh) .. (other.oh and (" + " .. name(other.oh)) or "") .. "), also in a fight", 0.7, 0.85, 1, true)
+    end
+    GameTooltip:AddLine("Shift + left click: store the weapons you wear now as set " .. (cur or d.active or 1), 0.7, 0.85, 1)
     GameTooltip:AddLine("Keys: game key bindings, AddOns > One More Quest", 0.6, 0.6, 0.6)
     if combat() and pending then GameTooltip:AddLine("Changed sets take effect after the fight", 1, 0.8, 0.3) end
     GameTooltip:Show()
@@ -370,6 +412,44 @@ local function build()
         header = CreateFrame("Frame", "OneMoreQuestWeaponSetsHeader", UIParent, "SecureHandlerBaseTemplate")
     end
     buttons[1], buttons[2] = makeButton(1), makeButton(2)
+    -- decision 678: the one button on top of the two (they stay for their keys, invisible and without the mouse)
+    toggle = CreateFrame("Button", "OneMoreQuestWeaponToggle", holder, "SecureActionButtonTemplate")
+    toggle:SetSize(W.SIZE, W.SIZE)
+    toggle:SetPoint("BOTTOMLEFT", holder, "BOTTOMLEFT", 0, 0)
+    if toggle.SetFrameLevel and holder.GetFrameLevel then toggle:SetFrameLevel((holder:GetFrameLevel() or 1) + 5) end
+    toggle:RegisterForClicks("AnyUp")
+    toggle:SetAttribute("useOnKeyDown", false)
+    toggle:SetAttribute("type1", "macro")
+    toggle:SetAttribute("shift-type1", ATTRIBUTE_NOOP or "")
+    toggle.icon = toggle:CreateTexture(nil, "ARTWORK")
+    toggle.icon:SetAllPoints()
+    toggle.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    toggle.icon:SetTexture(W.QUESTION)
+    local tb = toggle:CreateTexture(nil, "BACKGROUND")
+    tb:SetPoint("TOPLEFT", -1, 1)
+    tb:SetPoint("BOTTOMRIGHT", 1, -1)
+    tb:SetColorTexture(0.64, 0.50, 0.21, 1)
+    toggle.num = toggle:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    toggle.num:SetPoint("BOTTOMRIGHT", -3, 3)
+    local th = toggle:CreateTexture(nil, "HIGHLIGHT")
+    th:SetAllPoints()
+    th:SetColorTexture(1, 1, 1, 0.15)
+    toggle:SetScript("OnEnter", toggleTooltip)
+    toggle:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    toggle:HookScript("OnClick", function(_, button)
+        if button == "LeftButton" and IsShiftKeyDown and IsShiftKeyDown() then
+            local d = W.Data()
+            W.Store((d and (W.ActiveIndex(d.sets, W.Worn()) or d.active)) or 1)
+        end
+    end)
+    toggle:RegisterForDrag("LeftButton")
+    toggle:SetScript("OnDragStart", function() if moveMode and not combat() then holder:StartMoving() end end)
+    toggle:SetScript("OnDragStop", function()
+        holder:StopMovingOrSizing()
+        savePosition()
+        W.ApplyPosition()
+    end)
+    if header and header.WrapScript then header:WrapScript(toggle, "OnClick", W.TOGGLE_SNIPPET) end
     swap = CreateFrame("Button", "OneMoreQuestWeaponSwap", UIParent, "SecureActionButtonTemplate")
     swap:SetSize(1, 1)
     swap:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", -10, -10)
@@ -403,6 +483,13 @@ function W.Paint()
             if b.pulse then pcall(b.pulse.Stop, b.pulse) end
         end
     end
+    -- decision 678: the one button shows the worn set (MadDadVibe's choice) and its number
+    if toggle then
+        local set = active and d.sets[active]
+        toggle.icon:SetTexture(W.SetIcon(set) or W.SetIcon(worn) or W.QUESTION)
+        if toggle.icon.SetDesaturated then toggle.icon:SetDesaturated(false) end
+        toggle.num:SetText(active and tostring(active) or "")
+    end
     W.active = active
 end
 
@@ -419,15 +506,27 @@ function W.Apply()
         if header then header:SetAttribute("omq-macro" .. i, m) end
     end
     if header then header:SetAttribute("omq-cur", W.ActiveIndex(d.sets, W.Worn()) or d.active or 1) end
-    swap:SetAttribute("macrotext1", W.Macro(d.sets[(W.ActiveIndex(d.sets, W.Worn()) == 1) and 2 or 1]) or "")
+    local other = W.Macro(d.sets[(W.ActiveIndex(d.sets, W.Worn()) == 1) and 2 or 1]) or ""
+    swap:SetAttribute("macrotext1", other)
+    toggle:SetAttribute("macrotext1", other)
     W.ApplyPosition()
     if W.Enabled() and (W.Ready(d) or moveMode) then holder:Show() else holder:Hide() end
-    for i = 1, 2 do buttons[i]:EnableMouse(true) end
+    -- decision 678: one button or two; the two stay for their keys (invisible, no mouse) under the one button
+    local one = W.OneButton()
+    holder:SetSize(W.SIZE, one and W.SIZE or (W.SIZE * 2 + 4))
+    toggle:SetAlpha(one and 1 or 0)
+    toggle:EnableMouse(one)
+    for i = 1, 2 do
+        buttons[i]:SetAlpha(one and 0 or 1)
+        buttons[i]:EnableMouse(not one)
+        buttons[i]:ClearAllPoints()
+        buttons[i]:SetPoint("BOTTOMLEFT", holder, "BOTTOMLEFT", 0, (i == 1 and not one) and (W.SIZE + 4) or 0)
+    end
     W.Paint()
 end
 
 function W.Shown() return holder and holder:IsShown() or false end
-function W.Buttons() return buttons[1], buttons[2], swap, header end
+function W.Buttons() return buttons[1], buttons[2], swap, header, toggle end
 
 -- Shift + left click: the weapons worn now on button i
 function W.Store(i)
