@@ -16,7 +16,7 @@ local W = {}
 OMQ.WeaponSets = W
 
 W.MH, W.OH = 16, 17
-W.SIZE = 36
+W.SIZE = 54          -- fix 672: 50 % bigger than the first 36
 W.KIND = {
     INVTYPE_2HWEAPON = "two", INVTYPE_WEAPON = "one", INVTYPE_WEAPONMAINHAND = "one",
     INVTYPE_WEAPONOFFHAND = "off", INVTYPE_SHIELD = "off", INVTYPE_HOLDABLE = "off",
@@ -45,6 +45,7 @@ function W.Data()
     db.wsets[k] = db.wsets[k] or { known = {}, sets = {} }
     local d = db.wsets[k]
     d.known = d.known or {}
+    d.combos = d.combos or {}      -- fix 672: every main + off hand pair worn together
     d.sets = d.sets or {}
     return d
 end
@@ -58,6 +59,16 @@ local function instant(id)
     local f = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
     if not (f and id) then return nil end
     return f(id)
+end
+
+-- the icon of a set: the shield when the set has one (fix 672, MadDadVibe's choice), else the main hand
+function W.SetIcon(set)
+    if not (set and set.mh) then return nil end
+    if set.oh then
+        local _, _, _, loc = instant(set.oh)
+        if loc == "INVTYPE_SHIELD" then return W.Icon(set.oh) end
+    end
+    return W.Icon(set.mh)
 end
 
 -- "two", "one", "off" or nil (not a weapon of the two hands, or a fishing pole)
@@ -112,7 +123,10 @@ end
 W.Same = same
 
 -- the one other set the remembered weapons in the bags give, or nil and why ("none" / "unclear")
-function W.OtherSet(worn, bags, known, dual)
+-- the key of a worn pair in d.combos
+function W.ComboKey(set) return (set.mh or 0) .. ":" .. (set.oh or 0) end
+
+function W.OtherSet(worn, bags, known, dual, combos)
     if not (worn and worn.mh) then return nil, "unclear" end
     local items = {}
     for id, n in pairs(bags) do
@@ -125,6 +139,12 @@ function W.OtherSet(worn, bags, known, dual)
     if #items == 1 then
         local id = items[1]
         local k = W.Kind(id)
+        -- fix 672: a one-hander that was worn together with the worn main hand goes back to the off hand
+        -- (two equal one-handers + shield: the second sword is the off hand of the other set)
+        if k == "one" and dual and combos and W.Kind(worn.mh) == "one" then
+            if combos[W.ComboKey({ mh = worn.mh, oh = id })] then return { mh = worn.mh, oh = id } end
+            if combos[W.ComboKey({ mh = id, oh = worn.mh })] then return { mh = id, oh = worn.mh } end
+        end
         if k == "two" or k == "one" then return { mh = id } end
         -- only an off-hand piece: the worn one-hander with it
         if k == "off" and W.Kind(worn.mh) == "one" then return { mh = worn.mh, oh = id } end
@@ -164,7 +184,7 @@ end
 function W.Auto(d, worn, bags, reason, dual)
     local sets = d.sets
     if not worn.mh then return "kept" end
-    local other, why = W.OtherSet(worn, bags, d.known, dual)
+    local other, why = W.OtherSet(worn, bags, d.known, dual, d.combos)
     if other and not same(other, worn) then
         W.Place(sets, worn, other)
         d.active = W.ActiveIndex(sets, worn)
@@ -203,7 +223,12 @@ end
 function W.Macro(set)
     if not (set and set.mh) then return nil end
     local m = "/equipslot " .. W.MH .. " item:" .. set.mh
-    if set.oh and W.Kind(set.mh) ~= "two" then m = m .. "\n/equipslot " .. W.OH .. " item:" .. set.oh end
+    if set.oh and W.Kind(set.mh) ~= "two" then
+        local o = "/equipslot " .. W.OH .. " item:" .. set.oh
+        -- fix 672: the same weapon in both hands: off hand first, so the line of the main hand does not take
+        -- the copy from the bag (that copy would be locked for the off-hand line)
+        if set.oh == set.mh then m = o .. "\n" .. m else m = m .. "\n" .. o end
+    end
     return m
 end
 
@@ -265,10 +290,11 @@ local function tooltip(b)
     GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
     GameTooltip:AddLine("Weapon set " .. b:GetID())
     if set then
-        for _, id in ipairs({ set.mh, set.oh }) do
-            local name = (C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(id)) or (GetItemInfo and GetItemInfo(id)) or ("item " .. id)
-            GameTooltip:AddLine(name, 1, 1, 1)
-        end
+        -- fix 672: both hands named, an empty off hand too (it keeps what you wear there)
+        local function name(id) return (C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(id)) or (GetItemInfo and GetItemInfo(id)) or ("item " .. id) end
+        GameTooltip:AddDoubleLine("Main hand", name(set.mh), 0.8, 0.8, 0.8, 1, 1, 1)
+        if set.oh then GameTooltip:AddDoubleLine("Off hand", name(set.oh), 0.8, 0.8, 0.8, 1, 1, 1)
+        elseif W.Kind(set.mh) ~= "two" then GameTooltip:AddDoubleLine("Off hand", "stays as it is", 0.8, 0.8, 0.8, 0.6, 0.6, 0.6) end
         if W.Missing(set, W.BagCounts(), W.Worn()) then GameTooltip:AddLine("A weapon of this set is not in your bags", 1, 0.3, 0.3) end
     else
         GameTooltip:AddLine("Empty", 0.6, 0.6, 0.6)
@@ -367,7 +393,7 @@ function W.Paint()
     if active then d.active = active end
     for i = 1, 2 do
         local b, set = buttons[i], d.sets[i]
-        b.icon:SetTexture(set and set.mh and W.Icon(set.mh) or W.QUESTION)
+        b.icon:SetTexture(W.SetIcon(set) or W.QUESTION)
         if b.icon.SetDesaturated then b.icon:SetDesaturated(W.Missing(set, bags, worn)) end
         if active == i then
             b.glow:Show()
@@ -412,6 +438,7 @@ function W.Store(i)
     d.known[worn.mh] = true
     if worn.oh then d.known[worn.oh] = true end
     d.sets[i] = copy(worn)
+    d.combos[W.ComboKey(worn)] = true
     d.active = i
     W.Apply()
 end
@@ -427,8 +454,20 @@ function W.EquipChanged()
     for _, id in ipairs({ worn.mh, worn.oh }) do
         if id and not d.known[id] then d.known[id] = true; new = true end
     end
+    -- fix 672: a pair worn for the first time completes a set that has this main hand but no off hand yet
+    local key = worn.mh and W.ComboKey(worn)
+    local newPair = key and not d.combos[key]
+    if key then d.combos[key] = true end
     if new then W.Auto(d, worn, W.BagCounts(), "new", dual())
-    elseif not W.Ready(d) then W.Auto(d, worn, W.BagCounts(), "fill", dual()) end
+    elseif not W.Ready(d) then W.Auto(d, worn, W.BagCounts(), "fill", dual())
+    elseif newPair and worn.oh then
+        local i = W.ActiveIndex(d.sets, worn)
+        local s = i and d.sets[i]
+        if s and not s.oh and s.mh == worn.mh and not (d.sets[3 - i] and same(d.sets[3 - i], worn)) then
+            s.oh = worn.oh
+            d.active = i
+        end
+    end
     W.Apply()
     return new
 end
