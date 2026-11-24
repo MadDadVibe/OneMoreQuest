@@ -9,8 +9,9 @@
 -- and is clicked again for the next one. It skips an item that costs more than 1.5 times its plan right now; a left
 -- click on that row buys it anyway. The bags are never counted: only what was bought through the list counts (a dad
 -- sells what is left over).
--- The lists are kept per character until the dad deletes one (the X next to the list, any time); nothing is deleted
--- by itself. Making the list of the same place again replaces it. The second place (decision 650): the button next
+-- The lists are shared by all characters of the account on the same realm and faction (decision 668): a list of
+-- another character says "for <Name>", what was bought counts for everyone. The dad deletes a list with the X next to
+-- it any time; a list with everything bought - the vendor items too, bought here - goes away by itself. Making the list of the same place again replaces it. The second place (decision 650): the button next
 -- to "Ask the group" in the profession window adds the mats of the selected recipe to that recipe's own list
 -- ("Craft: <name> xN"), 1 craft per click, 5 with Shift; every click adds to what is there.
 local ADDON, OMQ = ...
@@ -29,43 +30,105 @@ local function money(c) return AH().Money(c) end
 local function clock() return (time and time()) or 0 end
 
 ----------------------------------------------------------------------
--- The lists (per character, in the saved variables)
+-- The lists (shared by all characters of the account, decision 668)
 ----------------------------------------------------------------------
-local function store()
-    OMQDB.shop = OMQDB.shop or {}
-    local guid = UnitGUID and UnitGUID("player") or "?"
-    OMQDB.shop[guid] = OMQDB.shop[guid] or { lists = {} }
-    return OMQDB.shop[guid]
+-- OMQDB.shop = { v = 2, all = { lists, newest first }, sel = { [guid] = list id } }. Every list keeps the character
+-- that made it (owner guid, name, class, realm, faction); id = owner .. "|" .. key. A character sees every list of
+-- its realm and faction (auction house and mail stay inside the faction); a list of another character says "for
+-- <Name>". What was bought counts once for everyone. The same key replaces only the same character's list.
+-- The older per-character lists (OMQDB.shop[guid].lists) are taken over once.
+local function me() return UnitGUID and UnitGUID("player") or "?" end
+local function myRealm() return GetRealmName and GetRealmName() or nil end
+local function myFaction() return UnitFactionGroup and UnitFactionGroup("player") or nil end
+local function stamp(l)
+    l.owner = l.owner or me()
+    if l.owner ~= me() then return end
+    l.ownerName = UnitName and UnitName("player") or l.ownerName
+    l.ownerClass = (UnitClass and select(2, UnitClass("player"))) or l.ownerClass
+    l.realm = myRealm() or l.realm
+    l.faction = myFaction() or l.faction
 end
-function S.Lists() return store().lists end
-function S.Count() return #store().lists end
+local function idOf(l) return (l.owner or "?") .. "|" .. tostring(l.key) end
+local function rawStore()
+    local db = OMQDB.shop
+    if type(db) ~= "table" then db = {}; OMQDB.shop = db end
+    if db.v ~= 2 then
+        local all, sel = {}, {}
+        for guid, old in pairs(db) do
+            if type(old) == "table" and type(old.lists) == "table" then
+                local alt = OMQDB.alts and OMQDB.alts[guid]
+                for _, l in ipairs(old.lists) do
+                    l.owner = guid
+                    if alt then l.ownerName, l.ownerClass, l.realm = alt.name, alt.class, alt.realm end
+                    all[#all + 1] = l
+                end
+                if old.sel then sel[guid] = guid .. "|" .. tostring(old.sel) end
+            end
+        end
+        table.sort(all, function(a, b) return (a.at or 0) > (b.at or 0) end)
+        db = { v = 2, all = all, sel = sel }
+        OMQDB.shop = db
+    end
+    db.all, db.sel = db.all or {}, db.sel or {}
+    return db
+end
+local function visible(l)
+    local r, f = myRealm(), myFaction()
+    if l.realm and r and l.realm ~= r then return false end
+    if l.faction and f and l.faction ~= f then return false end
+    return true
+end
+-- the lists this character sees, newest first
+function S.Lists()
+    local out, g = {}, me()
+    for _, l in ipairs(rawStore().all) do
+        if l.owner == g then stamp(l) end
+        if visible(l) then out[#out + 1] = l end
+    end
+    return out
+end
+function S.Count() return #S.Lists() end
+S.Id = idOf
+-- the list of this character with this key (the places that make lists only look at their own)
 function S.Find(key)
-    for i, l in ipairs(store().lists) do if l.key == key then return l, i end end
+    local g = me()
+    for i, l in ipairs(rawStore().all) do if l.owner == g and l.key == key then return l, i end end
     return nil
 end
 function S.Has(key) return S.Find(key) ~= nil end
+-- a visible list by its id, else this character's list by its key
+local function resolve(k)
+    for _, l in ipairs(S.Lists()) do if idOf(l) == k then return l end end
+    return S.Find(k)
+end
+function S.Mine(l) return l ~= nil and (l.owner == nil or l.owner == me()) end
 -- the list shown in the tab: the chosen one, else the newest
 function S.Selected()
-    local st = store()
-    return (st.sel and S.Find(st.sel)) or st.lists[1]
+    local st = rawStore()
+    local id = st.sel[me()]
+    local l = id and resolve(id)
+    if l and visible(l) then return l end
+    return S.Lists()[1]
 end
-function S.Select(key)
-    store().sel = key
+function S.Select(k)
+    local l = resolve(k)
+    rawStore().sel[me()] = l and idOf(l) or k
     if AH() and AH().Refresh then AH().Refresh(); AH().Pump() end
 end
 -- a new list: { key, title, source, items = { { itemID, n, plan, vendor } } }; a list with the same key is replaced.
 -- The newest stands first and is chosen.
 function S.Add(list)
-    local st = store()
+    local st = rawStore()
     local _, i = S.Find(list.key)
-    if i then table.remove(st.lists, i) end
+    if i then table.remove(st.all, i) end
     local items = {}
     for _, it in ipairs(list.items or {}) do
         items[#items + 1] = { itemID = it.itemID, n = it.n, plan = it.plan, vendor = it.vendor, bought = 0 }
     end
     local l = { key = list.key, title = list.title, source = list.source, at = clock(), items = items }
-    table.insert(st.lists, 1, l)
-    st.sel = l.key
+    stamp(l)
+    table.insert(st.all, 1, l)
+    st.sel[me()] = idOf(l)
     if AH() and AH().open then AH().Refresh(); AH().Pump() end
     return l
 end
@@ -100,15 +163,18 @@ function S.AddCrafts(key, name, items, crafts)
         if va ~= vc then return va > vc end
         return a.itemID < c.itemID
     end)
-    store().sel = key
+    rawStore().sel[me()] = idOf(l)
     if AH() and AH().open then AH().Refresh(); AH().Pump() end
     return l
 end
-function S.Delete(key)
-    local st = store()
-    local _, i = S.Find(key)
-    if i then table.remove(st.lists, i) end
-    if st.sel == key then st.sel = st.lists[1] and st.lists[1].key or nil end
+-- k = list id or this character's key; also a list of another character (the X in the tab)
+function S.Delete(k)
+    local st = rawStore()
+    local l = type(k) == "table" and k or resolve(k)
+    if l then
+        for i, x in ipairs(st.all) do if x == l then table.remove(st.all, i); break end end
+        for g, id in pairs(st.sel) do if id == idOf(l) then st.sel[g] = nil end end
+    end
     if S.menu then S.menu:Hide() end
     if AH() and AH().Refresh then AH().Refresh() end
 end
@@ -119,6 +185,22 @@ function S.Done(l)
         if not it.vendor and (it.bought or 0) < it.n then return false end
     end
     return true
+end
+-- every item bought, the vendor items too (bought at the auction house after a click, decision 636)
+function S.AllBought(l)
+    if not (l and #l.items > 0) then return false end
+    for _, it in ipairs(l.items) do
+        if (it.bought or 0) < it.n then return false end
+    end
+    return true
+end
+-- the owner's name for "for <Name>" (nil for my own list)
+function S.OwnerText(l)
+    if S.Mine(l) then return nil end
+    local name = l.ownerName or "another character"
+    local c = l.ownerClass and RAID_CLASS_COLORS and RAID_CLASS_COLORS[l.ownerClass]
+    if c and c.colorStr then return "|c" .. c.colorStr .. name .. "|r" end
+    return name
 end
 
 ----------------------------------------------------------------------
@@ -157,6 +239,18 @@ function S.Bought(r, qty)
     if not it then return end
     it.bought = math.min(it.n, (it.bought or 0) + (qty or 0))
     r.need = math.max(0, it.n - it.bought)
+    -- a list with everything bought goes away by itself (decision 668)
+    for _, l in ipairs(rawStore().all) do
+        for _, x in ipairs(l.items) do
+            if x == it then
+                if S.AllBought(l) then
+                    S.lastDone = { title = l.title, at = GetTime and GetTime() or 0 }
+                    S.Delete(l)
+                end
+                return
+            end
+        end
+    end
 end
 -- the price per piece of what is still missing, as the offers show it now; nil = not known
 function S.Unit(r)
@@ -263,7 +357,7 @@ local function build(panel)
     x:SetPoint("LEFT", dd, "RIGHT", 6, 0)
     x.bg:SetColorTexture(0.2, 0.21, 0.25, 1)
     x.text = fs(x, "GameFontNormal", 0.93, 0.93, 0.95); x.text:SetPoint("CENTER"); x.text:SetText("X")
-    x:SetScript("OnClick", function() local l = S.Selected(); if l then S.Delete(l.key) end end)
+    x:SetScript("OnClick", function() local l = S.Selected(); if l then S.Delete(l) end end)
     x:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_TOP"); GameTooltip:AddLine("Delete this shopping list"); GameTooltip:Show()
@@ -333,9 +427,10 @@ function S.ShowMenu()
             b:SetScript("OnClick", function(self) menu:Hide(); S.Select(self.key) end)
             menu.items[i] = b
         end
-        b.key = l.key
-        b.text:SetText(l.title)
-        if sel and l.key == sel.key then b.text:SetTextColor(0.95, 0.82, 0.48) else b.text:SetTextColor(0.93, 0.93, 0.95) end
+        b.key = idOf(l)
+        local who = S.OwnerText(l)
+        b.text:SetText(who and (l.title .. " - for " .. who) or l.title)
+        if sel and l == sel then b.text:SetTextColor(0.95, 0.82, 0.48) else b.text:SetTextColor(0.93, 0.93, 0.95) end
         b:Show()
     end
     for i = #lists + 1, #menu.items do menu.items[i]:Hide() end
@@ -389,7 +484,8 @@ function S.Render(panel, top)
     ui:Show()
     local l = S.Selected()
     local n = S.Count()
-    ui.dd.text:SetText(l and l.title or "No shopping list")
+    local who = l and S.OwnerText(l)
+    ui.dd.text:SetText(l and (who and (l.title .. " - for " .. who) or l.title) or "No shopping list")
     ui.dd.more:SetText(n > 0 and string.format("%d list%s", n, n == 1 and "" or "s") or "")
     ui.x:SetShown(l ~= nil)
     if S.menu:IsShown() then S.ShowMenu() end
@@ -398,13 +494,21 @@ function S.Render(panel, top)
         for _, line in ipairs(ui.lines) do line:Hide() end
         ui.head:Hide(); ui.vTitle:Hide(); ui.more:Hide(); ui.big:Hide(); ui.hint:Hide()
         ui.empty:Show(); ui.empty:ClearAllPoints(); ui.empty:SetPoint("TOPLEFT", 16, -y)
-        ui.empty:SetText("No shopping list yet. Click a cell of the Profession Check (check bar hammer or /omq prof) or the bag button next to a recipe's reagents to make one.")
+        local done = S.lastDone and GetTime and (GetTime() - S.lastDone.at) < 10 and S.lastDone
+        ui.empty:SetText((done and ("|cff9fdc8aEverything of " .. done.title .. " bought - list deleted.|r\n") or "")
+            .. "No shopping list yet. Click a cell of the Profession Check (check bar hammer or /omq prof) or the bag button next to a recipe's reagents to make one.")
         return y + 50
     end
     ui.empty:Hide(); ui.head:Show(); ui.hint:Show(); ui.big:Show()
     ui.head:ClearAllPoints(); ui.head:SetPoint("TOPLEFT", 16, -y)
+    local mail = ""
+    if who then
+        local any = false
+        for _, it in ipairs(l.items) do if (it.bought or 0) > 0 then any = true end end
+        mail = any and ("  |cff9fdc8aBought for " .. who .. " - send it by mail|r") or ("  For " .. who)
+    end
     ui.head:SetText(string.format("%d item%s - you carry |cfff2d27a%s|r", #l.items, #l.items == 1 and "" or "s", money(GetMoney and GetMoney() or 0))
-        .. (AH().Manual() and "  |cffff9933Paused - press Scan all to unpause|r" or ""))
+        .. mail .. (AH().Manual() and "  |cffff9933Paused - press Scan all to unpause|r" or ""))
     y = y + 22
     -- everything in one scrolled list: the auction house rows, then the vendor title and the vendor rows
     local R = S.Rows()
@@ -458,8 +562,10 @@ function S.Render(panel, top)
     ui.big.price:SetText(clicks > 0 and money(total) or "")
     y = y + 48
     ui.hint:ClearAllPoints(); ui.hint:SetPoint("TOPLEFT", 16, -(y + 4))
-    ui.hint:SetText(done and "Everything bought - X next to the list deletes it."
-        or "Big button: next item, most expensive first, skips \"more than planned\" - left click on a row: buy it anyway")
+    local recent = S.lastDone and GetTime and (GetTime() - S.lastDone.at) < 10 and S.lastDone
+    ui.hint:SetText((recent and ("|cff9fdc8aEverything of " .. recent.title .. " bought - list deleted.|r ") or "")
+        .. (done and "Auction house part bought - the list goes away once the vendor items are bought here too, X deletes it."
+        or "Big button: next item, most expensive first, skips \"more than planned\" - left click on a row: buy it anyway"))
     return y + 36
 end
 
