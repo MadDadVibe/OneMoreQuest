@@ -397,6 +397,14 @@ local function allSections()
                   OMQ.db.guide.mapMarkers = v and true or false
                   if OMQ.MapMarkers then OMQ.MapMarkers.Refresh(true) end
               end },
+            -- decision 697: quest givers of the zone on the world map
+            { type = "check", label = "Quest givers on the world map",
+              tip = "A yellow ! on the world map for every quest giver of the shown zone with a quest you can take now (no grey quests). Hover: quest names and rewards. Also the ! button at the top right of the world map and /omq givers.",
+              get = function() return OMQ.db.guide.questGivers == true end,
+              set = function(v)
+                  OMQ.db.guide.questGivers = v and true or false
+                  if OMQ.QuestGiverMap then OMQ.QuestGiverMap.SetEnabled(v) end
+              end },
             { type = "choice", label = "Map symbol for searches",
               tip = "The symbol on the world map for a destination of the icon bar: star, diamond or circle.",
               options = (OMQ.MapMarkers and OMQ.MapMarkers.IconChoices) and OMQ.MapMarkers.IconChoices() or {},
