@@ -4,6 +4,10 @@
 -- Only one run goes at a time: starting a Chain Run ends a Quest/Dungeon/Area Run or a Grind Run and the other way
 -- round. The bar, the small arrow and the tracker card are the ones of the Quest Run (UI/QuestRun.lua,
 -- UI/QuestTracker.lua) in purple; the window is UI/ChainRun.lua.
+-- Class chains (decision 698, Data/ClassChains.lua): a chain with "class" is only for that class (other classes never
+-- see it, nor its group offer); its "variants" hold the steps per race - my race picks one, else the first of my
+-- faction (not for a "strict" chain). A step counts as done once a later step is done or in the log (breadcrumbs,
+-- other ways in). A step in the log with open objectives leads to the objective places of Data/QuestPlaces.lua.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -26,7 +30,46 @@ local function myGuid() local m = OMQ:GetSelf(); return m and m.guid end
 ----------------------------------------------------------------------
 -- Data
 ----------------------------------------------------------------------
-function C.Chains() return OMQ.QuestChains or {} end
+function C.MyClass()
+    if not UnitClass then return nil end
+    local _, token = UnitClass("player")
+    if type(token) == "string" and not isSecret(token) then return token end
+    return nil
+end
+function C.MyRace()
+    if not UnitRace then return nil end
+    local _, _, id = UnitRace("player")
+    if type(id) == "number" and not isSecret(id) then return id end
+    return nil
+end
+-- the variant of a class chain for my race (or the first of my faction); nil = not for me
+function C.Variant(chain, race, faction)
+    if not chain.variants then return nil end
+    race, faction = race or C.MyRace(), faction or C.Faction()
+    for _, v in ipairs(chain.variants) do
+        for _, r in ipairs(v.races or {}) do if r == race then return v end end
+    end
+    if chain.strict then return nil end
+    for _, v in ipairs(chain.variants) do if v.faction == faction then return v end end
+    for _, v in ipairs(chain.variants) do if not v.faction then return v end end
+    return nil
+end
+-- true when the chain is for me (my class; a variant for my race or faction)
+function C.ForMe(chain)
+    if chain.class and chain.class ~= C.MyClass() then return false end
+    if chain.variants and not chain.steps then return false end
+    return true
+end
+local function resolve(chain)
+    if not chain.variants then return end
+    local v = C.Variant(chain)
+    chain.steps = v and v.steps or nil
+end
+function C.Chains()
+    local list = OMQ.QuestChains or {}
+    for _, c in ipairs(list) do resolve(c) end
+    return list
+end
 function C.Get(key)
     for _, c in ipairs(C.Chains()) do if c.key == key then return c end end
     return nil
@@ -98,16 +141,30 @@ function C.StepState(step, faction)
 end
 
 -- how far a chain is: number of done steps, all steps, index of the first open step (nil when all are done)
+-- the state of every step; a step before a done or picked-up step counts as done (698)
+function C.States(chain, faction)
+    local out, later = {}, false
+    local steps = chain.steps or {}
+    for i = #steps, 1, -1 do
+        local s = C.StepState(steps[i], faction)
+        if later and s == "open" then s = "done" end
+        if s ~= "open" then later = true end
+        out[i] = s
+    end
+    return out
+end
 function C.Progress(chain, faction)
     local done, first = 0, nil
-    for i, st in ipairs(chain.steps) do
-        if C.StepState(st, faction) == "done" then done = done + 1 elseif not first then first = i end
+    local states = C.States(chain, faction)
+    for i = 1, #states do
+        if states[i] == "done" then done = done + 1 elseif not first then first = i end
     end
-    return done, #chain.steps, first
+    return done, #states, first
 end
 
 -- "done", "running", "low" (level too low) or "ready"
 function C.Status(chain)
+    if not C.ForMe(chain) then return "class" end      -- another class or race: never shown (698)
     local done, n = C.Progress(chain)
     if done >= n then return "done" end
     if run and run.key == chain.key then return "running" end
@@ -129,8 +186,20 @@ end
 -- Places
 ----------------------------------------------------------------------
 local placeCache = {}
-function C.Place(spot)
-    if not spot then return nil end
+function C.Place(spot, pos)
+    if type(spot) ~= "table" or spot[1] == nil then return nil end
+    if type(spot[1]) == "table" then                    -- several places (two trainers): the nearest one (698)
+        pos = pos or (NQ() and NQ().MyPos())
+        local best, bd
+        for _, s in ipairs(spot) do
+            local p = C.Place(s)
+            if p then
+                local d = (pos and p.inst == pos.inst) and math.sqrt((p.a - pos.a) ^ 2 + (p.b - pos.b) ^ 2) or 1e9
+                if not bd or d < bd then best, bd = p, d end
+            end
+        end
+        return best
+    end
     local p = placeCache[spot]
     if p ~= nil then return p or nil end
     local w = NQ() and NQ().World(spot)
@@ -208,6 +277,7 @@ function C:Start(key, opts)
     local chain = C.Get(key)
     if not chain then OMQ:Print("Chain Run: no such chain"); return false end
     local status = C.Status(chain)
+    if status == "class" then OMQ:Print("Chain Run: " .. chain.name .. " is not for your class"); return false end
     if status == "done" then OMQ:Print("Chain Run: " .. chain.name .. " is already done"); return false end
     if status == "low" then OMQ:Print("Chain Run: " .. chain.name .. " needs level " .. chain.minLevel); return false end
     endOthers()
@@ -242,7 +312,7 @@ C._finish = finish
 function C:Tick()
     if not run then return end
     local chain = C:Chain()
-    if not chain then run = nil; fire(); return end
+    if not (chain and chain.steps) then run = nil; fire(); return end
     local done, n, first = C.Progress(chain)
     if not first then finish(); return end
     local step = chain.steps[first]
@@ -270,6 +340,18 @@ function C:Tick()
     end
 end
 
+-- a step in the log with open objectives: the nearest objective place (Data/QuestPlaces.lua, learned points)
+function C.Objective(step, pos)
+    local _, id = C.StepState(step)
+    if not id or not NQ() or not NQ().IsComplete or NQ().IsComplete(id) then return nil end
+    local d = OMQ.QuestPlaces and OMQ.QuestPlaces[id]
+    local spots = (OMQ.AreaRun and OMQ.AreaRun.ObjSpots) and OMQ.AreaRun.ObjSpots(id, d) or (d and d[9])
+    if type(spots) ~= "table" or #spots == 0 then return nil end
+    local list = {}
+    for _, s in ipairs(spots) do list[#list + 1] = { s[1], s[2], s[3] } end
+    return C.Place(list, pos)
+end
+
 -- what the small arrow and the tracker card show: { title, what, place, distance, heading, there, near, step, n,
 -- paused, enemy, search }
 function C:Target()
@@ -293,9 +375,11 @@ function C:Target()
         view.search = true
         view.what = state == "log" and step.toText or step.fromText
     elseif state == "log" then
-        p = C.Place(C.Pick(step.to)); view.what = step.toText
+        local obj = C.Objective(step, pos)
+        if obj then p, view.what, view.objective = obj, "do the quest here", true
+        else p = C.Place(C.Pick(step.to), pos); view.what = step.toText end
     else
-        p = C.Place(C.Pick(step.from)); view.what = step.fromText
+        p = C.Place(C.Pick(step.from), pos); view.what = step.fromText
     end
     view.place = p
     if step.enemyZone and C.Pick(step.enemyZone) then view.enemy = true end
@@ -327,8 +411,9 @@ function C:List()
     local out = {}
     if not chain then return out end
     local _, _, first = C.Progress(chain)
+    local states = C.States(chain)
     for i, st in ipairs(chain.steps) do
-        out[#out + 1] = { title = C.Title(st), done = C.StepState(st) == "done", current = i == first }
+        out[#out + 1] = { title = C.Title(st), done = states[i] == "done", current = i == first }
     end
     return out
 end
@@ -425,14 +510,17 @@ OMQ:RegisterCommand("chain", function(arg)
         return
     end
     if arg == "diag" then
-        local out = { "Chain Run - diagnostics", "faction: " .. C.Faction() .. ", level " .. C.Level() }
+        local out = { "Chain Run - diagnostics", "faction: " .. C.Faction() .. ", level " .. C.Level() ..
+                      ", class " .. tostring(C.MyClass()) .. ", race " .. tostring(C.MyRace()) }
         for _, c in ipairs(C.Chains()) do
+          if C.ForMe(c) then
             local done, n, first = C.Progress(c)
             out[#out + 1] = string.format("%s: %s, %d/%d steps done%s", c.key, C.Status(c), done, n, first and (", next step " .. first) or "")
             for i, st in ipairs(c.steps) do
                 local state, id = C.StepState(st)
                 out[#out + 1] = string.format("   %d. %s (%s): %s", i, C.Title(st), tostring(id), state)
             end
+          end
         end
         local t = C:Target()
         if t then out[#out + 1] = "target: " .. t.title .. " - " .. tostring(t.what) .. (t.distance and string.format(" - %d yd", math.floor(t.distance + 0.5)) or "") end
@@ -444,4 +532,4 @@ OMQ:RegisterCommand("chain", function(arg)
         return
     end
     if OMQ.ChainRunUI then OMQ.ChainRunUI:Toggle() end
-end, "chain run: /omq chain [bag|torch|off|diag]")
+end, "chain run: /omq chain [bag|torch|<class chain>|off|diag]")

@@ -1,6 +1,6 @@
 -- One More Quest: the window of the Chain Run (decision 595). A list of the chains (tab "For me": my faction, my
 -- level, not done; tab "All": every chain, too low ones grey, done ones gold with a tick), a click shows the steps,
--- the way and the rewards, Start begins at the first open step. Asks before it ends another run (K5) and shows the
+-- the way and the rewards, Start begins at the first open step. Chains of other classes are never listed (698). Asks before it ends another run (K5) and shows the
 -- offer of a dad who starts a chain in the group (K6). The bar, the small arrow and the done card are the Quest Run's
 -- in purple (UI/QuestRun.lua).
 local ADDON, OMQ = ...
@@ -15,7 +15,7 @@ local PURPLE, TEXT = UI.PURPLE, UI.TEXT
 local GREY = { 0.6, 0.63, 0.68 }
 local GOLD = { 0.89, 0.71, 0.29 }
 local GREEN = { 0.49, 0.78, 0.44 }
-local W, ROWS, ROW_H = 380, 10, 30
+local W, ROWS, ROW_H = 380, 12, 30
 
 local win, title, sub, rows, tabs, startBtn, backBtn, note
 local mode, tab, chosen = "list", "me", nil
@@ -52,8 +52,21 @@ function UI.ItemName(id)
     end
     return "item " .. tostring(id)
 end
+-- the spell a class chain teaches (698), in the language of the client
+function UI.SpellName(id)
+    if C_Spell and C_Spell.GetSpellName then
+        local ok, n = pcall(C_Spell.GetSpellName, id)
+        if ok and type(n) == "string" and n ~= "" then return n end
+    end
+    if GetSpellInfo then
+        local ok, n = pcall(GetSpellInfo, id)
+        if ok and type(n) == "string" and n ~= "" then return n end
+    end
+    return "spell " .. tostring(id)
+end
 function UI.Rewards(chain)
     local o = {}
+    if chain.spell then o[1] = UI.SpellName(chain.spell) end
     for _, id in ipairs(chain.rewards or {}) do o[#o + 1] = UI.ItemName(id) end
     return table.concat(o, ", ")
 end
@@ -68,6 +81,7 @@ function UI.ZoneName(map)
 end
 local function where(spot)
     if not spot then return "" end
+    if type(spot[1]) == "table" then spot = spot[1] end
     return string.format("%s %.1f, %.1f", UI.ZoneName(spot[1]), spot[2], spot[3])
 end
 
@@ -76,7 +90,7 @@ function UI.ChainsFor(t)
     local out = {}
     for _, c in ipairs(C().Chains()) do
         local st = C().Status(c)
-        if t == "all" or st == "ready" or st == "running" then out[#out + 1] = c end
+        if st ~= "class" and (t == "all" or st == "ready" or st == "running") then out[#out + 1] = c end
     end
     return out
 end
@@ -201,10 +215,11 @@ function UI:Render()
         local _, n, first = C().Progress(c)
         sub:SetText(n == 1 and "One step:" or (n .. " steps, in this order:"))
         local faction = C().Faction()
+        local states = C().States(c)
         for i, st in ipairs(c.steps) do
             local r = rows[i]
             if not r then break end
-            local state = C().StepState(st)
+            local state = states[i]
             r.key = nil
             r.name:SetText(i .. ". " .. C().Title(st))
             local col = state == "done" and GREEN or TEXT
