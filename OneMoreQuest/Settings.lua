@@ -146,7 +146,7 @@ local function classItems()
           set = function(v) OMQ.db.options.rageCard = v and true or false; OMQ.Alerts:Evaluate() end },
         -- decision 692: the nameplate of the mob that dodged glows with the Overpower icon
         { type = "check", label = "Overpower mark on the mob that dodged",
-          tip = "Warriors: when a mob dodges you, its nameplate glows yellow with the Overpower icon right of the health bar and a 5 second sweep, so you know where Overpower can be used. Enemy nameplates must be switched on. /omq op test shows a sample.",
+          tip = "Warriors: when a mob dodges you, its nameplate glows yellow with the Overpower icon left of the health bar and a 5 second sweep, so you know where Overpower can be used. Enemy nameplates must be switched on. /omq op test shows a sample.",
           get = function() return OMQ.db.options.overpowerMark ~= false end,
           set = function(v) if OMQ.OverpowerMark then OMQ.OverpowerMark.SetEnabled(v) else OMQ.db.options.overpowerMark = v and true or false end end },
     }))

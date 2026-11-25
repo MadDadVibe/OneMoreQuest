@@ -1,6 +1,6 @@
 -- One More Quest: Overpower mark (decision 692)
 -- A warrior's Overpower can only be used on the mob that dodged. With three or more mobs it is hard to tell which one
--- it was, so the nameplate of that mob glows yellow, with the Overpower icon right of its health bar and a 5 second
+-- it was, so the nameplate of that mob glows yellow, with the Overpower icon left of its health bar and a 5 second
 -- sweep. Looks like the Shadow Word: Death kill glow of the priest (UI/KillGlow.lua).
 --
 -- How the dodge is found without the combat log (registering it brings the game's "blocked" popup on WoW Forever):
@@ -201,19 +201,19 @@ local function newFrame()
     f.glow:SetTexture(MEDIA .. "Glow_Soft.tga")
     f.glow:SetBlendMode("ADD")
     f.glow:SetVertexColor(r, g, b, 0.9)
-    f.glow:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
-    f.glow:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -K.ICON_SIZE, 0)
+    f.glow:SetPoint("TOPLEFT", f, "TOPLEFT", K.ICON_SIZE, 0)
+    f.glow:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
     f.halo = f:CreateTexture(nil, "BORDER")
     f.halo:SetTexture(MEDIA .. "Glow_Soft.tga")
     f.halo:SetBlendMode("ADD")
     f.halo:SetVertexColor(r, g, b, 1)
     f.halo:SetSize(K.ICON_SIZE * 1.9, K.ICON_SIZE * 1.9)
-    f.halo:SetPoint("CENTER", f, "RIGHT", -K.ICON_SIZE / 2, 0)
+    f.halo:SetPoint("CENTER", f, "LEFT", K.ICON_SIZE / 2, 0)
     f.icon = f:CreateTexture(nil, "ARTWORK")
     f.icon:SetTexture(K.ICON)
     f.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     f.icon:SetSize(K.ICON_SIZE - 4, K.ICON_SIZE - 4)
-    f.icon:SetPoint("CENTER", f, "RIGHT", -K.ICON_SIZE / 2, 0)
+    f.icon:SetPoint("CENTER", f, "LEFT", K.ICON_SIZE / 2, 0)
     local ok, cd = pcall(CreateFrame, "Cooldown", nil, f, "CooldownFrameTemplate")
     if ok and cd then
         f.cd = cd
@@ -239,9 +239,9 @@ local function place(f, plate, at)
         f:ClearAllPoints()
         if plate then
             local hb = healthBar(plate)
-            -- the icon sits right of the health bar (MadDadVibe), the glow around the bar
-            f:SetPoint("TOPLEFT", hb, "TOPLEFT", -K.PAD, K.PAD)
-            f:SetPoint("BOTTOMRIGHT", hb, "BOTTOMRIGHT", K.PAD + K.ICON_SIZE, -K.PAD)
+            -- the icon sits left of the health bar like the Shadow Word: Death icon (MadDadVibe, fix 694), the glow around the bar
+            f:SetPoint("TOPLEFT", hb, "TOPLEFT", -K.PAD - K.ICON_SIZE, K.PAD)
+            f:SetPoint("BOTTOMRIGHT", hb, "BOTTOMRIGHT", K.PAD, -K.PAD)
         else
             f:SetSize(K.FALLBACK_WIDTH, 30)
             f:SetPoint("CENTER", UIParent, "CENTER", 0, 120)
