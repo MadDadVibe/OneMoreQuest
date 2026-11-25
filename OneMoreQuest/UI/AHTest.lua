@@ -169,12 +169,7 @@ end
 -- the prices go into the price list like a part of the scan: new price and quantity, nothing removed, the time
 -- of the last full scan stays; a live price of the last minutes is not overwritten (decision 427)
 function T.Save(items, since)
-    local st = OMQDB.prices and OMQDB.prices[(GetRealmName and GetRealmName()) or "?"]
-    if not st then
-        OMQDB.prices = OMQDB.prices or {}
-        st = { items = {}, at = 0, n = 0 }
-        OMQDB.prices[(GetRealmName and GetRealmName()) or "?"] = st
-    end
+    local st = P().Store()                               -- the price list of my realm (fix 711)
     local maxAge = (P() and P().MAX_AGE) or 900
     local saved = 0
     for id, e in pairs(items) do
@@ -231,7 +226,7 @@ local function finish(why)
     for i = 1, math.min(T.RAW_LINES, #list) do raw[i] = dump(list[i]) end
     r.raw = raw
     -- the price before, then save
-    local st = OMQDB.prices and OMQDB.prices[(GetRealmName and GetRealmName()) or "?"]
+    local st = P() and P().Store and P().Store()
     local sorted, n = {}, 0
     for id, e in pairs(items) do
         n = n + 1

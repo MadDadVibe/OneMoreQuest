@@ -27,13 +27,44 @@ local function now() return GetTime() end
 local function isSecret(v) return issecretvalue and issecretvalue(v) end
 local function stamp() return time and time() or 0 end
 
-local function realm() return (GetRealmName and GetRealmName()) or "?" end
+-- fix 711: on Forever GetRealmName() answers "" at times (also seen in fix 688). The prices then went into a second
+-- list under "" and every reader switched between the two lists (the disenchant bargains window flipped between
+-- two lists). The last real name is kept (OMQDB.priceRealm); a list under "" is merged into the real one.
+function P.Realm()
+    if not GetRealmName then return "?" end
+    local ok, r = pcall(GetRealmName)
+    if ok and type(r) == "string" and r ~= "" and not isSecret(r) then
+        if OMQDB then OMQDB.priceRealm = r end
+        return r
+    end
+    return (OMQDB and OMQDB.priceRealm) or ""
+end
+-- the entries of src go into dst: per item the newer price, the scan fields of the newer scan
+function P.MergeStore(dst, src)
+    dst.items = dst.items or {}
+    for id, e in pairs(src.items or {}) do
+        local o = dst.items[id]
+        if not o or (e.t or src.at or 0) > (o.t or dst.at or 0) then dst.items[id] = e end
+    end
+    if (src.at or 0) > (dst.at or 0) then
+        for k, v in pairs(src) do if k ~= "items" then dst[k] = v end end
+    end
+    local n = 0
+    for _ in pairs(dst.items) do n = n + 1 end
+    dst.n = n
+end
 local function store()
     OMQDB.prices = OMQDB.prices or {}
-    local r = realm()
-    OMQDB.prices[r] = OMQDB.prices[r] or { items = {}, at = 0, n = 0 }
-    return OMQDB.prices[r]
+    local r = P.Realm()
+    local all = OMQDB.prices
+    if r ~= "" and all[""] then
+        if all[r] then P.MergeStore(all[r], all[""]) else all[r] = all[""] end
+        all[""] = nil
+    end
+    all[r] = all[r] or { items = {}, at = 0, n = 0 }
+    return all[r]
 end
+P.Store = store
 -- decision 636: only offers a vendor always has are learned (no limited stock such as Peacebloom); the prices
 -- learned before that are dropped once and learned again at the next merchant visit
 P.VENDOR_V = 2
