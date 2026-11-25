@@ -17,7 +17,9 @@ local GOLD = { 0.89, 0.71, 0.29 }
 local GREEN = { 0.49, 0.78, 0.44 }
 local W, ROWS, ROW_H = 380, 12, 30
 
-local win, title, sub, rows, tabs, startBtn, backBtn, note
+local win, title, sub, rows, tabs, startBtn, backBtn, note, rewardLabel
+local rewardBtns = {}
+local REWARD_H = 24
 local mode, tab, chosen = "list", "me", nil
 UI._view = {}
 
@@ -63,6 +65,56 @@ function UI.SpellName(id)
         if ok and type(n) == "string" and n ~= "" then return n end
     end
     return "spell " .. tostring(id)
+end
+-- the rewards as entries for the icon rows (fix 704): { kind = "spell"/"item", id, name, icon, color }
+function UI.ItemIcon(id)
+    if C_Item and C_Item.GetItemIconByID then
+        local ok, t = pcall(C_Item.GetItemIconByID, id)
+        if ok and t then return t end
+    end
+    if GetItemIcon then
+        local ok, t = pcall(GetItemIcon, id)
+        if ok and t then return t end
+    end
+    return 134400                                   -- the question mark
+end
+function UI.SpellIcon(id)
+    if C_Spell and C_Spell.GetSpellTexture then
+        local ok, t = pcall(C_Spell.GetSpellTexture, id)
+        if ok and t then return t end
+    end
+    return 134400
+end
+function UI.ItemColor(id)
+    local q
+    if C_Item and C_Item.GetItemQualityByID then
+        local ok, r = pcall(C_Item.GetItemQualityByID, id)
+        if ok and type(r) == "number" then q = r end
+    end
+    local c = q and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q]
+    if c and c.r then return { c.r, c.g, c.b } end
+    return { 1, 1, 1 }
+end
+function UI.RewardList(chain)
+    local out = {}
+    if chain.spell then
+        out[#out + 1] = { kind = "spell", id = chain.spell, name = UI.SpellName(chain.spell), icon = UI.SpellIcon(chain.spell), color = TEXT }
+    end
+    for _, id in ipairs(chain.rewards or {}) do
+        out[#out + 1] = { kind = "item", id = id, name = UI.ItemName(id), icon = UI.ItemIcon(id), color = UI.ItemColor(id) }
+    end
+    return out
+end
+-- the game's own tooltip of a reward
+function UI.RewardTip(owner, r)
+    local t = GameTooltip
+    if not (t and r) then return false end
+    t:SetOwner(owner, "ANCHOR_RIGHT")
+    if r.kind == "spell" and t.SetSpellByID then t:SetSpellByID(r.id)
+    elseif r.kind == "item" and t.SetItemByID then t:SetItemByID(r.id)
+    else t:SetText(r.name) end
+    t:Show()
+    return true
 end
 function UI.Rewards(chain)
     local o = {}
@@ -157,6 +209,10 @@ local function build()
         r:Hide()
         rows[i] = r
     end
+    rewardLabel = win:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    rewardLabel:SetText("Rewards:")
+    rewardLabel:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+    rewardLabel:Hide()
     note = win:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     note:SetJustifyH("LEFT")
     note:SetWidth(W - 28)
@@ -172,7 +228,8 @@ function UI:Render()
     local view = { mode = mode, rows = {} }
     UI._view = view
     for _, r in ipairs(rows) do r:Hide() end
-    startBtn:Hide(); backBtn:Hide(); note:Hide()
+    startBtn:Hide(); backBtn:Hide(); note:Hide(); rewardLabel:Hide()
+    for _, b in ipairs(rewardBtns) do b:Hide() end
     for _, b in ipairs(tabs) do b:Hide() end
     local y
     if mode == "list" then
@@ -233,7 +290,7 @@ function UI:Render()
             r:Show()
             view.rows[i] = { title = C().Title(st), state = state }
         end
-        local lines = { "|cffe3b54aRewards:|r " .. UI.Rewards(c) }
+        local lines = {}
         for i, st in ipairs(c.steps) do
             if st.enemyZone and C().Pick(st.enemyZone) then
                 local spot = C().Pick(st.to)
@@ -246,11 +303,28 @@ function UI:Render()
         end
         local status = C().Status(c)
         if status == "low" then lines[#lines + 1] = "|cffff8a6aNeeds level " .. c.minLevel .. "|r" end
-        note:SetText(table.concat(lines, "\n"))
         y = 60 + #c.steps * ROW_H + 6
+        local rewards = UI.RewardList(c)                -- one row per reward: icon, name, the game's tooltip (704)
+        view.rewards = {}
+        if #rewards > 0 then
+            rewardLabel:ClearAllPoints(); rewardLabel:SetPoint("TOPLEFT", 14, -y); rewardLabel:Show()
+            y = y + 18
+            for i, r in ipairs(rewards) do
+                local b = UI.RewardButton(i)
+                b.reward = r
+                b.icon:SetTexture(r.icon)
+                b.name:SetText(r.name)
+                b.name:SetTextColor(r.color[1], r.color[2], r.color[3])
+                b:ClearAllPoints(); b:SetPoint("TOPLEFT", 14, -y); b:Show()
+                y = y + REWARD_H
+                view.rewards[i] = { kind = r.kind, id = r.id, name = r.name, icon = r.icon }
+            end
+            y = y + 4
+        end
+        note:SetText(table.concat(lines, "\n"))
         note:ClearAllPoints()
         note:SetPoint("TOPLEFT", 14, -y)
-        note:Show()
+        if #lines > 0 then note:Show() end
         y = y + 16 * #lines + 10
         backBtn:ClearAllPoints(); backBtn:SetPoint("BOTTOMLEFT", 14, 12); backBtn:Show()
         startBtn:ClearAllPoints(); startBtn:SetPoint("BOTTOMRIGHT", -14, 12); startBtn:Show()
@@ -262,6 +336,27 @@ function UI:Render()
         y = y + 40
     end
     win:SetHeight(y)
+end
+
+-- a reward row: icon + name, hover = the game's tooltip (704)
+function UI.RewardButton(i)
+    local b = rewardBtns[i]
+    if b then return b end
+    b = CreateFrame("Button", nil, win)
+    b:SetSize(W - 28, REWARD_H - 2)
+    local hl = b:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetAllPoints()
+    hl:SetColorTexture(PURPLE[1], PURPLE[2], PURPLE[3], 0.14)
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetSize(REWARD_H - 4, REWARD_H - 4)
+    b.icon:SetPoint("LEFT", 2, 0)
+    b.name = b:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    b.name:SetPoint("LEFT", REWARD_H + 2, 0)
+    b.name:SetJustifyH("LEFT")
+    b:SetScript("OnEnter", function(self) UI.RewardTip(self, self.reward) end)
+    b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    rewardBtns[i] = b
+    return b
 end
 
 function UI:Pick(key) chosen = key; mode = "preview"; self:Render() end
@@ -303,6 +398,12 @@ OMQ:On("CHAIN_RUN_OFFER", function(who, chain)
         C():Start(chain.key, { quiet = true })
     end)
 end)
+
+-- item names and qualities arrive later than the first look: draw the open window again (704)
+local itemWatch = CreateFrame("Frame")
+if itemWatch.RegisterEvent then pcall(itemWatch.RegisterEvent, itemWatch, "GET_ITEM_INFO_RECEIVED") end
+itemWatch:SetScript("OnEvent", function() if UI:IsOpen() then UI:Render() end end)
+UI._itemWatch = itemWatch
 
 OMQ:On("CHAIN_RUN_CHANGED", function()
     if UI:IsOpen() then UI:Render() end
