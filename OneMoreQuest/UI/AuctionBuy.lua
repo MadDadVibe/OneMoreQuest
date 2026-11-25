@@ -4,13 +4,14 @@
 --   gear upgrades for every slot (item score against what I wear, only what I can put on right now - level,
 --   weapon skill and class from the game's tooltip, decision 431 - up to the gold limit of the Upgrades tab,
 --   UI/AuctionUpgrades.lua, decision 637, which also shows the bags), and the stock rows of
---   UI/BuyRules.lua: small, cheap buffs under a price limit per use (decision 431), armor kits for chest,
---   legs, hands and feet without an enchantment, a shield spike for a shield without one.
+--   the fixed list of Data/BuyBrackets.lua (decision 691: one elixir, weapon buff, food and potion per class and level
+--   bracket, right click = the item of the next lower bracket), armor kits for chest, legs, hands and feet without an
+--   enchantment and a shield spike for a shield without one (UI/BuyRules.lua, under a price limit, decision 431).
 -- Every row is searched live once the Buy tab is open; the dump of the whole house is not used here (decision 431).
 -- Bags too (decision 265): a bigger bag, profession bags, soul bags, quivers and ammo pouches.
 -- Two ways to buy: "Fill up" (a click buys what is missing; one button fills everything, one click per
--- item) and "Single" (a click buys one piece). Right click: never suggest it again. A purchase never goes over
--- the price limit of its row (decision 431).
+-- item) and "Single" (a click buys one piece). A purchase of a kit or spike never goes over the price limit of its
+-- row (decision 431); the list rows have none.
 -- A purchase counts at once, even while it waits in the mailbox (decision 271).
 -- Buying a commodity: StartCommoditiesPurchase (needs the click), then the price quote comes back and
 -- ConfirmCommoditiesPurchase completes it. Single auctions (weapons, bags): a fresh search on the first click,
@@ -370,8 +371,108 @@ function B.MyStones()
     return out
 end
 
--- the stock rows (decision 431): one per group of UI/BuyRules.lua, the strongest item under the limit; every item
--- that could be the one is priced live first (cands), a group waits while a stronger item is not priced yet
+-- Decision 691: the consumables come from MadDadVibe's fixed list (Data/BuyBrackets.lua): per class (the druid by its
+-- role) and level bracket one elixir, one weapon buff, one food and one potion - no price limit, the live price is shown.
+-- Right click on such a row takes the item of the next lower bracket (one that differs), below the lowest back to my
+-- own; the choice is kept per character and column until the character reaches a new bracket.
+function B.ListKey(class, role)
+    if class == "DRUID" then return (role == "caster" or role == "heal") and "DRUID_CASTER" or "DRUID_FERAL" end
+    return class
+end
+function B.BracketOf(lvl)
+    local L = OMQ.BuyBrackets
+    local b = L.BRACKETS[1]
+    for _, x in ipairs(L.BRACKETS) do if (lvl or 1) >= x then b = x end end
+    return b
+end
+function B.ListItem(key, bracket, col)
+    local t = OMQ.BuyBrackets.LIST[key or ""]
+    local row = t and t[bracket]
+    return row and row[col] or nil
+end
+-- the stone of the same tier that fits the weapon in hand (blade: sharpening stone, blunt: weightstone)
+function B.FitStone(id)
+    local L = OMQ.BuyBrackets
+    local other = L.STONE_PAIR[id]
+    if not other then return id end
+    local kind = B.StoneLine(16) or B.StoneLine(17)
+    if not kind then return id end
+    if (kind == "stone_sharp") == (L.SHARP[id] == true) then return id end
+    return other
+end
+local function guid() return UnitGUID and UnitGUID("player") or "?" end
+-- my choices of a lower bracket: { base = my bracket, [column] = the bracket chosen }
+function B.ListPicks(own)
+    local ah = db()
+    ah.listPick = ah.listPick or {}
+    local p = ah.listPick[guid()]
+    if not p or p.base ~= own then p = { base = own }; ah.listPick[guid()] = p end
+    return p
+end
+local function me()
+    local SC = OMQ.Score
+    local class = SC and SC.MyClass() or select(2, UnitClass("player"))
+    local role = SC and SC.MyRole() or "damage"
+    return B.ListKey(class, role), level()
+end
+-- the list rows for me: { col, id, kind, bracket, own }
+function B.ListRows(key, lvl)
+    local L = OMQ.BuyBrackets
+    local own = B.BracketOf(lvl)
+    local p = B.ListPicks(own)
+    local out = {}
+    for col, cname in ipairs(L.COLUMNS) do
+        local b = p[col] or own
+        local id = B.ListItem(key, b, col)
+        if id and cname == "weapon" then id = B.FitStone(id) end
+        if id and (L.NEED[id] or 1) <= lvl then
+            local kind = cname
+            if cname == "weapon" then kind = (OMQ.BuyKnown and OMQ.BuyKnown[id] == "oil") and "oil" or "stone" end
+            out[#out + 1] = { col = col, id = id, kind = kind, bracket = b, own = own }
+        end
+    end
+    return out
+end
+-- right click on a list row: the next lower bracket with another item, below the lowest my own again
+function B.Lower(col)
+    local key, lvl = me()
+    local L = OMQ.BuyBrackets
+    local own = B.BracketOf(lvl)
+    local p = B.ListPicks(own)
+    local cur = p[col] or own
+    local curId = B.ListItem(key, cur, col)
+    local pick
+    for i = #L.BRACKETS, 1, -1 do
+        local b = L.BRACKETS[i]
+        if not pick and b < cur then
+            local id = B.ListItem(key, b, col)
+            if id and id ~= curId then pick = b end
+        end
+    end
+    p[col] = pick
+    B.Build()
+    if AH().Refresh then AH().Refresh() end
+    if AH().Pump then AH().Pump() end
+    return pick or own
+end
+-- every column back to my own bracket (the Reset button)
+function B.ResetPicks()
+    local ah = db()
+    if ah.listPick then ah.listPick[guid()] = nil end
+    B.Build()
+    AH().Refresh()
+    AH().Pump()
+end
+function B.PickCount()
+    local ah = db()
+    local p = ah.listPick and ah.listPick[guid()]
+    local n = 0
+    for k in pairs(p or {}) do if type(k) == "number" then n = n + 1 end end
+    return n
+end
+
+-- the stock rows: the four columns of the fixed list (decision 691), then armor kits and a shield spike as before
+-- (decision 431: the strongest under the limit; every item that could be the one is priced live first)
 function B.Build()
     for i = #rows, 1, -1 do rows[i] = nil end
     for i = #alts, 1, -1 do alts[i] = nil end
@@ -380,60 +481,40 @@ function B.Build()
     local class = SC and SC.MyClass() or select(2, UnitClass("player"))
     local role = SC and SC.MyRole() or "damage"
     local lvl = level()
-    local never = (db()).never
     local seen = {}
     local function add(r)
-        if not seen[r.itemID] and not never[r.itemID] then seen[r.itemID] = true; rows[#rows + 1] = r; r.order = #rows end
+        if not seen[r.itemID] then seen[r.itemID] = true; rows[#rows + 1] = r; r.order = #rows end
     end
-    local all = {}
-    for _, g in ipairs((R.Groups(class, role, {}))) do all[#all + 1] = g.line end
-    local excluded = B.Excluded(class, all)
-    local groups, prof = R.Groups(class, role, { stones = B.MyStones(), kitSlots = B.KitSlots(),
-        spike = B.ShieldWithoutSpike(), excluded = excluded, level = lvl })
-    B.pending = 0
-    for _, g in ipairs(groups) do
-        local ids = {}
-        for _, id in ipairs(R.Candidates(g, lvl)) do
-            if not never[id] then
-                ids[#ids + 1] = id
-                local c = rowFor(id, g.kind, g.line, g.target, false)
-                c.cap = g.cap
-                alts[#alts + 1] = c
-            end
-        end
-        local id, waiting = R.Pick(ids, g.cap, priceOf)
-        if id then add(byId[id]) elseif waiting then B.pending = B.pending + 1 end
-    end
-    -- buff food (decision 431): the cheapest food with Well Fed, and the class food under the limit;
-    -- the class food alone when it costs at most 50% more
-    for _, f in ipairs(foods) do f.xp = nil end
-    local xp = B.CheapestFood(lvl, prof)
-    local fg = { line = R.FoodLine(prof), kind = "food", cap = R.CapFor("food", lvl) }
-    local fids = {}
-    for _, id in ipairs(R.Candidates(fg, lvl)) do
-        if not never[id] then
-            fids[#fids + 1] = id
-            local c = rowFor(id, "food", fg.line, B.TARGET.food or 10, false)
-            c.cap = fg.cap
-            alts[#alts + 1] = c
-        end
-    end
-    local classFood, waiting = R.Pick(fids, fg.cap, priceOf)
-    if waiting then B.pending = B.pending + 1 end
-    local xpId, cId = R.Foods(xp and xp.itemID, xp and priceOf(xp.itemID), classFood, classFood and priceOf(classFood))
-    if xpId then
-        local r = rowFor(xpId, "food", "xp", B.TARGET.food or 10, false)
-        r.xp, r.cap = true, nil
+    for _, it in ipairs(B.ListRows(B.ListKey(class, role), lvl)) do
+        local r = rowFor(it.id, it.kind, "list", B.TARGET[it.kind] or 10, false)
+        r.col, r.cap, r.bracket, r.lowered = it.col, nil, it.bracket, it.bracket ~= it.own
         add(r)
     end
-    if cId then add(byId[cId]) end
+    local never = (db()).never
+    local groups = R.Groups(class, role, { stones = {}, kitSlots = B.KitSlots(), spike = B.ShieldWithoutSpike(), level = lvl })
+    B.pending = 0
+    for _, g in ipairs(groups) do
+        if g.kind == "kit" or g.kind == "spike" then
+            local ids = {}
+            for _, id in ipairs(R.Candidates(g, lvl)) do
+                if not never[id] then
+                    ids[#ids + 1] = id
+                    local c = rowFor(id, g.kind, g.line, g.target, false)
+                    c.cap, c.col = g.cap, nil
+                    alts[#alts + 1] = c
+                end
+            end
+            local id, waiting = R.Pick(ids, g.cap, priceOf)
+            if id then add(byId[id]) elseif waiting then B.pending = B.pending + 1 end
+        end
+    end
     for _, r in ipairs(rows) do
         r.have = B.Have(r.itemID)
         r.need = math.max(0, r.target - r.have)
         r.itemKey = r.itemKey or { itemID = r.itemID }
     end
     table.sort(rows, function(a, b)
-        local ka, kb = B.KIND_ORDER[a.kind] or 99, B.KIND_ORDER[b.kind] or 99
+        local ka, kb = a.col or (10 + (B.KIND_ORDER[a.kind] or 99)), b.col or (10 + (B.KIND_ORDER[b.kind] or 99))
         if ka ~= kb then return ka < kb end
         return (a.order or 0) < (b.order or 0)
     end)
@@ -1640,7 +1721,6 @@ function B.Open()
     resetBags()
     for _, r in pairs(byId) do r.state, r.live = "price", nil end
     B.LearnBags()
-    B.FoodCandidates(level(), B.MyProfile())
     B.Build()
 end
 
@@ -1694,11 +1774,13 @@ local function build(panel)
         local r = makeRow(ui, 38)
         r:SetScript("OnClick", function(self, button)
             if not self.r then return end
-            if button == "RightButton" then B.Never(self.r.itemID) else B.Click(self.r) end
+            if button == "RightButton" then if self.r.col then B.Lower(self.r.col) end else B.Click(self.r) end
         end)
         r:SetScript("OnEnter", function(self)
             if GameTooltip and self.r then
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink("item:" .. self.r.itemID); GameTooltip:Show()
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink("item:" .. self.r.itemID)
+                if self.r.col then GameTooltip:AddLine("Right click: the item of the next lower level list", 0.6, 0.8, 1) end
+                GameTooltip:Show()
             end
         end)
         ui.sRows[i] = r
@@ -1721,14 +1803,14 @@ local function build(panel)
     reset.bg = reset:CreateTexture(nil, "BORDER"); reset.bg:SetAllPoints(); reset.bg:SetColorTexture(0.2, 0.21, 0.25, 1)
     reset.text = fs(reset, "GameFontNormalSmall", 0.93, 0.93, 0.95); reset.text:SetPoint("CENTER"); reset.text:SetText("Reset")
     reset.hl = reset:CreateTexture(nil, "HIGHLIGHT"); reset.hl:SetAllPoints(); reset.hl:SetColorTexture(1, 1, 1, 0.08)
-    reset:SetScript("OnClick", function() B.ResetNever() end)
+    reset:SetScript("OnClick", function() B.ResetPicks() end)
     reset:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:AddLine("Reset")
-        local n = B.NeverCount()
-        GameTooltip:AddLine("All consumables you clicked away (right click) come back to the list.", 1, 1, 1, true)
-        GameTooltip:AddLine(n > 0 and (n .. " clicked away right now") or "Nothing clicked away right now", 0.7, 0.7, 0.7)
+        local n = B.PickCount()
+        GameTooltip:AddLine("Every consumable back to the list of your level (right click took a lower one).", 1, 1, 1, true)
+        GameTooltip:AddLine(n > 0 and (n .. " from a lower list right now") or "All from the list of your level right now", 0.7, 0.7, 0.7)
         GameTooltip:Show()
     end)
     reset:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -1771,12 +1853,12 @@ function B.Render(panel, top)
             if not name and C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, r.itemID) end
             row.icon:SetTexture(icon or select(5, instant(r.itemID)))
             -- the cheapest XP food says so behind its name (decision 272)
-            row.name:SetText((name or ("item " .. r.itemID)) .. (r.xp and " (Cheapest 5% Buff)" or "")); row.name:SetTextColor(qColor(quality))
+            row.name:SetText(name or ("item " .. r.itemID)); row.name:SetTextColor(qColor(quality))
             local unit = r.offers and r.offers[1] and r.offers[1].unit
             -- no category line any more (decision 270): only what helps to choose
             local parts = {}
             if unit then parts[#parts + 1] = money(unit) .. " each" end
-            if r.cheaper then parts[#parts + 1] = "weaker, cheaper" end
+            if r.lowered then parts[#parts + 1] = "level " .. r.bracket .. " list" end
             if r.mine then parts[#parts + 1] = "you use it" end
             row.sub:SetText(table.concat(parts, " - "))
             local full = (r.need or 0) == 0
@@ -1811,8 +1893,8 @@ function B.Render(panel, top)
     end
     ui.hint:ClearAllPoints(); ui.hint:SetPoint("TOPLEFT", 16, -(y + 4))
     ui.reset:ClearAllPoints(); ui.reset:SetPoint("TOPRIGHT", ui, "TOPLEFT", 364, -y)
-    ui.hint:SetText(single and "Left click: buy one - right click: never suggest it"
-        or "Left click: buy what is missing - right click: never suggest it")
+    ui.hint:SetText(single and "Left click: buy one - right click: one level list lower"
+        or "Left click: buy what is missing - right click: one level list lower")
     return y + 24
 end
 

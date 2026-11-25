@@ -1,4 +1,6 @@
 -- One More Quest: what the buy mode suggests to stock up (decision 431)
+-- Since decision 691 the Buy tab takes only the armor kits and shield spikes from here; potions, elixirs, scrolls,
+-- weapon buffs and food come from the fixed list of Data/BuyBrackets.lua. The rules below stay for those two and the tests.
 -- Small, cheap buffs at any time instead of only the newest, best item. Every group shows the strongest item
 -- I can use whose live price per use stays under the group's limit; none under the limit: no row.
 --   Weapon oil (casters: wizard oil, healers: wizard oil and mana oil) and weapon stones (melee, the kind that fits the weapon
