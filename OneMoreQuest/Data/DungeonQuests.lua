@@ -9,6 +9,8 @@
 -- The Drowned City: all eight quests from the Factoruide Forever data of 2026-11-13 (decision 594).
 -- Krol'dok Stronghold: nine quests from the Factoruide Forever data of 2026-11-16 (escort quests without a known giver left out).
 -- Alcaz Island Prison: nine quests from the Factoruide Forever data of 2026-11-23 (follow-ups outside only as chain steps).
+-- Blackmaw Hold and the newer Forever quests of Razorfen Downs, Zul'Farrak, Maraudon and Blackrock Depths: Factoruide Forever data
+--   of 2026-11-25 (quests whose objectives lie in the dungeon).
 -- Dungeons that the page does not cover (Blackmaw Hold, Shaper's Terrace, Stratholme, Upper
 -- Blackrock Spire) keep their earlier values (decision 143: in-game dungeon browser).
 -- Quest: { id, name, level, faction } faction "A" Alliance only, "H" Horde only, nil = both.
@@ -170,6 +172,9 @@ OMQ.Dungeons = {
         { id = 6626, name = "A Host of Evil", level = 28 },
         { id = 3523, name = "Scourge of the Downs", level = 32 },
         { id = 3525, name = "Extinguishing the Idol", level = 32 },
+        { id = 93604, name = "Agamaggan's Blood", level = 45 },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 96773, name = "The Coldbringer's Eye", level = 41, faction = "A" },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 97196, name = "The Coldbringer's Eye", level = 41, faction = "H" },  -- WoW Forever (Factoruide 2026-11-25)
     } },
     { key = "uld", abbr = "Uld", name = "Uldaman", min = 37, max = 47, quests = {
         { id = 2342, name = "Reclaimed Treasures", level = 33, faction = "H" },
@@ -195,6 +200,8 @@ OMQ.Dungeons = {
         { id = 2846, name = "Tiara of the Deep", level = 40 },
         { id = 2770, name = "Gahz'rilla", level = 40 },
         { id = 3527, name = "The Prophecy of Mosh'aru", level = 40 },
+        { id = 96770, name = "The Witch Doctor's Head", level = 46, faction = "A" },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 96775, name = "Zum'rah's Head", level = 46, faction = "H" },  -- WoW Forever (Factoruide 2026-11-25)
     } },
     { key = "mara", abbr = "Mar", name = "Maraudon", min = 41, max = 50, quests = {
         { id = 7068, name = "Shadowshard Fragments", level = 39, faction = "H" },
@@ -206,6 +213,8 @@ OMQ.Dungeons = {
         { id = 7066, name = "Seed of Life", level = 39 },
         { id = 7067, name = "The Pariah's Instructions", level = 39 },
         { id = 7046, name = "The Scepter of Celebras", level = 41 },
+        { id = 93404, name = "Rot and Regret", level = 49 },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 96776, name = "An'she's Radiance", level = 51, faction = "H" },  -- WoW Forever (Factoruide 2026-11-25)
     } },
     { key = "st", abbr = "ST", name = "Temple of Atal'Hakkar", min = 46, max = 54, quests = {
         { id = 1445, name = "The Temple of Atal'Hakkar", level = 38, faction = "H" },
@@ -242,6 +251,7 @@ OMQ.Dungeons = {
         { id = 3802, name = "Dark Iron Legacy", level = 48 },
         { id = 4201, name = "The Love Potion", level = 50 },
         { id = 4024, name = "A Taste of Flame", level = 52 },
+        { id = 97197, name = "Fragment of the Firelands", level = 55, faction = "H" },  -- WoW Forever (Factoruide 2026-11-25)
     } },
     { key = "dme", abbr = "DME", name = "Dire Maul: East", min = 52, max = 60, quests = {
         { id = 7489, name = "Lethtendris's Web", level = 54, alt = { 7488 } },
@@ -307,6 +317,15 @@ OMQ.Dungeons = {
         { id = 96335, name = "The Man in the Iron Chains", level = 53 },
     } },
     { key = "bmh", abbr = "BMH", name = "Blackmaw Hold", min = 55, max = 60, quests = {
+        { id = 92065, name = "Blackmaw Reclamation", level = 60 },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 92066, name = "The Twin Bears", level = 55 },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 92069, name = "Claws That Rend, Tusks that Gore", level = 58 },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 92070, name = "A Lost Memento", level = 55 },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 97327, name = "Blackmaw Pouches", level = 60 },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 92344, name = "Get to the Roots of It", level = 55, faction = "A" },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 92343, name = "Get to the Roots of It", level = 55, faction = "H" },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 97173, name = "Blackmaw Magic", level = 59, faction = "A" },  -- WoW Forever (Factoruide 2026-11-25)
+        { id = 97198, name = "Blackmaw Magic", level = 59, faction = "H" },  -- WoW Forever (Factoruide 2026-11-25)
     } },
     { key = "shp", abbr = "Shp", name = "Shaper's Terrace", min = 58, max = 60, quests = {
     } },
