@@ -3,7 +3,8 @@
 --   options, Guidance, and /omq givers [on|off]). While on, every quest giver of the zone shown on the map gets
 --   a yellow "!" - but only for quests I can take now: required level, faction, race, class, pre-quests done,
 --   not done, not in the log, no excluding quest done, the giver talks to me. Left out: grey quests, repeatable
---   quests, quests for a profession or reputation and quests that start from an item (no giver).
+--   quests, quests for a profession or reputation and quests that start from an item (no giver), quests removed
+--   from the game and holiday/world event quests while their event does not run (decision 708, QuestEvents.lua).
 --   Continent and world maps get no marks (too many). Quests at the same giver share one mark.
 --   Hover: every quest of the giver with its level, the XP (lowered like the game does when I am far above the
 --   quest) and the item rewards (choices marked); Shift shows the game's tooltips of the first reward items.
@@ -82,6 +83,7 @@ function Q.Takeable(id, who, log)
     local d = data(id)
     if not (d and d[7]) then return false end
     if has(d[13], 1) or has(d[13], 2) or has(d[13], 4) then return false end
+    if OMQ.QuestHidden and OMQ.QuestHidden(id) then return false end            -- removed, or its event does not run (708)
     if (log and log[id]) or everDone(id) then return false end
     if (d[2] or 0) > who.level then return false end
     local ql = d[3] or 0
