@@ -423,6 +423,11 @@ local function allSections()
               tip = "A card at the top of the screen when a player of the other faction shows up (his nameplate, your target, the mouse or a group member's target): name, level and class, red with a skull when he is 5 or more levels above you. Left click: target him and ping him for the group (cards that appear in a fight only after the fight); right click closes the card. The same player warns again after 5 minutes at the earliest. A red number on the minimap icon counts the enemies nearby, its tooltip names them. Quiet in major cities, sanctuaries, dungeons and battlegrounds. Turns the game's enemy nameplates on. /omq enemy test shows a sample.",
               get = function() return OMQ.db.options.enemyWarn ~= false end,
               set = function(v) if OMQ.EnemyNear then OMQ.EnemyNear.SetEnabled(v) else OMQ.db.options.enemyWarn = v and true or false end end },
+            -- decision 700: kill numbers right of enemy players' nameplates, shared with the dads
+            { type = "check", label = "PvP numbers on enemy nameplates",
+              tip = "Right of an enemy player's nameplate: green = how often you or your group killed him, red = how often he killed you (all your characters), blue = how often he killed the other dads (shared over the group and the guild). A 0 is left out. When you kill a player who killed a dad, that dad gets a card. His tooltip names the dads. /omq pvp test shows a sample, /omq pvp list the players.",
+              get = function() return OMQ.db.options.pvpCount ~= false end,
+              set = function(v) if OMQ.PvPCount then OMQ.PvPCount.SetEnabled(v) else OMQ.db.options.pvpCount = v and true or false end end },
             { type = "check", label = "Sound for the enemy warning",
               get = function() return OMQ.db.options.enemySound ~= false end,
               set = function(v) OMQ.db.options.enemySound = v and true or false end },
