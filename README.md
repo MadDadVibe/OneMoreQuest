@@ -71,6 +71,7 @@ Small cards that act with one click; right click hides a card until solved, Shif
 - Class cards: Soulstone request for healers, Ghost Wolf for shamans, Shadowform for priests, Find Minerals / Find Herbs, Battle Shout.
 - **Low life call:** a dad at low life shows healers a red card with a sound; one click casts the emergency heal.
 - **Enemy players nearby:** a warning card with name, level and class, a click targets and pings him for the group, a counter on the minimap icon.
+- **Rare scanner:** a sound and a card when a rare mob shows up, a click targets it and puts the skull on it, the group gets it too; a world map button shows where the zone's rares spawn.
 - **PvP numbers on enemy nameplates:** how often you or your group killed him, how often he killed you, how often he killed the other dads.
 - **Shadow Word: Death kill glow** (priests) and **Overpower mark** on the mob that dodged (warriors).
 - Weapon set button that swaps between your two weapon sets, also in a fight; the bag key also opens the reagent bag.

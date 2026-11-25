@@ -5,7 +5,7 @@ OMQ = OMQ or {}
 _G.OneMoreQuest = OMQ
 
 OMQ.name = "One More Quest"
-OMQ.version = "1.3.305"
+OMQ.version = "1.3.306"
 
 -- the last bag to look into for what I carry: the reagent bag too, if the client has one (decision 272)
 function OMQ.LastBag()
@@ -37,7 +37,7 @@ local DEFAULTS = {
     },
     alerts = { enabled = {}, lenientRank = false },
     arrow = { threshold = 120, enabled = true, style = 1 },     -- style: decision 192
-    guide = { bar = true, receive = true, share = true, sharePlaces = true, mapMarkers = true, markerIcon = 1, questGivers = false },
+    guide = { bar = true, receive = true, share = true, sharePlaces = true, mapMarkers = true, markerIcon = 1, questGivers = false, rareMap = false },
     quests = { ignored = {}, titles = {} },
 }
 

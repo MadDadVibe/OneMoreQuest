@@ -431,6 +431,25 @@ local function allSections()
             { type = "check", label = "Sound for the enemy warning",
               get = function() return OMQ.db.options.enemySound ~= false end,
               set = function(v) OMQ.db.options.enemySound = v and true or false end },
+            -- decision 703: rare mobs nearby
+            { type = "check", label = "Rare scanner",
+              tip = "A sound and a card at the top of the screen when a rare or rare elite mob shows up (its nameplate, your target or the mouse): name, level and its 3D model. Left click: target it and put the skull on it (cards that appear in a fight only after the fight); right click closes the card. The same rare warns again after 10 minutes at the earliest; dead rares stay quiet; quiet in major cities. Turn the enemy nameplates on to find them from farther away. /omq rare test shows a sample.",
+              get = function() return OMQ.db.options.rareScan ~= false end,
+              set = function(v) if OMQ.RareScan then OMQ.RareScan.SetEnabled(v) else OMQ.db.options.rareScan = v and true or false end end },
+            { type = "check", label = "Sound for the rare scanner",
+              get = function() return OMQ.db.options.rareSound ~= false end,
+              set = function(v) OMQ.db.options.rareSound = v and true or false end },
+            { type = "check", label = "Share rare sightings with the group",
+              tip = "Rares you find are sent to group members with the addon, and theirs show up for you too (only on the same map).",
+              get = function() return OMQ.db.options.rareShare ~= false end,
+              set = function(v) OMQ.db.options.rareShare = v and true or false end },
+            { type = "check", label = "Rares on the world map",
+              tip = "A skull on the world map for every known spawn place of the rares of the shown zone (grey: more than 5 levels below you). Hover: level, respawn time, when you last saw or killed it. Also the skull button at the top right of the world map and /omq rare map on|off.",
+              get = function() return OMQ.db.guide.rareMap == true end,
+              set = function(v)
+                  OMQ.db.guide.rareMap = v and true or false
+                  if OMQ.RareScan then OMQ.RareScan.SetMap(v) end
+              end },
             { type = "check", label = "Share enemy sightings with the group",
               tip = "Enemy players you see are sent to group members with the addon, and theirs warn you too (only on the same map).",
               get = function() return OMQ.db.options.enemyShare ~= false end,
