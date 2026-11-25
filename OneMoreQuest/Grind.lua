@@ -8,6 +8,7 @@
 --   percent, XP per hour, the worth of the loot (auction price minus 5 %, or the vendor price when higher; grey and
 --   bound items vendor, quest items nothing) and the gold looted; the spot's leaderboard (top 5 XP per hour,
 --   level = level at the start) takes a run of 25 minutes or more with 70 % of the time within 150 yards.
+--   Gold spot (decision 693): first in a zone's list, the spot with the most gold per hour (Data/GrindLoot.lua x prices).
 --   Group: the starter starts it for every dad within 100 yards of the spot; each gets his own summary plus a line
 --   for the group. Own spots, deletions and the leaderboards travel in the group (messages GS, GD, GB, GR).
 local ADDON, OMQ = ...
@@ -205,6 +206,12 @@ function G.Spots(zone, level)
         if free then out[#out + 1] = s end
         if #out >= G.SPOTS then break end
     end
+    -- the gold spot first (decision 693); the same spot is not listed twice
+    local gold = G.GoldSpot and G.GoldSpot(zone, level)
+    if gold then
+        for i = #out, 1, -1 do if out[i].key == gold.key then table.remove(out, i) end end
+        table.insert(out, 1, gold)
+    end
     local own = {}
     for key, s in pairs(db().spots) do
         if s.zone == zone and not db().gone[key] then own[#own + 1] = s end
@@ -227,7 +234,10 @@ function G.ZoneList(level)
         if seen[zone] then return end
         seen[zone] = true
         local list = G.Spots(zone, level)
-        if #list > 0 or zone == here then
+        local cnt = #list
+        -- a gold spot of lower mobs alone does not bring a zone into the list (decision 693)
+        if list[1] and list[1].gold and list[1].lo < level - G.BELOW then cnt = cnt - 1 end
+        if cnt > 0 or zone == here then
             local z = zones()[zone]
             out[#out + 1] = { zone = zone, name = G.ZoneName(zone), count = #list, here = zone == here,
                               order = z and z.i or 999, min = z and z.z[2], max = z and z.z[3] }
@@ -543,6 +553,110 @@ function G.Worth(items)
     return sum
 end
 
+----------------------------------------------------------------------
+-- The gold spot (decision 693): per zone the spot with the most gold per hour, from Data/GrindLoot.lua (loot per
+-- kill measured in Forever, else drop chances) and the prices (auction scan, else vendor). Gold per hour = worth of
+-- a kill x kills per hour (the lower of the respawn and my own pace from earlier runs, else G.PACE).
+----------------------------------------------------------------------
+G.PACE = 60                   -- kills per hour without an own run
+G.GOLD_BELOW = 10             -- the gold spot's mobs: at most this many levels under mine
+G.GOLD_TOP = 5                -- drops on the tooltip
+local asked = {}
+
+-- worth of one item for the gold spot; an item the game does not know yet is asked for (counts 0 until then)
+local function lootValue(id, vendorOnly)
+    local info = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+    local ok, name, _, _, _, _, _, _, _, _, _, sell = pcall(info or function() end, id)
+    if not (ok and name) then
+        if not asked[id] and C_Item and C_Item.RequestLoadItemDataByID then
+            asked[id] = true
+            pcall(C_Item.RequestLoadItemDataByID, id)
+        end
+        return 0
+    end
+    if vendorOnly then
+        return (OMQ.Prices and OMQ.Prices.Vendor and OMQ.Prices.Vendor(id)) or (num(sell) and sell) or 0
+    end
+    return G.ItemValue(id)
+end
+
+-- worth of one kill of a mob in copper, and its items { id, worth per kill } best first
+local kv, kvAt = {}, 0
+function G.KillValue(npc)
+    local d = OMQ.GrindLoot and OMQ.GrindLoot[npc]
+    if not d then return 0, {}, 0 end
+    if now() - kvAt > 60 then kv, kvAt = {}, now() end
+    local c = kv[npc]
+    if c then return c[1], c[2], c[3] end
+    local sum, items = d[1] or 0, {}
+    local list = d[3] or {}
+    for i = 1, #list, 3 do
+        local w = lootValue(list[i], list[i + 2] == 1) * list[i + 1]
+        if w > 0 then sum = sum + w; items[#items + 1] = { id = list[i], w = w, e = list[i + 1] } end
+    end
+    table.sort(items, function(p, q) if p.w ~= q.w then return p.w > q.w end return p.id < q.id end)
+    kv[npc] = { sum, items, d[1] or 0 }
+    return sum, items, d[1] or 0
+end
+function G.ForgetValues() kv = {} end
+
+-- my kills per hour: the median of my runs of 10 minutes or more, else G.PACE
+function G.Pace()
+    local list = {}
+    for _, h in ipairs(db().hist[guid()] or {}) do
+        if num(h.kph) and h.kph > 0 and (h.secs or 0) >= 600 then list[#list + 1] = h.kph end
+    end
+    if #list == 0 then return G.PACE end
+    table.sort(list)
+    return math.floor(list[math.floor((#list + 1) / 2)])
+end
+
+-- a spot's worth: copper per kill (the mobs weighted by how many there are), its best drops, copper per hour
+function G.SpotGold(s, pace)
+    local total, n, coin, drops = 0, 0, 0, {}
+    local mobs = s.mobs or {}
+    for i = 1, #mobs, 2 do
+        local c = mobs[i + 1] or 1
+        local v, items, cp = G.KillValue(mobs[i])
+        total = total + v * c; coin = coin + (cp or 0) * c; n = n + c
+        for _, it in ipairs(items) do drops[it.id] = (drops[it.id] or 0) + it.w * c end
+    end
+    if n == 0 then return 0, {}, 0, 0 end
+    local top = {}
+    for id, w in pairs(drops) do top[#top + 1] = { id = id, w = w / n } end
+    table.sort(top, function(p, q) if p.w ~= q.w then return p.w > q.w end return p.id < q.id end)
+    while #top > G.GOLD_TOP do table.remove(top) end
+    local kph = math.min(s.kph or G.PACE, pace or G.Pace())
+    local per = total / n
+    return per, top, per * kph, coin / n, kph
+end
+
+-- the zone's gold spot for a level: mobs from level - G.GOLD_BELOW to level + G.ABOVE, the most copper per hour
+function G.GoldSpot(zone, level)
+    level = level or G.Level()
+    local pace, best = G.Pace(), nil
+    for _, d in ipairs(OMQ.GrindSpots and OMQ.GrindSpots[zone] or {}) do
+        if d[4] <= level + G.ABOVE and d[3] >= level - G.GOLD_BELOW then
+            local s = dataSpot(zone, d)
+            local per, top, gph, coin, kph = G.SpotGold(s, pace)
+            if gph > 0 and (not best or gph > best.gph or (gph == best.gph and s.key < best.key)) then
+                s.gold, s.per, s.top, s.gph, s.coin, s.kphUsed = true, per, top, gph, coin, kph
+                best = s
+            end
+        end
+    end
+    return best
+end
+
+-- the game knows an asked item now: the window shows the new worth (once a second at most)
+local refreshAt
+function G.OnItemInfo(id)
+    if not (id and asked[id]) then return end
+    if refreshAt then return end
+    refreshAt = true
+    C_Timer.After(1, function() refreshAt = nil; kv = {}; fire() end)
+end
+
 function G.Tick()
     local r = G:Run()
     if not r then G.Check(); return end
@@ -596,7 +710,7 @@ function G:Finish(reason)
     for _, h in ipairs(hist) do if not best or h.xph > best then best = h.xph end end
     res.best = best
     if OMQ.DungeonXP and OMQ.DungeonXP.OutsideRate then res.out = (OMQ.DungeonXP.OutsideRate()) end
-    table.insert(hist, 1, { xph = res.xph, key = res.key, day = res.day, secs = secs })
+    table.insert(hist, 1, { xph = res.xph, key = res.key, day = res.day, secs = secs, kph = res.kph })
     while #hist > 20 do table.remove(hist) end
     if res.ok then
         local e = { id = r.id, g = guid(), n = myName(), l = r.lvl0, d = res.day, x = math.floor(res.xph), m = math.floor(res.gph),
@@ -694,7 +808,7 @@ end)
 ----------------------------------------------------------------------
 local frame = CreateFrame("Frame")
 for _, e in ipairs({ "PLAYER_XP_UPDATE", "QUEST_TURNED_IN", "CHAT_MSG_COMBAT_XP_GAIN", "CHAT_MSG_LOOT", "CHAT_MSG_MONEY",
-                     "PLAYER_MONEY", "LOOT_OPENED", "LOOT_CLOSED" }) do frame:RegisterEvent(e) end
+                     "PLAYER_MONEY", "LOOT_OPENED", "LOOT_CLOSED", "GET_ITEM_INFO_RECEIVED" }) do frame:RegisterEvent(e) end
 local HANDLERS = {
     PLAYER_XP_UPDATE = function() G.OnXP() end,
     QUEST_TURNED_IN = function(_, xp) G.OnQuest(nil, xp) end,
@@ -704,6 +818,7 @@ local HANDLERS = {
     PLAYER_MONEY = function() G.OnMoney() end,
     LOOT_OPENED = function() G.SetLootOpen(true) end,
     LOOT_CLOSED = function() G.SetLootOpen(false) end,
+    GET_ITEM_INFO_RECEIVED = function(id) G.OnItemInfo(id) end,
 }
 frame:SetScript("OnEvent", function(_, event, ...)
     local fn = HANDLERS[event]
@@ -748,8 +863,10 @@ OMQ:RegisterCommand("grind", function(arg)
         out[#out + 1] = string.format("zone: %s, level for spots: %d", zone and (G.ZoneName(zone) .. " (" .. zone .. ")") or "none", G.Level())
         for _, s in ipairs(zone and G.Spots(zone) or {}) do
             local d = G.Dist(s)
-            out[#out + 1] = string.format("  %s  %s  %s yd", s.key, s.name or "?", d and tostring(math.floor(d)) or "?")
+            out[#out + 1] = string.format("  %s  %s  %s yd%s", s.key, s.name or "?", d and tostring(math.floor(d)) or "?",
+                s.gold and string.format("  GOLD %d c/kill x %d kills/h = %d c/h", s.per or 0, s.kphUsed or 0, s.gph or 0) or "")
         end
+        out[#out + 1] = string.format("my pace: %d kills per hour", G.Pace())
         local r = G:Run()
         if r then
             out[#out + 1] = string.format("run %s: %d s used, %d s left, %d kills, %d XP, %d copper, %d/%d s on the spot%s",

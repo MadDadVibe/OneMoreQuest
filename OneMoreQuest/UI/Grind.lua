@@ -5,7 +5,8 @@
 --   click on the row). The arrival card: 30 or 60 minutes. The run itself takes the quest tracker's place (red
 --   frame, UI/QuestTracker.lua asks TrackerView): time remaining, kills, XP per hour; left click pauses and goes on,
 --   right click ends it after a question. The summary card stays until it is closed; "One more?" asks the minutes
---   for the same spot again.
+--   for the same spot again. A zone's first spot can be its gold spot (decision 693): gold icon, gold per hour, the
+--   tooltip shows the worth per kill and the best drops.
 -- Plain frames without protected calls.
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
@@ -18,6 +19,7 @@ local RED = UI.RED
 local TAN = { 0.72, 0.63, 0.42 }
 local GOLD = { 0.89, 0.71, 0.29 }
 local W, ROWS, ROW_H, SPOT_H = 400, 10, 30, 62
+UI.GOLD_ICON = "|TInterface\\MoneyFrame\\UI-GoldIcon:0|t"
 
 local win, title, sub, foot, rows, backBtn
 local arrive, summary
@@ -164,6 +166,10 @@ function UI.SpotWhat(s, pos)
     if d then parts[#parts + 1] = string.format("%d yd", math.floor(d / 10 + 0.5) * 10) end
     local b = G().Best(s.key)
     local line = table.concat(parts, " - ")
+    if s.gold then
+        line = line .. string.format("\n|cffffd100~%s per hour|r (%s per kill)", UI.Money(s.gph), UI.Money(s.per))
+        return line
+    end
     if b then line = line .. string.format("\n|cffe0b04cbest: %s XP/h (%s, level %d)|r", UI.Num(b.x), b.n or "?", b.l or 0) end
     return line
 end
@@ -213,11 +219,15 @@ function UI:Render()
             r.spot = s
             setModel(r.m1, s.mobs and s.mobs[1])
             setModel(r.m2, s.mobs and s.mobs[3])
-            r.name:SetText(s.name or "?"); r.name:SetTextColor(RED[1], RED[2], RED[3])
+            if s.gold then
+                r.name:SetText(UI.GOLD_ICON .. " Gold: " .. (s.name or "?")); r.name:SetTextColor(1, 0.82, 0)
+            else
+                r.name:SetText(s.name or "?"); r.name:SetTextColor(RED[1], RED[2], RED[3])
+            end
             local what = UI.SpotWhat(s, pos)
             r.what:SetText(what)
             r.btn:SetText("Go"); r.btn:Show(); r:Show()
-            view.rows[i] = { key = s.key, name = s.name, what = what, own = s.byGuid ~= nil and s.byGuid == (OMQ:GetSelf() or {}).guid }
+            view.rows[i] = { key = s.key, name = s.name, what = what, gold = s.gold, own = s.byGuid ~= nil and s.byGuid == (OMQ:GetSelf() or {}).guid }
         end
         foot:ClearAllPoints(); foot:SetPoint("TOPLEFT", 14, -66 - n * SPOT_H)
         foot:SetText("Mouse over a spot: its leaderboard. Right click on your own spot: delete it.")
@@ -266,11 +276,29 @@ function UI:RowTip(r)
         GameTooltip:AddLine(string.format("%s x%d", G().MobName(s.mobs[i]), s.mobs[i + 1] or 0), 1, 1, 1)
     end
     if s.kph then GameTooltip:AddLine(string.format("The respawn allows about %d kills per hour", s.kph), 0.8, 0.8, 0.8) end
+    UI._goldTip = nil
+    if s.gold then
+        local gl = UI.GoldLines(s)
+        UI._goldTip = gl
+        for i, l in ipairs(gl) do GameTooltip:AddLine(l, i == 1 and 1 or 1, i == 1 and 0.82 or 1, i == 1 and 0 or 1) end
+    end
     local lines = UI.BoardLines(s.key)
     GameTooltip:AddLine(#lines > 0 and "Leaderboard:" or "No run of 25 minutes here yet", GOLD[1], GOLD[2], GOLD[3])
     for _, l in ipairs(lines) do GameTooltip:AddLine(l, 1, 1, 1) end
     GameTooltip:Show()
     UI._tip = lines
+end
+-- the gold spot's lines on the tooltip: worth per kill and hour, the coin, the best drops
+function UI.GoldLines(s)
+    local out = { string.format("Gold spot: ~%s per hour (%s per kill x %d kills)", UI.Money(s.gph), UI.Money(s.per), s.kphUsed or 0) }
+    if (s.coin or 0) > 0 then out[#out + 1] = "Coin: " .. UI.Money(s.coin) .. " per kill" end
+    local info = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+    for _, it in ipairs(s.top or {}) do
+        local ok, name = pcall(info or function() end, it.id)
+        out[#out + 1] = string.format("%s: %s per kill", (ok and name) or ("Item " .. it.id), UI.Money(it.w))
+    end
+    out[#out + 1] = "Auction prices from your scan, else the vendor price."
+    return out
 end
 function UI:Back() if mode == "spots" then mode = "zones"; self:Render() else self:Close() end end
 function UI:Mode() return mode end
