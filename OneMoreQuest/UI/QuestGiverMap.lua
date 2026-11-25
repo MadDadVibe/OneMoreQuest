@@ -21,6 +21,7 @@ Q.SIZE = 20                 -- a mark on the map
 Q.LEVEL = 1900              -- frame levels above the canvas: over Blizzard's pins, under the run markers (2000)
 Q.GROUP = 0.6               -- map %: givers this close share one mark (the same NPC)
 Q.REFRESH = 1               -- seconds between two looks at the log while the map is open and something changed
+Q.ATLAS = "QuestNormal"     -- the yellow ! of Blizzard's own quest offers on the map (fix 706: the file below drew nothing in Forever)
 Q.ICON = "Interface\\GossipFrame\\AvailableQuestIcon"
 Q.SHOP = 2                  -- Shift: the game tooltips of this many reward items
 -- XP when I am above the quest: 6 levels 80 %, 7: 60 %, 8: 40 %, 9: 20 %, 10 and more 10 % (the classic rule)
@@ -327,13 +328,28 @@ end
 ----------------------------------------------------------------------
 local function mapFrame() return _G.WorldMapFrame end
 
+-- the yellow "!": Blizzard's atlas when the client has it, else the old file (fix 706)
+function Q.HasAtlas()
+    if not (C_Texture and C_Texture.GetAtlasInfo) then return false end
+    local ok, info = pcall(C_Texture.GetAtlasInfo, Q.ATLAS)
+    return ok and info ~= nil
+end
+function Q.SetIcon(tex)
+    if tex.SetAtlas and Q.HasAtlas() then
+        tex:SetAtlas(Q.ATLAS)
+        return "atlas"
+    end
+    tex:SetTexture(Q.ICON)
+    return "file"
+end
+
 local function newPin()
     local b = CreateFrame("Button", nil, layer)
     b:SetSize(Q.SIZE, Q.SIZE)
     b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     b.icon = b:CreateTexture(nil, "OVERLAY")
     b.icon:SetAllPoints()
-    b.icon:SetTexture(Q.ICON)
+    Q.SetIcon(b.icon)
     b:SetScript("OnClick", function(self, which)
         if which == "RightButton" then Q.Remove(self.m) else Q.Go(self.m) end
         leave()
@@ -430,7 +446,7 @@ function Q.Attach()
     button.bg:SetVertexColor(0.08, 0.086, 0.114, 0.85)
     button.icon = button:CreateTexture(nil, "ARTWORK")
     button.icon:SetPoint("TOPLEFT", 3, -3); button.icon:SetPoint("BOTTOMRIGHT", -3, 3)
-    button.icon:SetTexture(Q.ICON)
+    Q.SetIcon(button.icon)
     button:SetScript("OnClick", function(self) Q.Toggle(); buttonTip(self) end)
     button:SetScript("OnEnter", buttonTip)
     button:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -480,7 +496,8 @@ OMQ:RegisterCommand("givers", function(arg)
     local l = Q.Collect(map)
     if OMQ.db and OMQ.db.guide then OMQ.db.guide.questGivers = was end
     local out = { "Quest givers on the map: " .. (Q.Enabled() and "on" or "off") .. ", map " .. tostring(map) ..
-                  (Q.MapOK(map) and "" or " (continent/world: no marks)") }
+                  (Q.MapOK(map) and "" or " (continent/world: no marks)"),
+                  "icon: " .. (Q.HasAtlas() and ("atlas " .. Q.ATLAS) or ("file " .. Q.ICON)) }
     for _, m in ipairs(l) do
         local names = {}
         for _, id in ipairs(m.quests) do names[#names + 1] = string.format("%s (%d)", Q.Title(id), id) end
