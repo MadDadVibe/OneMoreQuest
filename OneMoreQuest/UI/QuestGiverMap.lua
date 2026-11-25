@@ -18,7 +18,13 @@ local Q = {}
 OMQ.QuestGiverMap = Q
 
 Q.SIZE = 20                 -- a mark on the map
-Q.LEVEL = 1900              -- frame levels above the canvas: over Blizzard's pins, under the run markers (2000)
+Q.LEVEL = 1900              -- the button: frame levels above the map's scroll frame
+-- fix 707: Blizzard's map pins use fixed frame levels from 2000 up (map overlays, quest areas, POIs); a layer at
+-- canvas + 1900 lay under the drawn map overlays and was invisible there. The marks sit just above Blizzard's own
+-- quest offers (Q.PIN_TYPE) - over map overlays, quest areas and POIs, under group members and the player.
+Q.PIN_TYPE = "PIN_FRAME_LEVEL_QUEST_OFFER"
+Q.PIN_FALLBACK = 3000       -- when the map has no frame level manager
+Q.PIN_MAX = 9000            -- Blizzard's highest pin frame level
 Q.GROUP = 0.6               -- map %: givers this close share one mark (the same NPC)
 Q.REFRESH = 1               -- seconds between two looks at the log while the map is open and something changed
 Q.ATLAS = "QuestNormal"     -- the yellow ! of Blizzard's own quest offers on the map (fix 706: the file below drew nothing in Forever)
@@ -359,6 +365,17 @@ local function newPin()
     return b
 end
 
+-- the frame level of the marks' layer (fix 707)
+function Q.PinLevel(wm)
+    local lvl
+    local mgr = wm and wm.GetPinFrameLevelsManager and wm:GetPinFrameLevelsManager()
+    if mgr and mgr.GetValidFrameLevel then
+        local ok, v = pcall(mgr.GetValidFrameLevel, mgr, Q.PIN_TYPE)
+        if ok and num(v) then lvl = v + 10 end
+    end
+    return math.min(lvl or Q.PIN_FALLBACK, Q.PIN_MAX)
+end
+
 function Q.Place()
     local wm = mapFrame()
     if not (layer and wm) then return 0 end
@@ -367,6 +384,7 @@ function Q.Place()
     local cs = wm.GetCanvasScale and wm:GetCanvasScale()
     local w, h = canvas and canvas:GetWidth(), canvas and canvas:GetHeight()
     local shown = 0
+    layer:SetFrameLevel(Q.PinLevel(wm))
     if canvas and num(w) and num(h) and w > 0 and h > 0 then
         local scale = 1 / ((num(cs) and cs > 0) and cs or 1)
         for _, m in ipairs(list) do
@@ -433,7 +451,7 @@ function Q.Attach()
     if not canvas then return false end
     layer = CreateFrame("Frame", nil, canvas)
     layer:SetAllPoints(canvas)
-    layer:SetFrameLevel((canvas:GetFrameLevel() or 1) + Q.LEVEL)
+    layer:SetFrameLevel(Q.PinLevel(wm))
     layer:SetScript("OnUpdate", onUpdate)
     local host = wm.ScrollContainer or wm
     button = CreateFrame("Button", "OMQQuestGiverMapButton", host)
@@ -497,7 +515,7 @@ OMQ:RegisterCommand("givers", function(arg)
     if OMQ.db and OMQ.db.guide then OMQ.db.guide.questGivers = was end
     local out = { "Quest givers on the map: " .. (Q.Enabled() and "on" or "off") .. ", map " .. tostring(map) ..
                   (Q.MapOK(map) and "" or " (continent/world: no marks)"),
-                  "icon: " .. (Q.HasAtlas() and ("atlas " .. Q.ATLAS) or ("file " .. Q.ICON)) }
+                  "icon: " .. (Q.HasAtlas() and ("atlas " .. Q.ATLAS) or ("file " .. Q.ICON)) .. ", frame level " .. Q.PinLevel(wm) }
     for _, m in ipairs(l) do
         local names = {}
         for _, id in ipairs(m.quests) do names[#names + 1] = string.format("%s (%d)", Q.Title(id), id) end
