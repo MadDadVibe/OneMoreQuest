@@ -1525,6 +1525,7 @@ OMQ:RegisterCommand("ah", function(arg)
     end
     if arg == "de" or arg:match("^de ") then              -- disenchant bargains (decision 710)
         local DB = OMQ.DEBargain
+        if arg == "de log" then for _, l in ipairs(OMQDB.deBargain and OMQDB.deBargain.log or {}) do OMQ:Print(l) end return end   -- fix 712
         if arg == "de reset" then OMQ:Print(("disenchant bargains: %d discarded items come back"):format(DB.ResetSkip())); return end
         DB.Open()
         return

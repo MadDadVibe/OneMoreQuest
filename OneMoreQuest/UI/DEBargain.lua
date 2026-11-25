@@ -24,6 +24,8 @@ DB.GAP = 2                -- seconds between two searches (the pace of the price
 DB.QUIET = 15             -- a search without any answer for this long is sent again (TRIES in all) or given up
 DB.TRIES = 3
 DB.SKIP_TIME = 86400      -- a discarded item stays away this long (or until it is offered cheaper)
+DB.LOAD_WAIT = 20        -- seconds an item may take to load (fix 712)
+DB.REBUILD_GAP = 2        -- loaded items rebuild the list at most this often (fix 712)
 DB.ROWS = 10
 DB.ROW_H = 36
 
@@ -272,7 +274,13 @@ end
 function DB.Judge(e)
     local q = quality(e)
     if q == nil then
-        if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, e.id) end
+        -- fix 712: asked once; an item the game does not load within LOAD_WAIT seconds is left out. Before, every
+        -- rebuild asked again for every unloaded item, each answer (GET_ITEM_INFO_RECEIVED) rebuilt the list, and the
+        -- game stuttered without end
+        if not e.askedAt then
+            e.askedAt = now()
+            if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, e.id) end
+        elseif now() - e.askedAt > DB.LOAD_WAIT then return nil end
         return "wait"
     end
     if q ~= 2 and q ~= 3 then return nil end
@@ -294,7 +302,14 @@ function DB.Build()
     for i = #list, 1, -1 do list[i] = nil end
     local waiting = 0
     for ks, e in pairs(lines) do
-        local v, gain, missing, q = DB.Judge(e)
+        -- fix 712: a line is judged once per search and stays as judged, so the list holds still while the window
+        -- is open (it switched between two lists: values that change between two rebuilds no longer move it)
+        if e.j == nil then
+            local v, gain, missing, q = DB.Judge(e)
+            if v ~= "wait" then e.j = v and { v, gain, missing, q } or false end
+        end
+        local v, gain, missing, q
+        if e.j == nil then v = "wait" elseif e.j then v, gain, missing, q = e.j[1], e.j[2], e.j[3], e.j[4] end
         if v == "wait" then waiting = waiting + 1
         elseif v and not skipped(ks, e.price) then
             local r = rows[ks]
@@ -303,7 +318,8 @@ function DB.Build()
                 rows[ks] = r
             end
             if not (r.bought or r.gone) then
-                r.price, r.value, r.gain, r.missing, r.quality = e.price, v, gain, missing, q
+                if not r.checked then r.price, r.gain = e.price, gain end    -- the price of the auction's own search stays
+                r.value, r.missing, r.quality = v, missing, q
                 r.name, r.icon = e.name, e.icon
                 list[#list + 1] = r
             end
@@ -314,7 +330,23 @@ function DB.Build()
         return a.ks < b.ks
     end)
     DB.waiting = waiting
+    DB.Note()
     if frame and frame:IsShown() then DB.Paint() end
+end
+-- fix 712: every change of the list (rows and order) with the time, kept in OMQDB.deBargain.log (/omq ah de log)
+DB.LOG_MAX = 60
+function DB.Note()
+    local ids = {}
+    for i = 1, math.min(5, #list) do ids[i] = list[i].itemID end
+    local sig = #list .. ":" .. table.concat(ids, ",")
+    if sig == DB.lastSig then return end
+    DB.lastSig = sig
+    local log = db().log or {}
+    db().log = log
+    local P = OMQ.Prices
+    log[#log + 1] = string.format("%s %s run=%s wait=%d realm=%s", date and date("%H:%M:%S") or "?", sig, run and run.state or "-",
+        DB.waiting or 0, P and P.Realm and P.Realm() or "?")
+    while #log > DB.LOG_MAX do table.remove(log, 1) end
 end
 function DB.List() return list end
 
@@ -336,7 +368,7 @@ function DB.OnCheck(r, offers)
         DB.Build()
         if C_Timer and C_Timer.After then C_Timer.After(0, DB.Prepare) else DB.Prepare() end
     else
-        r.price, r.gain = good[1].buyout, (r.value or 0) - good[1].buyout
+        r.price, r.gain, r.checked = good[1].buyout, (r.value or 0) - good[1].buyout, true
         r.link = good[1].link or r.link
     end
     if frame and frame:IsShown() then DB.Paint() end
@@ -585,7 +617,7 @@ ev:SetScript("OnEvent", function(_, event)
             for i = #list, 1, -1 do list[i] = nil end
             DB.bought = { n = 0, spent = 0, worth = 0 }
         elseif event == "GET_ITEM_INFO_RECEIVED" then
-            if (DB.waiting or 0) > 0 and not rebuildAt then rebuildAt = now() + 0.5 end
+            if (DB.waiting or 0) > 0 and not rebuildAt then rebuildAt = now() + DB.REBUILD_GAP end
         elseif not run then return
         elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then DB.OnBrowse()
         elseif event == "AUCTION_HOUSE_BROWSE_FAILURE" or event == "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED" then
@@ -610,5 +642,6 @@ ev:SetScript("OnUpdate", function(_, el)
         rebuildAt = nil
         pcall(DB.Build)
     end
+    if (DB.waiting or 0) > 0 and not rebuildAt and not run then rebuildAt = now() + DB.REBUILD_GAP end   -- items given up (fix 712)
     if frame and frame:IsShown() then pcall(DB.Paint) end      -- "ready" runs out after a few seconds
 end)
