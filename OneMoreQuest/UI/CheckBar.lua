@@ -31,6 +31,8 @@ local ITEMS = {
       icon = MEDIA .. "Icon_Bis" },
     { id = "bet", label = "Bet Check", tip = "Click: start a bet with the dads",          -- decision 170, from level 5
       icon = MEDIA .. "Icon_Bet", show = function() return not OMQ.Unlock or OMQ.Unlock:Has("bets") end },
+    { id = "gold", label = "Goldgrind Check", tip = "Click: the mobs with the most gold per hour - globally or for your level",   -- decision 695
+      icon = MEDIA .. "Icon_Gold" },
     { id = "prof", label = "Profession Check", tip = "Click: what each crafting profession costs to skill to 75, 150, 225 and 300, with the auction prices",   -- decision 535
       icon = MEDIA .. "Icon_Profession" },
     { id = "progress", label = "Progress Check", tip = "Click: your milestone timeline, from level 1 to 60",   -- decision 184
@@ -112,6 +114,8 @@ local function click(item)
             local fine, why = OMQ.Match:Challenge()
             if not fine then OMQ:Print("duel: " .. tostring(why)) end
         end
+    elseif item.id == "gold" then
+        if OMQ.GoldCheck then OMQ.GoldCheck:Toggle() end
     elseif item.id == "prof" then
         if OMQ.ProfCheck then OMQ.ProfCheck:Toggle() end
     elseif item.id == "progress" then

@@ -559,7 +559,7 @@ end
 -- a kill x kills per hour (the lower of the respawn and my own pace from earlier runs, else G.PACE).
 ----------------------------------------------------------------------
 G.PACE = 60                   -- kills per hour without an own run
-G.GOLD_BELOW = 10             -- the gold spot's mobs: at most this many levels under mine
+G.GOLD_BELOW = 6              -- the gold spot's mobs: at most this many levels under mine (decision 695: 6)
 G.GOLD_TOP = 5                -- drops on the tooltip
 local asked = {}
 
@@ -598,7 +598,7 @@ function G.KillValue(npc)
     kv[npc] = { sum, items, d[1] or 0 }
     return sum, items, d[1] or 0
 end
-function G.ForgetValues() kv = {} end
+function G.ForgetValues() kv = {}; if G.MobSpotReset then G.MobSpotReset() end end
 
 -- my kills per hour: the median of my runs of 10 minutes or more, else G.PACE
 function G.Pace()
@@ -629,6 +629,51 @@ function G.SpotGold(s, pace)
     local kph = math.min(s.kph or G.PACE, pace or G.Pace())
     local per = total / n
     return per, top, per * kph, coin / n, kph
+end
+
+-- the Goldgrind Check (decision 695): every mob of the data once, its best spot (where most of it stand), copper per
+-- kill and per hour at a fixed G.PACE kills; global (all levels) or for my level (G.GOLD_BELOW under to G.ABOVE over)
+G.GOLD_LIST = 25
+local mobSpot
+function G.MobSpot(npc)
+    if not mobSpot then
+        mobSpot = {}
+        for zone, list in pairs(OMQ.GrindSpots or {}) do
+            for _, d in ipairs(list) do
+                local mobs = d[7] or {}
+                for i = 1, #mobs, 2 do
+                    local cur = mobSpot[mobs[i]]
+                    if not cur or mobs[i + 1] > cur.n or (mobs[i + 1] == cur.n and d[6] > cur.d[6]) then
+                        mobSpot[mobs[i]] = { zone = zone, d = d, n = mobs[i + 1] }
+                    end
+                end
+            end
+        end
+    end
+    local m = mobSpot[npc]
+    if not m then return nil end
+    return dataSpot(m.zone, m.d), m.n
+end
+function G.MobSpotReset() mobSpot = nil end
+function G.GoldMobs(global, level)
+    level = level or G.Level()
+    local out = {}
+    for npc, d in pairs(OMQ.GrindLoot or {}) do
+        local lo, hi = d[4] or 0, d[5] or d[4] or 0
+        if global or (hi <= level + G.ABOVE and lo >= level - G.GOLD_BELOW) then
+            local per, items, coin = G.KillValue(npc)
+            local spot = G.MobSpot(npc)
+            if per > 0 and spot then
+                local top = {}
+                for i = 1, math.min(#items, G.GOLD_TOP) do top[i] = items[i] end
+                out[#out + 1] = { npc = npc, name = G.MobName(npc), lo = lo, hi = hi, zone = spot.zone, zoneName = G.ZoneName(spot.zone),
+                                  spot = spot, per = per, gph = per * G.PACE, coin = coin, top = top, measured = d[2] == 1 }
+            end
+        end
+    end
+    table.sort(out, function(p, q) if p.per ~= q.per then return p.per > q.per end return p.npc < q.npc end)
+    while #out > G.GOLD_LIST do table.remove(out) end
+    return out
 end
 
 -- the zone's gold spot for a level: mobs from level - G.GOLD_BELOW to level + G.ABOVE, the most copper per hour
