@@ -792,7 +792,8 @@ P._stackCount = stackCount
 -- the price block of the item tooltip (decision 675): a header "OMQ (scanned 4 hours ago, 413 items)", then
 -- Vendor (white, what the vendor pays), Auction (green, the scanned price) and Disenchant (purple, UI/DisenchantValue.lua)
 -- one below the other, the values in one column. A stack shows the whole stack and one piece in brackets (decision 430).
-P.COLORS = { head = { 1, 0.82, 0 }, vendor = { 1, 1, 1 }, auction = { 0.25, 1, 0.25 }, disenchant = { 0.78, 0.45, 1 },
+-- Decision 701: the three prices are white, the highest of them green (best = the way to sell it).
+P.COLORS = { head = { 1, 0.82, 0 }, vendor = { 1, 1, 1 }, auction = { 1, 1, 1 }, disenchant = { 1, 1, 1 }, best = { 0.25, 1, 0.25 },
     buy = { 0.4, 0.8, 1 }, where = { 0.62, 0.62, 0.62 } }
 -- what the vendor pays for one piece (copper), nil when he buys nothing or the game has not loaded the item
 function P.SellPrice(itemID)
@@ -920,8 +921,8 @@ function P.TooltipLines(id, count, shift)
     local a, q, at = P.Auction(id)
     local sell = P.SellPrice(id)
     local D = OMQ.Disenchant
-    local deText, deMore
-    if D and D.Text then deText, deMore = D.Text(id, shift) end
+    local deText, deMore, deValue
+    if D and D.Text then deText, deMore, deValue = D.Text(id, shift) end
     local buy, vendor, vLimited
     if shift then
         local _
@@ -937,9 +938,12 @@ function P.TooltipLines(id, count, shift)
     end
     local C = P.COLORS
     local rows = {}
-    if sell then rows[#rows + 1] = { "Vendor:", stackText(sell, count), C.vendor } end
-    if a then rows[#rows + 1] = { "Auction:", stackText(a, count), C.auction } end
-    if deText then rows[#rows + 1] = { "Disenchant:", deText, C.disenchant }; if D then D.last = id end end
+    if sell then rows[#rows + 1] = { "Vendor:", stackText(sell, count), C.vendor, sell } end
+    if a then rows[#rows + 1] = { "Auction:", stackText(a, count), C.auction, a } end
+    if deText then rows[#rows + 1] = { "Disenchant:", deText, C.disenchant, deValue }; if D then D.last = id end end
+    local best
+    for _, r in ipairs(rows) do if r[4] and r[4] > 0 and (not best or r[4] > best[4]) then best = r end end
+    if best then best[3] = C.best end
     if vendor then
         rows[#rows + 1] = { "Buy:", buy and stackText(buy, count)
             or (vLimited and "unknown (limited stock)" or "unknown (learned at the next vendor visit)"), C.buy }

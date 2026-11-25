@@ -138,14 +138,15 @@ end
 
 function D.On() return not (OMQ.db and OMQ.db.options and OMQ.db.options.disenchantTip == false) end
 
--- the value for the price block of the tooltip (UI/CraftPrices.lua, decision 675) and, with Shift, the materials
+-- the value for the price block of the tooltip (UI/CraftPrices.lua, decision 675) and, with Shift, the materials;
+-- third value: the copper worth (nil without any price) to find the highest price of the block (decision 701)
 function D.Text(id, shift)
     if not D.On() then return nil end
     local v, rows, missing, priced = D.Value(id)
     if not v then return nil end
     local text
     if priced == 0 then text = "no auction prices of the materials yet"
-    else text = "~" .. money(v) .. (missing and "  (prices incomplete)" or "") end
+    else text = money(v) .. (missing and "  (prices incomplete)" or "") end
     local more = {}
     if shift then
         for _, r in ipairs(rows) do
@@ -156,7 +157,7 @@ function D.Text(id, shift)
                 r.price and r.price > 0 and money(r.price) .. " each" or "no price"), 0.6, 0.6, 0.6 }
         end
     end
-    return text, more
+    return text, more, priced > 0 and v or nil
 end
 OMQ:RegisterCommand("de", function(arg)
     local id = tonumber(arg or "") or D.last
