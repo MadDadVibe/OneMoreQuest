@@ -893,7 +893,7 @@ local function save()
     local s = { id = run.id, leader = run.leader, started = run.started, total = run.total, group = run.group,
                 quests = {}, stops = {}, kind = run.kind, dungeon = run.dungeon, info = run.info, zone = run.zone, allow = run.allow }
     for qid, q in pairs(run.quests) do s.quests[#s.quests + 1] = { qid, q.new and 1 or 0, q.done and 1 or 0, q.picked and 1 or 0, q.dropped and 1 or 0, q.follow or 0, q.goal } end
-    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after, st.goal, st.needs, st.clear, st.glue and 1 or nil, st.wait, st.oi } end
+    for _, st in ipairs(run.stops) do s.stops[#s.stops + 1] = { st.qid, st.kind, st.place.a, st.place.b, st.place.inst, st.place.map, st.i, st.after, st.goal, st.needs, st.clear, st.glue and 1 or nil, st.wait, st.oi, st.late and 1 or nil } end
     OMQ.db.questRun[g] = s
 end
 
@@ -1763,7 +1763,7 @@ local function restore()
     run.kind, run.dungeon, run.info, run.zone, run.allow = s.kind, s.dungeon, s.info, s.zone, s.allow
     for _, st in ipairs(s.stops) do
         addStop(run, { qid = st[1], kind = st[2], place = { a = st[3], b = st[4], inst = st[5], map = st[6] }, i = st[7], after = st[8],
-                       goal = st[9], needs = st[10], clear = st[11], glue = st[12] == 1 or nil, wait = st[13], oi = st[14] })
+                       goal = st[9], needs = st[10], clear = st[11], glue = st[12] == 1 or nil, wait = st[13], oi = st[14], late = st[15] == 1 or nil })
     end
     run.members = members()
     run.pool, run.skip = {}, {}

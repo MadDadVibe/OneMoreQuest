@@ -293,6 +293,7 @@ function A.ForMe(id, who, log)
 end
 local function excluded(d, id)
     if has(d[13], 1) or has(d[13], 2) then return true end
+    if id and OMQ.QuestHidden and OMQ.QuestHidden(id) then return true end    -- removed, or its event is not on (decision 708)
     if id and A.Unfriendly(id) then return true end    -- giver or turn-in NPC will not talk to me (649)
     if d[7] then return has(d[13], 4) end
     return not (id and NQ().Drop(id))              -- from an item: only a named mob's drop (508)
@@ -365,6 +366,22 @@ function resolve(ctx, id, visiting, depth)
         e.parts = R().PartPlaces(id, function(sp) return objPlace(sp, at, ctx.zone) end)
         if e.parts then e.obj, e.alts = e.parts[1].place, nil; from = e.parts[#e.parts].place end
     end
+    -- objectives outside the zone (decision 709): on another continent the quest stays out of the run, in the same
+    -- continent its objectives and its turn-in come at the end, like a turn-in outside the zone
+    if not NQ().IsComplete(id) and (e.obj or e.parts) then
+        local inside, far = false, false
+        local function look(p)
+            if not p then return end
+            if p.map == ctx.zone then inside = true end
+            if ctx.inst ~= nil and p.inst ~= nil and p.inst ~= ctx.inst then far = true end
+        end
+        look(e.obj)
+        for _, pt in ipairs(e.parts or {}) do look(pt.place) end
+        if far then ctx.far[id] = true; return fail(ctx, id) end
+        local all = true
+        for _, pt in ipairs(e.parts or {}) do if pt.place and pt.place.map ~= ctx.zone then all = false end end
+        if not inside or not all then e.away = true end
+    end
     e.turnin = bestPlace(d[8], from, ctx.zone)
     if not e.turnin then
         if inLog then e.follow = e.obj or zonePoint(id, ctx.zone) or ctx.pos; e.obj, e.parts = nil, nil
@@ -383,7 +400,8 @@ local function addStops(ctx, e)
         if not place then return end
         local s = { qid = e.id, kind = kind, place = place, goal = "turnin" }
         if kind == "p" and e.needs and #e.needs > 0 then s.needs = e.needs end
-        if kind == "t" and (e.late or A.IsBuy(e.id)) then s.late = true end      -- bought items: at the end (622)
+        if kind == "t" and (e.late or e.away or A.IsBuy(e.id)) then s.late = true end      -- bought items: at the end (622)
+        if kind == "o" and e.away then s.late = true end                          -- objectives outside the zone (709)
         if kind == "o" and e.alts then
             s.alts = {}
             for _, p in ipairs(e.alts) do s.alts[#s.alts + 1] = p end
@@ -401,7 +419,7 @@ local function addStops(ctx, e)
     end
     if e.parts then                                    -- one stop per open objective (663)
         for _, p in ipairs(e.parts) do
-            local s = { qid = e.id, kind = "o", place = p.place, goal = "turnin", oi = p.oi }
+            local s = { qid = e.id, kind = "o", place = p.place, goal = "turnin", oi = p.oi, late = e.away or nil }
             if p.alts and #p.alts > 1 then
                 s.alts = {}
                 for _, x in ipairs(p.alts) do s.alts[#s.alts + 1] = x end
@@ -713,8 +731,10 @@ function A.Insert(pos, stops, free, key, d)
     while #late > 0 do
         local bi, bd
         for i, s in ipairs(late) do
-            local dd = d(cur, s.place)
-            if not bd or dd < bd then bi, bd = i, dd end
+            local first = true                 -- a quest's own stops in their order: objectives before the turn-in (709)
+            for _, x in ipairs(late) do if x.qid == s.qid and RANK[x.kind] < RANK[s.kind] then first = false; break end end
+            local dd = first and d(cur, s.place)
+            if dd and (not bd or dd < bd) then bi, bd = i, dd end
         end
         local s = table.remove(late, bi)
         route[#route + 1] = s
@@ -761,10 +781,20 @@ end
 
 -- reversing parts, moving one to three stops in a row and taking the objective area that lies best on the way while
 -- the way gets shorter; the change is measured on the stops it touches only, within a time budget
+-- stops that come before a stop marked for the end although they are not marked (decision 709): an improvement may
+-- not make this more, so the stops for the end stay at the end
+function A.LateBreaks(list)
+    local n, seen = 0, false
+    for _, s in ipairs(list) do
+        if s.late then seen = true elseif seen then n = n + 1 end
+    end
+    return n
+end
 function A.Improve(pos, stops, free, passes, budget, d)
     local n = #stops
     if n < 3 then return stops end
     d = d or ways()
+    local breaks = A.LateBreaks(stops)
     local function at(list, i) if i == 0 then return pos end local s = list[i]; return s and s.place end
     local best = cost(d, pos, stops)
     local t0 = clock()
@@ -784,7 +814,7 @@ function A.Improve(pos, stops, free, passes, budget, d)
                     for k = j, i, -1 do t[#t + 1] = stops[k] end
                     for k = j + 1, n do t[#t + 1] = stops[k] end
                     local cc = cost(d, pos, t)
-                    if cc < best - 0.5 and A.Valid(t, free) then stops, best, better = t, cc, true end
+                    if cc < best - 0.5 and A.Valid(t, free) and A.LateBreaks(t) <= breaks then stops, best, better = t, cc, true end
                 end
             end
         end
@@ -807,7 +837,7 @@ function A.Improve(pos, stops, free, passes, budget, d)
                             for k = i, i + len - 1 do t[#t + 1] = stops[k] end
                             for k = j + 1, n do if k < i or k >= i + len then t[#t + 1] = stops[k] end end
                             local cc = cost(d, pos, t)
-                            if cc < best - 0.5 and A.Valid(t, free) then stops, best, better, moved = t, cc, true, true; break end
+                            if cc < best - 0.5 and A.Valid(t, free) and A.LateBreaks(t) <= breaks then stops, best, better, moved = t, cc, true, true; break end
                         end
                     end
                 end
@@ -861,11 +891,29 @@ driver = CreateFrame("Frame")
 driver:Hide()
 driver:SetScript("OnUpdate", function(self) if job then step() else self:Hide() end end)
 
+-- the stops that wait for the end (decision 709, also after a /reload, which keeps no marks): a turn-in outside the
+-- zone, a buy quest's turn-in, and the objectives and turn-in of a quest whose objectives lie outside the zone
+function A.MarkLate(stops, zone)
+    if not zone then return stops end
+    local away = {}
+    for _, s in ipairs(stops or {}) do
+        if s.kind == "o" and s.place and s.place.map and s.place.map ~= zone then away[s.qid] = true end
+    end
+    for _, s in ipairs(stops or {}) do
+        if s.kind == "t" then
+            s.late = ((s.place and s.place.map and s.place.map ~= zone) or away[s.qid] or A.IsBuy(s.qid)) and true or nil
+        elseif s.kind == "o" then
+            s.late = away[s.qid] or nil
+        end
+    end
+    return stops
+end
+
 -- the open stops of a running Area Run sorted again (QuestRun's clock calls it)
 function A.Resort(pos, stops)
     local free = R().FreeSlots((R().MyLog()))
     local r = R():Run()
-    if r and r.kind == "area" then A.MarkEarly(stops, r.zone, r.allow) end
+    if r and r.kind == "area" then A.MarkEarly(stops, r.zone, r.allow); A.MarkLate(stops, r.zone) end
     -- an order that breaks a rule (a stop learned its pre-quest, fix 618) is built anew first
     if not A.Valid(stops, free) then
         local fresh = A.Nearest(pos, stops, free)
@@ -964,8 +1012,10 @@ function A.Build(zone, pos, log, who, skip, allow, members, noOrder, quick)
     who = who or NQ().Me()
     skip, allow, log = skip or {}, allow or {}, log or {}
     local ctx = { zone = zone, pos = pos, log = log, who = who, allow = allow, skip = skip, quests = {}, order = {}, stops = {},
-                  fail = {}, later = {} }
-    local info = { grey = 0, later = 0, unknown = 0, inLog = 0, new = 0, skipped = {} }
+                  fail = {}, later = {}, far = {} }
+    local zp = placeOf({ zone, 50, 50, 1 })                  -- the continent of the zone (709)
+    ctx.inst = zp and zp.inst
+    local info = { grey = 0, later = 0, unknown = 0, inLog = 0, new = 0, skipped = {}, far = 0 }
     local blocked = {}           -- outside quest -> { zone quest = true }
     local function want(id)
         if skip[id] then info.skipped[#info.skipped + 1] = id; return end
@@ -1028,6 +1078,7 @@ function A.Build(zone, pos, log, who, skip, allow, members, noOrder, quick)
     end
     local hints = A.Hints(opens, ctx, pos)
     for id in pairs(ctx.later) do if not ctx.quests[id] then info.later = info.later + 1 end end
+    for id in pairs(ctx.far) do if not ctx.quests[id] then info.far = info.far + 1 end end
     -- in a group: a quest of my log some dad does not carry gets a pick up stop at its giver
     for _, u in ipairs(members or {}) do
         if u.quests then
@@ -1171,6 +1222,7 @@ function A.Rows(plan)
         elseif e.obj then what = "in your log"
         else what = "in your log - turn it in" end
         if e.late then what = what .. ", turn-in outside the zone" end
+        if e.away then what = what .. ", objectives outside the zone" end
         rows[#rows + 1] = { qid = e.id, what = what, elite = R().IsElite(e.id), new = e.pick ~= nil, first = first[e.id] or 1e9 }
     end
     table.sort(rows, function(a, b) return a.first < b.first end)

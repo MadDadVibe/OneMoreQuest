@@ -134,6 +134,10 @@ local function questMarkers(out)
         if s.kind == "w" then                             -- the game's own point is known only for the next stop
             local t = (i == 1) and R.FollowTarget(s, myPos()) or nil
             p, what = t and t.place, t and t.what or what
+        elseif s.kind == "t" and i == 1 and R.Target then
+            -- a turn-in while objectives are still open: the marker stands where the arrow points (decision 709)
+            local t = R:Target()
+            if t and t.open and t.place then p, what = t.place, t.what or what end
         elseif s.kind == "o" then
             what = (R.StopWhat and R.StopWhat(s)) or what           -- a part stop: its own objectives (663)
         elseif s.kind == "p" and R.Hunt and R.Hunt(s.qid) then

@@ -240,6 +240,7 @@ function UI:Render()
         end
         if (info.later or 0) > 0 then lines[#lines + 1] = string.format("Higher level: %d quest%s, they join when you level up", info.later, info.later == 1 and "" or "s") end
         if (info.grey or 0) > 0 then lines[#lines + 1] = string.format("Grey, left out: %d", info.grey) end
+        if (info.far or 0) > 0 then lines[#lines + 1] = string.format("Objectives on another continent, left out: %d", info.far) end
         local hints = plan.hints or {}
         local hn = math.min(#hints, HROWS)
         if #hints > HROWS then

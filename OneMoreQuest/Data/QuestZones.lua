@@ -34,7 +34,7 @@ OMQ.QuestZones = {
   { 1412, 1, 10, "H", "Mulgore" },
   { 1438, 1, 10, "A", "Teldrassil" },
   { 1439, 10, 20, "A", "Darkshore" },
-  { 1413, 10, 25, "H", "The Barrens" },
+  { 1413, 10, 25, "C", "The Barrens" },            -- contested: Ratchet and its quests for both (decision 709)
   { 1442, 15, 27, "C", "Stonetalon Mountains" },
   { 1440, 18, 30, "C", "Ashenvale" },
   { 1441, 25, 35, "C", "Thousand Needles" },
