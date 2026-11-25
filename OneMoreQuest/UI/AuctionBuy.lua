@@ -1502,7 +1502,8 @@ local function onCheck(q)
     x.checking = nil
     x.itemKey = q.itemKey or x.itemKey
     local offers = readOffers(q)
-    if c.kind == "weapon" then
+    if x.onCheck then x.onCheck(x, offers)                  -- a row of another list judges its offers itself (decision 710)
+    elseif c.kind == "weapon" then
         x.offer, x.gain, x.slot = bestGearOffer(x, offers)
         if not x.offer then x.state = "done"; OMQ:Print("auction helper: that item is gone") end
     else
@@ -1511,7 +1512,8 @@ local function onCheck(q)
         if #offers == 0 then OMQ:Print("auction helper: that bag is gone") end
     end
     local H = AH()
-    x.fresh = (c.kind == "weapon" and x.offer or (c.kind ~= "weapon" and #offers > 0)) and { at = now(), seq = H.searchSeq or 0 } or nil
+    local good = c.kind == "weapon" and x.offer or (c.kind ~= "weapon" and #(x.offers or offers) > 0)
+    x.fresh = good and { at = now(), seq = H.searchSeq or 0 } or nil
     if x.fresh then
         H.quietUntil = now() + B.FRESH                       -- no other search: the auction stays the game's latest
         if C_Timer and C_Timer.After then C_Timer.After(B.FRESH + 0.1, function() H.Refresh() end) end
@@ -1620,6 +1622,7 @@ function done(ok, why)
         elseif not ok then b.row.state, b.row.live, b.row.estimate = "price", true, nil end    -- failed: a real search of the offers, no estimate (decision 402)
     end
     if not ok and why then OMQ:Print("auction helper: " .. why) end
+    if b and b.row and b.row.onDone then pcall(b.row.onDone, b.row, ok) end   -- a row of another list (decision 710)
     B.Build()
     AH().Ready()
     AH().Refresh()

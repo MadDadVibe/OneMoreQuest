@@ -688,7 +688,7 @@ function AH._pump()
     -- the price scan of the whole house owns the result list (decision 341). Decision 604: nothing at all is sent
     -- while it runs - also no search asked again after a timeout, which replaced the scan's list; a search still
     -- waiting for its answer is asked again when the scan is over.
-    if OMQ.Prices and OMQ.Prices.Busy() then
+    if (OMQ.Prices and OMQ.Prices.Busy()) or (OMQ.DEBargain and OMQ.DEBargain.Running()) then   -- also the bargain search (decision 710)
         if asking then asking.resend, askedAt = true, now() end
         return
     end
@@ -1523,6 +1523,12 @@ OMQ:RegisterCommand("ah", function(arg)
         for _, l in ipairs(B.UpgReport()) do OMQ:Print(l) end
         return
     end
+    if arg == "de" or arg:match("^de ") then              -- disenchant bargains (decision 710)
+        local DB = OMQ.DEBargain
+        if arg == "de reset" then OMQ:Print(("disenchant bargains: %d discarded items come back"):format(DB.ResetSkip())); return end
+        DB.Open()
+        return
+    end
     if arg == "food" then                                -- which buff foods still give XP (decision 475)
         local B = OMQ.AuctionBuy
         for _, l in ipairs(B and B.FoodReport and B.FoodReport() or { "food: no buy mode" }) do OMQ:Print(l) end
@@ -1530,5 +1536,5 @@ OMQ:RegisterCommand("ah", function(arg)
     end
     local n = 0
     for _ in pairs(db().skip) do n = n + 1 end
-    OMQ:Print("auction helper: " .. AH.Mode() .. " mode, " .. n .. " skipped items. " .. AH.EarnedText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. ".  /omq ah fast | select | unskip | bags | food")
+    OMQ:Print("auction helper: " .. AH.Mode() .. " mode, " .. n .. " skipped items. " .. AH.EarnedText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. ".  /omq ah fast | select | unskip | bags | food | de")
 end, "auction helper: fast or select mode, forget the skipped items")
