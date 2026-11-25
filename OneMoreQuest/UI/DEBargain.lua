@@ -1,6 +1,6 @@
 -- One More Quest - disenchant bargains in the auction house (decision 710)
 -- /omq ah de opens a window next to the auction helper and searches the auction house for green and blue armor and
--- weapons offered at least MIN_GAIN (10 silver) under their disenchant value (OMQ.Disenchant.Value: the classic
+-- weapons offered at least 5, 10 or 15 silver (buttons, decision 713; 10 by default) under their disenchant value (OMQ.Disenchant.Value: the classic
 -- disenchant tables times the scanned prices of the materials). The list shows the biggest gain first.
 -- Left click on a row buys it: the first click searches that auction again (a purchase needs the auction of the
 -- game's latest search, decision 431), the second click buys it. Right click: discarded - the item comes back only
@@ -15,7 +15,8 @@ OMQ = _G.OneMoreQuest
 local DB = {}
 OMQ.DEBargain = DB
 
-DB.MIN_GAIN = 1000        -- copper: at least 10 silver under the disenchant value
+DB.MIN_GAIN = 1000        -- copper: at least 10 silver under the disenchant value (the default)
+DB.GAINS = { 500, 1000, 1500 }   -- decision 713: the buttons 5s, 10s, 15s, the choice kept in OMQDB.deBargain.min
 DB.CLASSES = { 2, 4 }     -- weapons, armor
 DB.PAGE = 500             -- a list that stops at a whole number of these lines may be cut off
 DB.PAGES = 100            -- at most this many pages of one search
@@ -287,8 +288,21 @@ function DB.Judge(e)
     local v, _, missing, priced = OMQ.Disenchant.Value(e.id)
     if not v or (priced or 0) == 0 then return nil end
     local gain = v - e.price
-    if gain < DB.MIN_GAIN then return nil end
+    if gain < DB.GAINS[1] then return nil end              -- every line the smallest choice could show (decision 713)
     return v, gain, missing, q
+end
+
+-- the chosen threshold in copper (decision 713)
+function DB.Min()
+    local m = db().min
+    for _, g in ipairs(DB.GAINS) do if g == m then return m end end
+    return DB.MIN_GAIN
+end
+function DB.SetMin(c)
+    db().min = c
+    DB.offset = 0
+    DB.Build()
+    DB.Prepare()
 end
 
 local function skipped(ks, price)
@@ -311,7 +325,7 @@ function DB.Build()
         local v, gain, missing, q
         if e.j == nil then v = "wait" elseif e.j then v, gain, missing, q = e.j[1], e.j[2], e.j[3], e.j[4] end
         if v == "wait" then waiting = waiting + 1
-        elseif v and not skipped(ks, e.price) then
+        elseif v and gain >= DB.Min() and not skipped(ks, e.price) then
             local r = rows[ks]
             if not r then
                 r = { ks = ks, itemKey = e.key, itemID = e.id, commodity = false, onCheck = DB.OnCheck, onDone = DB.OnDone }
@@ -357,7 +371,7 @@ function DB.List() return list end
 function DB.OnCheck(r, offers)
     local good = {}
     for _, o in ipairs(offers or {}) do
-        if o.auctionID and o.buyout and (o.qty or 1) == 1 and (r.value or 0) - o.buyout >= DB.MIN_GAIN then good[#good + 1] = o end
+        if o.auctionID and o.buyout and (o.qty or 1) == 1 and (r.value or 0) - o.buyout >= DB.Min() then good[#good + 1] = o end
     end
     r.offers = good
     if #good == 0 then
@@ -477,7 +491,7 @@ local function build()
     local ok, f = pcall(CreateFrame, "Frame", "OneMoreQuestDEBargain", UIParent, "BasicFrameTemplateWithInset")
     if not ok or not f then return end
     frame = f
-    f:SetSize(380, 120 + DB.ROWS * (DB.ROW_H + 2))
+    f:SetSize(380, 148 + DB.ROWS * (DB.ROW_H + 2))
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
@@ -512,8 +526,24 @@ local function build()
         if not ok2 then OMQ:Error("disenchant bargains", err) end
     end)
     f.all = all
+    -- decision 713: the threshold, three buttons
+    local minLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    minLabel:SetPoint("TOPLEFT", 14, -84)
+    minLabel:SetText("At least under the disenchant value:")
+    f.mins = {}
+    for i, g in ipairs(DB.GAINS) do
+        local mb = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+        mb:SetSize(46, 20)
+        mb:SetPoint("TOPLEFT", 216 + (i - 1) * 50, -79)
+        mb:SetText(math.floor(g / 100) .. "s")
+        mb:SetScript("OnClick", function()
+            local ok2, err = pcall(function() DB.SetMin(g); DB.Paint() end)
+            if not ok2 then OMQ:Error("disenchant bargains", err) end
+        end)
+        f.mins[i] = mb
+    end
     local listFrame = CreateFrame("Frame", nil, f)
-    listFrame:SetPoint("TOPLEFT", 14, -80)
+    listFrame:SetPoint("TOPLEFT", 14, -106)
     listFrame:SetSize(348, DB.ROWS * (DB.ROW_H + 2))
     listFrame:EnableMouseWheel(true)
     listFrame:SetScript("OnMouseWheel", function(_, d)
@@ -555,6 +585,10 @@ function DB.Paint()
             st == "ready - click to buy" and "" or (st and " (searching)" or "")))
     end
     if frame.all.SetEnabled then frame.all:SetEnabled(not run and nx ~= nil) end
+    for i, g in ipairs(DB.GAINS) do                       -- the chosen one is pressed down (decision 713)
+        local mb = frame.mins[i]
+        if mb.SetButtonState then mb:SetButtonState(g == DB.Min() and "PUSHED" or "NORMAL", g == DB.Min()) end
+    end
     DB.offset = math.max(0, math.min(DB.offset, math.max(0, #list - DB.ROWS)))
     for i = 1, DB.ROWS do
         local r = rowFrames[i] or makeRow(i)
