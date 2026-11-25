@@ -283,12 +283,17 @@ function UI:Render()
             r.name:SetTextColor(col[1], col[2], col[3])
             local spot = st.search and st.search[1] or C().Pick(st.from, faction)
             local what = st.search and (UI.ZoneName(spot[1]) .. " - " .. #st.search .. " places") or where(spot)
+            local to = not st.search and C().Pick(st.to, faction)
+            if to and type(to[1]) == "table" then to = to[1] end
+            if spot and to and to[1] ~= spot[1] then        -- turned in elsewhere: both zones (fix 705)
+                what = UI.ZoneName(spot[1]) .. " > " .. UI.ZoneName(to[1])
+            end
             r.what:SetText(what .. " - " .. (st.fromText or ""))
             r.state:SetText(state == "done" and "done" or state == "log" and "in your log" or "")
             r.state:SetTextColor(GREEN[1], GREEN[2], GREEN[3])
             r:SetPoint("TOPLEFT", 14, -60 - (i - 1) * ROW_H)
             r:Show()
-            view.rows[i] = { title = C().Title(st), state = state }
+            view.rows[i] = { title = C().Title(st), state = state, what = what }
         end
         local lines = {}
         for i, st in ipairs(c.steps) do

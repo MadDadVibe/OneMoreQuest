@@ -82,6 +82,7 @@ end
 -- the value of a per-faction table: { Alliance = .., Horde = .. } or { both = .. }
 function C.Pick(t, faction)
     if type(t) ~= "table" then return nil end
+    if t[1] ~= nil then return t end                    -- a class chain's place (list) has no faction keys (fix 705)
     return t[faction or C.Faction()] or t.both
 end
 function C.Level()

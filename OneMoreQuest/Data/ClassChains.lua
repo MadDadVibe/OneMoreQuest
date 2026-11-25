@@ -148,14 +148,22 @@ T[#T + 1] = {key="tempest",name="The Tempest's Weapons",class="SHAMAN",minLevel=
         { races={1,3,4,7,11,95},faction="Alliance", steps={
             {title="Call of Air",quests={both={94789}},from={1455,47.1,13.8},to={{1417,59.8,27.6},{1455,47.1,13.8}},fromText="talk to Eldrun Stormbreaker",toText="turn it in at Veyric Thunderhame",minLevel=30},
             {title="Elemental Aid",quests={both={96264}},from={{1417,59.8,27.6},{1455,47.1,13.8}},to={{1417,59.8,27.6},{1455,47.1,13.8}},fromText="talk to Veyric Thunderhame",toText="turn it in at Veyric Thunderhame",minLevel=30},
-            {title="Storm, Earth, and Fire",quests={both={79358}},from={{1417,59.8,27.6},{1455,47.1,13.8}},to={{1441,46.1,51.7},{1417,59.8,27.6},{1455,47.1,13.8}},fromText="talk to Veyric Thunderhame",toText="turn it in at Rau Cliffrunner or Veyric Thunderhame",minLevel=30},
+            {title="Storm, Earth, and Fire",quests={both={79358}},from={{1417,59.8,27.6},{1455,47.1,13.8}},to={{1417,59.8,27.6},{1455,47.1,13.8}},fromText="talk to Veyric Thunderhame",toText="turn it in at Veyric Thunderhame",minLevel=30},
             {title="Heed My Call",quests={both={96135}},from={{1417,59.8,27.6},{1455,47.1,13.8}},to={{1417,59.8,27.6},{1455,47.1,13.8}},fromText="talk to Veyric Thunderhame",toText="turn it in at Veyric Thunderhame",minLevel=30},
             {title="The Tempest's Weapons",quests={both={96016}},from={{1417,59.8,27.6},{1455,47.1,13.8}},to={1416,80.5,66.9},fromText="talk to Veyric Thunderhame",toText="turn it in at Bath'rah the Windwatcher",minLevel=30},
         }},
 }}
 T[#T + 1] = {key="whirlwind",name="Whirlwind Weapon",class="WARRIOR",minLevel=30,rewards={6975,6976,6977}, variants={
-        { races={1,2,3,4,5,6,7,8,9,10,11,95,96}, steps={
-            {title="The Islander",quests={both={1718}},from={{1456,57.2,87.4},{1454,80.4,32.4},{1458,47.4,17.3},{1455,70.3,90.7}},to={1413,68.6,49.2},fromText="talk to Torm Ragetotem or Sorek",toText="turn it in at Klannoc Macleod",minLevel=30},
+        { races={1,3,4,7,11,95},faction="Alliance", steps={
+            {title="The Islander",quests={both={1718}},from={{1455,70.3,90.7},{1453,80.5,59.9}},to={1413,68.6,49.2},fromText="talk to Kelv Sternhammer or Wu Shen",toText="turn it in at Klannoc Macleod",minLevel=30},
+            {title="The Affray",quests={both={1719}},from={1413,68.6,49.2},to={1413,68.6,49.2},fromText="talk to Klannoc Macleod",toText="turn it in at Klannoc Macleod",minLevel=30},
+            {title="The Windwatcher",quests={both={1791}},from={1413,68.6,49.2},to={1416,80.5,66.9},fromText="talk to Klannoc Macleod",toText="turn it in at Bath'rah the Windwatcher",minLevel=30},
+            {title="Cyclonian",quests={both={1712}},from={1416,80.5,66.9},to={1416,80.5,66.9},fromText="talk to Bath'rah the Windwatcher",toText="turn it in at Bath'rah the Windwatcher",minLevel=30},
+            {title="The Summoning",quests={both={1713}},from={1416,80.5,66.9},to={1416,80.5,66.9},fromText="talk to Bath'rah the Windwatcher",toText="turn it in at Bath'rah the Windwatcher",minLevel=30},
+            {title="Whirlwind Weapon",quests={both={1792}},from={1416,80.5,66.9},to={1416,80.5,66.9},fromText="talk to Bath'rah the Windwatcher",toText="turn it in at Bath'rah the Windwatcher",minLevel=30},
+        }},
+        { races={2,5,6,8,9,10,96},faction="Horde", steps={
+            {title="The Islander",quests={both={1718}},from={{1456,57.2,87.4},{1454,80.4,32.4},{1458,47.4,17.3}},to={1413,68.6,49.2},fromText="talk to Torm Ragetotem or Sorek",toText="turn it in at Klannoc Macleod",minLevel=30},
             {title="The Affray",quests={both={1719}},from={1413,68.6,49.2},to={1413,68.6,49.2},fromText="talk to Klannoc Macleod",toText="turn it in at Klannoc Macleod",minLevel=30},
             {title="The Windwatcher",quests={both={1791}},from={1413,68.6,49.2},to={1416,80.5,66.9},fromText="talk to Klannoc Macleod",toText="turn it in at Bath'rah the Windwatcher",minLevel=30},
             {title="Cyclonian",quests={both={1712}},from={1416,80.5,66.9},to={1416,80.5,66.9},fromText="talk to Bath'rah the Windwatcher",toText="turn it in at Bath'rah the Windwatcher",minLevel=30},
