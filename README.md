@@ -4,6 +4,23 @@ A World of Warcraft addon for **WoW Forever**, made for a small group of friends
 
 Works with English and German clients. `/omq features` shows the full list in the game.
 
+## A look at it
+
+Design mockups made while building the addon (some still with German texts); the game windows look close to this.
+
+| | |
+|---|---|
+| ![Forever Journey journal](docs/images/journey_journal.png) | ![Journey cards: face down, seen, unlocked](docs/images/journey_cards.png) |
+| **Forever Journey:** the journal with its tabs and cards | **Journey cards:** face down, seen at another dad, unlocked |
+| ![Flex](docs/images/journey_flex.png) | ![Unlock cards](docs/images/unlocks.png) |
+| **Flex:** a dad shows off a card | **Unlocks:** the cards for each new feature |
+| ![Dad Duel reveal](docs/images/duel_reveal.png) | ![Dad Duel pick](docs/images/duel_pick.png) |
+| **Dad Duel:** reveal, best value wins the round | **Dad Duel:** pick one of your slain foes in secret |
+| ![Spell Rhythm](docs/images/rhythm_play.png) ![Spell Rhythm result](docs/images/rhythm_result.png) | ![Flight Quiz](docs/images/quiz.png) |
+| **Spell Rhythm:** play your spells to the beat | **Flight Quiz:** questions about your own journey |
+| ![Auction Helper](docs/images/auction.png) | |
+| **Auction Helper:** post everything worth more, one click each | |
+
 ## Features
 
 ### Playing together
