@@ -376,6 +376,8 @@ function D:Apply()
         if not okC then failed[#failed + 1] = c[1] end
     end
     for _, c in ipairs(P.chat) do setChatSize(c[1], c[2]) end
+    D:RaiseCameraMax()
+    if D:ZoomOut() then st.zoomed = D.ZOOM end
     st.applied = true
     st.appliedVersion = P.version
     OMQ:Print("Dad UI is on. Your old UI is saved; Options > Interface (or /omq dadui restore) brings it back.")
@@ -392,7 +394,9 @@ function D:Restore()
     if blocked() then return false end
     local r = root()
     local last = othersApplied() == 0                     -- no other character runs the Dad UI
-    for name, v in pairs(b.cvars or {}) do pcall(SetCVar, name, v) end
+    for name, v in pairs(b.cvars or {}) do
+        if name ~= "cameraDistanceMaxZoomFactor" then pcall(SetCVar, name, v) end    -- always raised (decision 702)
+    end
     if last then
         pcall(function()
             for id, v in pairs(r.account or b.account or {}) do pcall(C_EditMode.SetAccountSetting, id, v) end
@@ -429,6 +433,46 @@ function D:Restore()
     D:AskReload()
     return true
 end
+
+----------------------------------------------------------------------
+-- Camera (decision 702). Every character gets the far camera limit (the console command
+-- cameraDistanceMaxZoomFactor), with or without the Dad UI; it is only ever raised. The Dad UI also
+-- turns the camera out once per character to D.ZOOM yards (MadDadVibe's own characters: 27-35 yd,
+-- about the middle between the limit without and with the far factor). The player can scroll in
+-- or out freely afterwards; the zoom is not forced again.
+----------------------------------------------------------------------
+D.MAX_FACTOR = 4
+D.ZOOM = 32
+
+function D:RaiseCameraMax()
+    local ok, v = pcall(GetCVar, "cameraDistanceMaxZoomFactor")
+    if ok and not isSecret(v) and (tonumber(v) or 0) >= D.MAX_FACTOR then return false end
+    return (pcall(SetCVar, "cameraDistanceMaxZoomFactor", tostring(D.MAX_FACTOR)))
+end
+
+-- Turns the camera out to D.ZOOM yards; never in. True when the camera distance could be read.
+function D:ZoomOut()
+    if not (GetCameraZoom and CameraZoomOut) then return false end
+    local ok, cur = pcall(GetCameraZoom)
+    if not ok or isSecret(cur) or type(cur) ~= "number" then return false end
+    if cur < D.ZOOM - 0.5 then pcall(CameraZoomOut, D.ZOOM - cur) end
+    return true
+end
+
+-- At login: raise the limit; a character with the Dad UI that was not turned out yet gets the zoom
+-- (a few seconds later, after the game has put its saved camera back).
+function D:CameraLogin()
+    D:RaiseCameraMax()
+    local st = state()
+    if not st.applied or st.zoomed == D.ZOOM then return end
+    if InCombatLockdown and InCombatLockdown() then return end
+    if D:ZoomOut() then st.zoomed = D.ZOOM end
+end
+
+OMQ:On("READY", function()
+    D:RaiseCameraMax()
+    if C_Timer and C_Timer.After then C_Timer.After(3, function() D:CameraLogin() end) else D:CameraLogin() end
+end)
 
 ----------------------------------------------------------------------
 -- Questions to the player

@@ -50,7 +50,6 @@ OMQ.DadUIPreset = {
     },
     cvars = {
         { "autoLootDefault", "1" },
-        { "cameraDistanceMaxZoomFactor", "4" },
         { "cameraSmoothStyle", "0" },
         { "combinedBags", "1" },
         { "deselectOnClick", "1" },
