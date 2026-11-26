@@ -5,6 +5,9 @@
 --   not done, not in the log, no excluding quest done, the giver talks to me. Left out: grey quests, repeatable
 --   quests, quests for a profession or reputation and quests that start from an item (no giver), quests removed
 --   from the game and holiday/world event quests while their event does not run (decision 708, QuestEvents.lua).
+--   Quests that start from an item (decision 717, Data/QuestItemStarts.lua): one to six certain mobs drop it or it lies
+--   on the ground - a "!" with a small skull/chest at the mob's places (3 at most) or where the item lies; hover: the
+--   mob, the item, the drop chance and the quests it starts; no mark while the item is in my bags.
 --   Continent and world maps get no marks (too many). Quests at the same giver share one mark.
 --   Hover: every quest of the giver with its level, the XP (lowered like the game does when I am far above the
 --   quest) and the item rewards (choices marked); Shift shows the game's tooltips of the first reward items.
@@ -30,6 +33,9 @@ Q.GROUP = 0.6               -- map %: givers this close share one mark (the same
 Q.REFRESH = 1               -- seconds between two looks at the log while the map is open and something changed
 Q.ATLAS = "QuestNormal"     -- the yellow ! of Blizzard's own quest offers on the map (fix 706: the file below drew nothing in Forever)
 Q.ICON = "Interface\\GossipFrame\\AvailableQuestIcon"
+Q.BADGE = 11               -- the small skull/chest at a mark of a quest item (decision 717)
+Q.BADGE_SKULL = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8"
+Q.BADGE_CHEST = "Interface\\Icons\\INV_Box_01"
 Q.SHOP = 2                  -- Shift: the game tooltips of this many reward items
 -- XP when I am above the quest: 6 levels 80 %, 7: 60 %, 8: 40 %, 9: 20 %, 10 and more 10 % (the classic rule)
 Q.XP_CUT = { [6] = 0.8, [7] = 0.6, [8] = 0.4, [9] = 0.2 }
@@ -79,10 +85,16 @@ end
 function Q.Me() return NQ().Me() end
 
 -- may I take this quest now, from its giver? (who = NextQuest.Me(), log = { [id] = true })
-function Q.Takeable(id, who, log)
+-- drop = true: a quest that starts from an item a mob drops or that lies on the ground (decision 717)
+function Q.Takeable(id, who, log, drop)
     local d = data(id)
-    if not (d and d[7]) then return false end
-    if has(d[13], 1) or has(d[13], 2) or has(d[13], 4) then return false end
+    if not d then return false end
+    if drop then
+        if has(d[13], 1) or has(d[13], 2) then return false end
+    else
+        if not d[7] then return false end
+        if has(d[13], 1) or has(d[13], 2) or has(d[13], 4) then return false end
+    end
     if OMQ.QuestHidden and OMQ.QuestHidden(id) then return false end            -- removed, or its event does not run (708)
     if (log and log[id]) or everDone(id) then return false end
     if (d[2] or 0) > who.level then return false end
@@ -114,6 +126,20 @@ end
 
 local function level(id) local d = data(id); return d and d[3] or 0 end
 
+-- the item is in my bags already: no mark (the quest is accepted from the bags)
+function Q.InBags(item)
+    local f = (C_Item and C_Item.GetItemCount) or GetItemCount
+    if not f then return false end
+    local ok, n = pcall(f, item)
+    return ok and num(n) and n > 0 or false
+end
+-- the name of a mob or object in the client's language (German from the data on a German client)
+function Q.SourceName(src)
+    local loc = GetLocale and GetLocale()
+    if loc == "deDE" and src[4] then return src[4] end
+    return src[3] or "?"
+end
+
 -- the marks of a map: givers of takeable quests whose place lies on it
 function Q.Collect(map)
     local out = {}
@@ -137,6 +163,30 @@ function Q.Collect(map)
                     if not contains(m.quests, id) then m.quests[#m.quests + 1] = id end
                 end
             end
+        end
+    end
+    -- quests that start from an item: the places of the mobs that drop it / where it lies (decision 717)
+    for id, x in pairs(OMQ.QuestItemStarts or {}) do
+        local can
+        for _, src in ipairs(x[2] or {}) do
+            for _, s in ipairs(src[6] or {}) do
+                if s[1] == map then
+                    if can == nil then can = Q.Takeable(id, who, log, true) and not Q.InBags(x[1]) end
+                    if not can then break end
+                    local key = string.format("%s%d:%d:%d", src[1], src[2], math.floor(s[2] / Q.GROUP + 0.5), math.floor(s[3] / Q.GROUP + 0.5))
+                    local m = byKey[key]
+                    if not m then
+                        m = { key = key, x = s[2] / 100, y = s[3] / 100, spot = s, quests = {}, drop = src, items = {} }
+                        byKey[key] = m
+                        out[#out + 1] = m
+                    end
+                    if not contains(m.quests, id) then
+                        m.quests[#m.quests + 1] = id
+                        m.items[id] = x[1]
+                    end
+                end
+            end
+            if can == false then break end
         end
     end
     for _, m in ipairs(out) do
@@ -281,7 +331,8 @@ function Q.Go(m)
     if not (m and G and G.StartAt) then return false end
     local w = NQ().World(m.spot)
     if not w then return false end
-    G:StartAt("Quest giver: " .. Q.Title(m.quests[1]), w[1], w[2], w[3], "giver", nil, { radius = 10 })
+    local label = m.drop and ("Quest item: " .. Q.SourceName(m.drop)) or ("Quest giver: " .. Q.Title(m.quests[1]))
+    G:StartAt(label, w[1], w[2], w[3], "giver", nil, { radius = m.drop and 40 or 10 })
     return true
 end
 function Q.Remove(m)
@@ -319,7 +370,22 @@ function Q.Tooltip(pin)
     if not (m and GameTooltip) then return end
     tipPin = pin
     GameTooltip:SetOwner(pin, "ANCHOR_RIGHT")
-    GameTooltip:SetText(#m.quests > 1 and string.format("Quest giver (%d quests)", #m.quests) or "Quest giver", 1, 0.82, 0)
+    if m.drop then
+        GameTooltip:SetText((m.drop[1] == "o" and "Loot: " or "Kill: ") .. Q.SourceName(m.drop), 1, 0.82, 0)
+        local seen = {}
+        for _, id in ipairs(m.quests) do
+            local it = m.items[id]
+            if it and not seen[it] then
+                seen[it] = true
+                local t, c = itemLine({ it, 1 })
+                GameTooltip:AddLine((m.drop[1] == "o" and "lies here: " or "drops: ") .. t, c[1], c[2], c[3])
+            end
+        end
+        if m.drop[5] then GameTooltip:AddLine(string.format("drop chance %.1f %%", m.drop[5] * 100), 0.8, 0.8, 0.8) end
+        GameTooltip:AddLine("starts:", 0.8, 0.8, 0.8)
+    else
+        GameTooltip:SetText(#m.quests > 1 and string.format("Quest giver (%d quests)", #m.quests) or "Quest giver", 1, 0.82, 0)
+    end
     for _, l in ipairs(Q.Lines(m)) do GameTooltip:AddLine(l[1], l[2] or 1, l[3] or 1, l[4] or 1) end
     GameTooltip:AddLine("Left click: arrow there  -  Right click: remove mark  -  Shift: item tooltips", 0.5, 0.5, 0.5, true)
     GameTooltip:Show()
@@ -358,6 +424,10 @@ local function newPin()
     b.icon = b:CreateTexture(nil, "OVERLAY")
     b.icon:SetAllPoints()
     Q.SetIcon(b.icon)
+    b.badge = b:CreateTexture(nil, "OVERLAY", nil, 2)               -- skull (mob drop) or chest (on the ground), 709
+    b.badge:SetSize(Q.BADGE, Q.BADGE)
+    b.badge:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 3, -3)
+    b.badge:Hide()
     b:SetScript("OnClick", function(self, which)
         if which == "RightButton" then Q.Remove(self.m) else Q.Go(self.m) end
         leave()
@@ -395,6 +465,10 @@ function Q.Place()
                 local pin = pins[shown] or newPin()
                 pins[shown] = pin
                 pin.m = m
+                if m.drop then
+                    pin.badge:SetTexture(m.drop[1] == "o" and Q.BADGE_CHEST or Q.BADGE_SKULL)
+                    pin.badge:Show()
+                else pin.badge:Hide() end
                 pin:SetFrameLevel((layer:GetFrameLevel() or 1) + 1)
                 pin:SetScale(scale)
                 pin:ClearAllPoints()
