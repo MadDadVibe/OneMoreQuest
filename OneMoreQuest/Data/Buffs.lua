@@ -8,6 +8,7 @@
 -- cast:        the player must know one of these spells to be asked for the group
 -- kind "aura": aura on the unit; kind "weapon": weapon enchantment (imbue, poison)
 -- minRage:     only asked for with at least this much rage (warrior)
+-- pets:        also checked on the group's hunter pets and Voidwalkers (option thornsPets, decision 715)
 local ADDON, OMQ = ...
 OMQ = _G.OneMoreQuest
 
@@ -76,7 +77,8 @@ OMQ.buffGroups = {
     DRUID = {
         { id = "motw", label = "Mark of the Wild", scope = "all", kind = "aura",
           cast = { 1126 }, spells = { 1126, 21849 } },
-        { id = "thorns", label = "Thorns", scope = "all", kind = "aura",
+        -- pets = true (decision 715): also on the hunter pets and Voidwalkers of the group (partypet1-4)
+        { id = "thorns", label = "Thorns", scope = "all", kind = "aura", pets = true,
           cast = { 467 }, spells = { 467 } },
     },
     SHAMAN = {

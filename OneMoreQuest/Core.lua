@@ -5,7 +5,7 @@ OMQ = OMQ or {}
 _G.OneMoreQuest = OMQ
 
 OMQ.name = "One More Quest"
-OMQ.version = "1.3.317"
+OMQ.version = "1.3.318"
 
 -- the last bag to look into for what I carry: the reagent bag too, if the client has one (decision 272)
 function OMQ.LastBag()
@@ -27,6 +27,7 @@ local DEFAULTS = {
         autoShare = true,
         snoozeUntil = 0,
         buffOnlyAddon = false,
+        thornsPets = true,           -- Thorns also on group hunter pets and Voidwalkers (decision 715)
         compare = true,
         needs = true,
         qtrack = true,               -- group quest tracker (decision 149)
