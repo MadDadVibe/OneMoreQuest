@@ -16,6 +16,12 @@ OMQ.QTrackFrame = U
 local runEdges = {}
 local topEdge                      -- the gold line on top; blue with the rest of the frame during a Dungeon Run (476)
 local BLUE = { 0.30, 0.62, 1.00 }
+-- a quest that is not part of the running run (MadDadVibe 2026-11-26): grey frame and head, silver name
+U.EXTRA_FRAME = { 0.55, 0.57, 0.60 }
+U.EXTRA_HEAD = { 0.62, 0.64, 0.68 }
+U.EXTRA_TITLE = { 0.80, 0.82, 0.86 }
+U.EXTRA_TEXT = "EXTRA QUEST - NOT IN RUN"
+U.NEXT_TEXT = "Next in run: "
 local frame, header, title, level, opens, opensHover, prevBtn, navText, nextBtn, stampFrame, stampTex, stampAnim, dim
 local texts, texs, tUsed, xUsed = {}, {}, 0, 0
 local moveMode = false
@@ -351,9 +357,10 @@ end
 -- head row, then its rows (objectives with the dads' columns, or what to pick up / turn in)
 function U.AddStep(v, step)
     if not (v and step) then return v end
-    v.rows[#v.rows + 1] = { text = (step.title or "") .. (step.multi and "" or U.OpensText(step.qid)), head = true, cells = {} }
+    v.rows[#v.rows + 1] = { text = (step.title or "") .. (step.multi and "" or U.OpensText(step.qid)), head = true, step = true, cells = {} }
     for _, r in ipairs(step.rows or {}) do v.rows[#v.rows + 1] = r end
     v.more = (v.more or 0) + 1 + (step.more or 0)
+    v.stepAdded = true
     return v
 end
 
@@ -382,6 +389,36 @@ function U.AreaView()
     return v
 end
 
+-- the Area Run's step: its objectives as the group card with the quests at the same place (632), else the step text
+function U.AreaCardOf(v)
+    if not v then return nil end
+    v.run, v.showNav = "AREA RUN", false
+    return v
+end
+function U.AreaStep(r, t, allowed)
+    local R, Q = OMQ.QuestRun, OMQ.QTrack
+    if allowed and t and t.kind == "o" and not t.buy and Q.Trackable(t.qid) then
+        local v = U.AreaCardOf(Q:View(t.qid))
+        if v then return (U.AddTogether(v, t.qid, t)) end
+    end
+    local view = { run = "AREA RUN", qid = t and t.qid, title = t and t.title or "", showNav = false, stamp = false,
+                   cols = {}, rows = { { text = t and t.what or "all stops done", cells = {} } } }
+    if t and t.qid then view.level = U.DataLevel(t.qid) end                 -- the level on p/t steps too (656)
+    if t and t.kind == "t" then
+        local list = U.TurnIns(r)
+        if #list > 1 then
+            view.title = string.format("Turn in %d quests", #list)
+            view.multi, view.level = true, nil
+            view.rows = {}
+            for _, id in ipairs(list) do
+                local nxt = R.FollowUpIn(r, id)
+                view.rows[#view.rows + 1] = { text = R.Title(id) .. U.OpensText(id) .. (nxt and (", then pick up " .. R.Title(nxt)) or ""), cells = {} }
+            end
+        end
+    end
+    return view
+end
+
 function U.AreaCard()
     local R = OMQ.QuestRun
     if moveMode or not (R and R:Active()) then return nil end
@@ -401,29 +438,7 @@ function U.AreaCard()
     end
     local ok, t = pcall(R.Target, R)
     if not ok then t = nil end
-    -- the run's step: its objectives as the group card with the quests at the same place (632), else the step text
-    local function stepView()
-        if allowed and t and t.kind == "o" and not t.buy and Q.Trackable(t.qid) then
-            local v = card(Q:View(t.qid))
-            if v then return (U.AddTogether(v, t.qid, t)) end
-        end
-        local view = { run = "AREA RUN", qid = t and t.qid, title = t and t.title or "", showNav = false, stamp = false,
-                       cols = {}, rows = { { text = t and t.what or "all stops done", cells = {} } } }
-        if t and t.qid then view.level = U.DataLevel(t.qid) end                 -- the level on p/t steps too (656)
-        if t and t.kind == "t" then
-            local list = U.TurnIns(r)
-            if #list > 1 then
-                view.title = string.format("Turn in %d quests", #list)
-                view.multi, view.level = true, nil
-                view.rows = {}
-                for _, id in ipairs(list) do
-                    local nxt = R.FollowUpIn(r, id)
-                    view.rows[#view.rows + 1] = { text = R.Title(id) .. U.OpensText(id) .. (nxt and (", then pick up " .. R.Title(nxt)) or ""), cells = {} }
-                end
-            end
-        end
-        return view
-    end
+    local function stepView() return U.AreaStep(r, t, allowed) end
     -- the quest I am working on comes first; is it not part of the step, the step stays on the card under it
     local work = allowed and Q:Working() or nil
     if work and work ~= (t and t.qid) then
@@ -448,6 +463,61 @@ function U.AreaAway()
     return ok and here ~= nil and here ~= r.zone or false
 end
 
+-- the colour of the running run's frame: purple Chain Run, blue Dungeon Run, green Area Run, else gold
+function U.RunColor()
+    if OMQ.ChainRun and OMQ.ChainRun:Active() then return OMQ.ChainRunUI and OMQ.ChainRunUI.PURPLE or { 0.66, 0.33, 0.94 } end
+    local r = OMQ.QuestRun and OMQ.QuestRun:Active() and OMQ.QuestRun:Run()
+    if r and r.kind == "dungeon" then return BLUE end
+    if r and r.kind == "area" then return OMQ.QuestRunUI and OMQ.QuestRunUI.AREA or { 0.33, 0.84, 0.40 } end
+    return GOLD
+end
+
+-- is the quest part of the running run (MadDadVibe 2026-11-26)? The Chain Run: one of its steps' quests; the other
+-- runs: a quest of the run that was not dropped. nil when no run goes (then nothing is an extra quest).
+function U.InRun(qid)
+    if not qid then return nil end
+    local C = OMQ.ChainRun
+    if C and C:Active() then
+        local chain = C:Chain()
+        if not chain then return nil end
+        for _, st in ipairs(chain.steps or {}) do
+            for _, v in pairs(type(st.quests) == "table" and st.quests or {}) do     -- a list or { [faction] = list }
+                if v == qid then return true end
+                if type(v) == "table" then for _, id in ipairs(v) do if id == qid then return true end end end
+            end
+        end
+        return false
+    end
+    local R = OMQ.QuestRun
+    if not (R and R:Active()) then return nil end
+    local r = R:Run()
+    local q = r and r.quests and r.quests[qid]
+    return (q ~= nil and not q.dropped) and true or false
+end
+
+-- a card of a quest that is no part of the running run: grey, and the run's next step under it
+function U.IsExtra(view)
+    if moveMode or not view or view.multi or not view.qid then return false end
+    return U.InRun(view.qid) == false
+end
+
+-- the run's next step for the card of an extra quest: { title, qid, multi, rows }, nil when nothing is left
+function U.RunStep()
+    local C = OMQ.ChainRun
+    if C and C:Active() then
+        local cv = U.ChainView()
+        if not cv then return nil end
+        return { title = cv.title, multi = true, rows = cv.rows }
+    end
+    local R = OMQ.QuestRun
+    if not (R and R:Active()) then return nil end
+    local r = R:Run()
+    local ok, t = pcall(R.Target, R)
+    if not ok or not t then return nil end
+    if r and r.kind == "area" then return U.AreaStep(r, t, OMQ.QTrack:Allowed()) end
+    return { qid = t.qid, title = t.title, multi = true, rows = { { text = t.what or "", cells = {} } } }
+end
+
 function U:Render()
     if not frame then return end
     local Q = OMQ.QTrack
@@ -455,6 +525,9 @@ function U:Render()
     local grind = not moveMode and OMQ.GrindUI and OMQ.GrindUI.TrackerView() or nil
     local view = moveMode and DEMO or grind or U.AreaView() or (Q:Shown() and Q:View()) or U.RunView()
     if view and not grind and U.AreaAway() then view = nil end
+    local extra = not grind and U.IsExtra(view) or false
+    if extra and not view.stepAdded then U.AddStep(view, U.RunStep()) end
+    U.extra = extra
     if not view then
         frame:Hide()
         lastStamp = nil
@@ -466,8 +539,12 @@ function U:Render()
     for _, fs in ipairs(texts) do fs:Hide() end
     for _, t in ipairs(texs) do t:Hide() end
 
-    if view.run then header:SetText(view.run) else header:SetText("GROUP QUEST") end
+    U.headerText = extra and U.EXTRA_TEXT or view.run or "GROUP QUEST"
+    header:SetText(U.headerText)
+    local hc = extra and U.EXTRA_HEAD or TAN
+    header:SetTextColor(hc[1], hc[2], hc[3])
     local tc = (view.run == "CHAIN RUN") and (OMQ.ChainRunUI and OMQ.ChainRunUI.TEXT) or GOLD   -- purple title (595)
+    if extra then tc = U.EXTRA_TITLE end
     title:SetTextColor(tc[1], tc[2], tc[3])
     title:SetText(view.title or "")
     level:SetText(view.level and ("[" .. view.level .. "]") or "")
@@ -515,9 +592,10 @@ function U:Render()
         label:SetWidth((r.head or (#r.cells == 0 and ncols > 0)) and (width - PAD * 2) or labelW)
         label:SetJustifyH("LEFT")
         if label.SetWordWrap then label:SetWordWrap(false) end
-        label:SetText(r.text or "")
+        label:SetText((extra and r.step) and (U.NEXT_TEXT .. (r.text or "")) or (r.text or ""))
         -- on a see-through card the objective is pure white, like the names (decision 210)
-        if r.head then label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])          -- another quest at this place (632)
+        if extra and r.step then local c = U.RunColor(); label:SetTextColor(c[1], c[2], c[3])  -- the run's step under an extra quest
+        elseif r.head then label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])          -- another quest at this place (632)
         elseif U:Background() == "full" then label:SetTextColor(0.79, 0.8, 0.84) else label:SetTextColor(1, 1, 1) end
         for j, cell in ipairs(r.cells) do
             local x = PAD + labelW + GAP + (j - 1) * (COL_W + GAP)
@@ -547,6 +625,8 @@ function U:Render()
     local area = r and r.kind == "area" or false          -- the Area Run's frame is green (491)
     if chain then r, blue, area = nil, false, false end
     local col = grind and OMQ.GrindUI.RED or chain and (OMQ.ChainRunUI and OMQ.ChainRunUI.PURPLE or { 0.66, 0.33, 0.94 }) or blue and BLUE or area and (OMQ.QuestRunUI and OMQ.QuestRunUI.AREA or { 0.33, 0.84, 0.40 }) or GOLD
+    if extra and running then col = U.EXTRA_FRAME end
+    U.frameColor = col
     U.runGrind = grind ~= nil
     for _, e in ipairs(runEdges) do e:SetColorTexture(col[1], col[2], col[3], 1) end
     if topEdge then topEdge:SetColorTexture(col[1], col[2], col[3], 1) end
