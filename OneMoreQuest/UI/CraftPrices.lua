@@ -213,10 +213,12 @@ P.PAGE = 500
 -- not limited: all six quality filters, level range 0-0 and one class filter per subcategory. Every browse
 -- search of the addon has that form now (P.GameQuery), and the scan paces itself the way the measurement did:
 -- the next search GAP seconds after the last one ended, and only when the game says its message system is ready.
+-- Fix 716: GAP 0.5 s instead of 2 s - the 13 pauses were about 30 s of a 70 s scan (grey items only about 1 s);
+-- the wait for the game's ready message stays.
 -- An empty list counts as "nothing on sale" when the server's answer came with it (RESPONSE_RECEIVED) and the
 -- game calls the list complete. A category that came empty, did not answer, or brought less than CAT_SHRINK of
 -- its lines of the last complete scan loses nothing: its items keep their old prices (fix 549).
-P.GAP = 2
+P.GAP = 0.5
 P.CHECK_LINES = 30   -- fix 557: this many lines of an answer are checked for their category
 P.CAT_SHRINK, P.CAT_MIN = 0.5, 20   -- short: under half the lines of a category that had at least 20
 P.LOG_MAX = 800      -- lines of the scan's event log kept (OMQDB.priceScanLast.log)
