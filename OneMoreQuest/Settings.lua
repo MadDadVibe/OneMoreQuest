@@ -150,6 +150,13 @@ local function classItems()
           get = function() return OMQ.db.options.overpowerMark ~= false end,
           set = function(v) if OMQ.OverpowerMark then OMQ.OverpowerMark.SetEnabled(v) else OMQ.db.options.overpowerMark = v and true or false end end },
     }))
+    -- decision 715: Thorns cards also for the hunter pets and Voidwalkers of the group
+    add(mark({ "DRUID" }, {
+        { type = "check", label = "Thorns on hunter pets and Voidwalkers",
+          tip = "Druids: the missing buff cards also ask for Thorns on the pets of hunters and the Voidwalker of warlocks in your group. A left click on the card casts Thorns on the pet, in the rank for its level. Out of a fight only, like all buff cards.",
+          get = function() return OMQ.db.options.thornsPets ~= false end,
+          set = function(v) OMQ.db.options.thornsPets = v and true or false; OMQ.Alerts:Evaluate() end },
+    }))
     add(ruleItems("pet"))
     add(mark({ "HUNTER", "WARLOCK" }, {
       { type = "check", label = "Mute pet sound channel",

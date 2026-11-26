@@ -1239,6 +1239,31 @@ local function hasAddon(unit)
     return u ~= nil and OMQ:IsOnline(u)
 end
 
+-- decision 715: the pets a druid's Thorns is asked for - hunter pets and the warlock's Voidwalker.
+-- The Voidwalker is found by its creature ID in the pet's GUID, or else by its family name (German and English).
+local VOIDWALKER_NPC = { [1860] = true }
+local VOIDWALKER_FAMILY = { ["Voidwalker"] = true, ["Leerwandler"] = true }
+local function plain(v) if type(v) == "string" and not isSecret(v) then return v end end
+function M.ThornsPet(pet, owner)
+    if not (UnitExists(pet) and UnitExists(owner)) then return false end
+    local _, class = UnitClass(owner)
+    class = plain(class)
+    if class == "HUNTER" then return true end
+    if class ~= "WARLOCK" then return false end
+    local guid = plain(UnitGUID(pet))
+    local npc = guid and tonumber(guid:match("^%a+%-%d+%-%d+%-%d+%-%d+%-(%d+)"))
+    if npc and VOIDWALKER_NPC[npc] then return true end
+    local family = plain(UnitCreatureFamily and UnitCreatureFamily(pet))
+    return family ~= nil and VOIDWALKER_FAMILY[family] == true
+end
+
+-- a pet counts as in reach when it is alive and seen and its owner is in reach (OMQ knows only the owner's place)
+local function petInReach(pet, owner)
+    if UnitIsDeadOrGhost(pet) then return false end
+    if UnitIsVisible and not UnitIsVisible(pet) then return false end
+    return unitInReach(owner)
+end
+
 -- Is a temporary enchantment (imbue, poison) on the main hand weapon?
 -- Two sources, because not every client reports it the same way:
 -- GetWeaponEnchantInfo and the imbue line in the weapon tooltip.
@@ -1458,12 +1483,25 @@ M:Register({
                     end
                 else
                     local units = { "player" }
+                    local owners = {}
                     if g.scope == "all" then
                         for i = 1, 4 do units[#units + 1] = "party" .. i end
+                        -- decision 715: Thorns also on the hunter pets and Voidwalkers of the group
+                        if g.pets and OMQ.db.options.thornsPets ~= false then
+                            for i = 1, 4 do
+                                local pet, owner = "partypet" .. i, "party" .. i
+                                if M.ThornsPet(pet, owner) then
+                                    units[#units + 1] = pet
+                                    owners[pet] = owner
+                                end
+                            end
+                        end
                     end
                     for _, unit in ipairs(units) do
-                        local wanted = unit == "player" or not OMQ.db.options.buffOnlyAddon or hasAddon(unit)
-                        if wanted and UnitExists(unit) and (unit == "player" or unitInReach(unit)) then
+                        local owner = owners[unit]
+                        local wanted = unit == "player" or not OMQ.db.options.buffOnlyAddon or hasAddon(owner or unit)
+                        local reach = unit == "player" or (owner and petInReach(unit, owner)) or (not owner and unitInReach(unit))
+                        if wanted and UnitExists(unit) and reach then
                             local names = auraNames(unit)
                             if names then
                                 local covered = false
@@ -1477,6 +1515,13 @@ M:Register({
                                         if type(n) ~= "string" or isSecret(n) then n = "?" end
                                         if type(n2) == "string" and not isSecret(n2) and n2 ~= "" then n = n .. " " .. n2 end
                                         who = n .. " is"
+                                        if owner then
+                                            -- a pet: its own name plus whose it is
+                                            local o, o2 = UnitName(owner)
+                                            if type(o) ~= "string" or isSecret(o) then o = "?" end
+                                            if type(o2) == "string" and not isSecret(o2) and o2 ~= "" then o = o .. " " .. o2 end
+                                            who = n .. " (pet of " .. o .. ") is"
+                                        end
                                     end
                                     result[#result + 1] = {
                                         key = "buff:" .. (UnitGUID(unit) or unit) .. ":" .. g.id,
