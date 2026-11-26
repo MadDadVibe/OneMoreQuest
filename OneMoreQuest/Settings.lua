@@ -151,6 +151,15 @@ local function classItems()
           set = function(v) if OMQ.OverpowerMark then OMQ.OverpowerMark.SetEnabled(v) else OMQ.db.options.overpowerMark = v and true or false end end },
     }))
     add(ruleItems("pet"))
+    add(mark({ "HUNTER", "WARLOCK" }, {
+      { type = "check", label = "Mute pet sound channel",
+          tip = "Uses the game's Sound_EnablePetSounds CVar while your pet is out. It can mute more than footsteps and may affect other pets too. Off by default; your previous sound setting is restored when switched off, when your pet leaves or on logout.",
+        get = function() return OMQ.db.options.petSteps == true end,
+        set = function(v)
+          OMQ.db.options.petSteps = v and true or false
+          if OMQ.PetSteps then OMQ.PetSteps.SetEnabled(v) end
+        end },
+    }))
     add(ruleItems("ammo"))
     add(mark({ "HUNTER" }, {
         { type = "check", label = "Buy ammo (hunters)", get = qolGet("ammo"), set = qolSet("ammo"),
@@ -537,6 +546,20 @@ local function allSections()
               tip = "Soft sounds of the game when something changes: a new alert card or popup, quest tracker progress, a stamp, a milestone or a won bet, and when a bet or vote starts. They follow your effects volume.",
               get = function() return OMQ.db.options.sound == true end,
               set = function(v) OMQ.db.options.sound = v and true or false end },
+            { type = "check", label = "Red tint on out-of-range spells",
+              tip = "Turns spell icons on Blizzard's action bars red when the action range check says the target is out of reach, including a hunter shot's minimum range.",
+              get = function() return OMQ.db.options.rangeButtons ~= false end,
+              set = function(v)
+                  OMQ.db.options.rangeButtons = v and true or false
+                  if OMQ.Range then OMQ.Range.SetButtonsEnabled(v) end
+              end },
+            { type = "check", label = "Distance to target",
+              tip = "Shows an approximate distance band and a red-to-green-to-amber range bar based on the longest-range spell on your bars. Hunter minimum range is included. Drag it while move mode is on.",
+              get = function() return OMQ.db.options.rangeDisplay ~= false end,
+              set = function(v)
+                  OMQ.db.options.rangeDisplay = v and true or false
+                  if OMQ.Range then OMQ.Range.SetDisplayEnabled(v) end
+              end },
             -- decision 655
             { type = "check", label = "Spell preview tab on the spellbook",
               tip = "A tab on the right edge of the spellbook (P) folds out which spells and ranks your class trainer teaches at every coming level and what they cost. Hover a spell for its tooltip. It stays closed until you click the tab.",
@@ -555,6 +578,8 @@ local function allSections()
             { type = "button", label = "Reset all positions", done = "Positions reset",
               click = function()
                   OMQ:RunCommand("arrow", "reset"); OMQ:RunCommand("bar", "reset"); OMQ:RunCommand("alerts", "position"); OMQ:RunCommand("chat", "position"); OMQ:RunCommand("qtrack", "position")
+                  OMQ.db.options.rangePos = nil
+                  if OMQ.Range then OMQ.Range.Refresh() end
               end },
         } },
     }

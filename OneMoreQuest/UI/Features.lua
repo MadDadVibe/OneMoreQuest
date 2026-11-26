@@ -42,6 +42,7 @@ FE.SECTIONS = {
     { "Finding your way", {
         "Arrow to the nearest dad from the icon bar, when you fell behind",
         "Arrows to class and profession trainers, vendors, repair, flight masters, mailboxes, inns, banks, auction houses, map pins, the meeting point and your corpse",
+        "Approximate distance to your target with a red-to-green-to-amber range bar; hunter minimum range included, out-of-range spells red on the action bars",
         "Places the dads visit are learned and shared, also in the new Forever zones",
         "Ore veins and herbs light up when you come near them, for miners and herbalists: a glow, sparkles or a beam of light",
     } },
