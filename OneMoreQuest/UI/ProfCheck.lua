@@ -211,10 +211,22 @@ PC.TOTAL = 0                      -- the column "1-300"
 -- the list of one cell (col = bracket, PC.TOTAL = everything): { key, title, items = { { itemID, n, plan, vendor } } }
 -- The cell is counted alone: a route of only its steps. Amounts are rounded up; plan = the price per piece the check
 -- used (nil: no price); vendor = the cheapest price is a vendor's (bought there, not at the auction house).
-function PC.ShoppingList(route, col)
+-- skill (decision 720): the rest of the route from that skill to 300 instead of a cell; a step the skill is inside of
+-- counts only with its share left
+function PC.ShoppingList(route, col, skill)
     local steps = {}
     for _, st in ipairs(route.steps) do
-        if col == PC.TOTAL or bracketOf(st[1]) == col then steps[#steps + 1] = st end
+        if skill then
+            if st[2] > skill then
+                if st[1] < skill and st[2] > st[1] then
+                    local part = {}
+                    for k, v in pairs(st) do part[k] = v end
+                    part[1], part[4] = skill, (st[4] or 0) * (st[2] - skill) / (st[2] - st[1])
+                    st = part
+                end
+                steps[#steps + 1] = st
+            end
+        elseif col == PC.TOTAL or bracketOf(st[1]) == col then steps[#steps + 1] = st end
     end
     local res = PC.Compute({ id = route.id, name = route.name, steps = steps }, { safe = true })
     local sum = {}
@@ -238,6 +250,9 @@ function PC.ShoppingList(route, col)
         if va ~= vc then return va > vc end
         return a.itemID < c.itemID
     end)
+    if skill then
+        return { key = "prof:" .. route.id .. ":rest", title = PC.ProfName(route) .. string.format(" %d-300", skill), source = "prof", items = items }
+    end
     local br = PC.BRACKETS[col]
     local range = br and string.format("%d-%d", br[1], br[2]) or string.format("%d-%d", PC.BRACKETS[1][1], PC.BRACKETS[#PC.BRACKETS][2])
     return { key = "prof:" .. route.id .. ":" .. col, title = PC.ProfName(route) .. " " .. range, source = "prof", items = items }

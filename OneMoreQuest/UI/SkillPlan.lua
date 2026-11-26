@@ -172,9 +172,10 @@ function SP.NextMajor(skill, max)
 end
 
 -- the shopping list of the cheapest plan for n points (n = "major": to the next major step)
+-- n = 300 (decision 720): to 300, past the rank cap (the ranks are learned at the trainer on the way, their fees not counted)
 function SP.ShoppingList(route, skill, max, n)
-    local target = n == "major" and SP.NextMajor(skill, max) or math.min(300, skill + n)
-    local plan = SP.Plan(route.id, skill, target, max)
+    local target = n == "major" and SP.NextMajor(skill, max) or (n == 300 and 300) or math.min(300, skill + n)
+    local plan = SP.Plan(route.id, skill, target, n ~= 300 and max or nil)
     local mats = SP.Materials(plan)
     local items = {}
     for item, cnt in pairs(mats) do

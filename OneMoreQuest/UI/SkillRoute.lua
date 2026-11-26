@@ -21,7 +21,8 @@ SR.TAB_LEVEL = 30                -- frame levels above the window, so its border
 SR.GAP = 70                      -- the panel: right of the profession tabs on the window's right edge (fix 565)
 SR.ROW_H, SR.SUB_H, SR.HEAD_H = 16, 14, 20
 SR.NOTE_TIME = 4
-SR.CHEAP_N = { 5, 10, 20, "major" }   -- decision 592
+SR.CHEAP_N = { 5, 10, 20, "major", 300 }   -- decision 592; 300 = to 300 (decision 720)
+SR.BUY_W = { 26, 30, 30, 44, 44 }         -- button widths, all five in one row (decision 720)
 SR.DISENCHANT = 13262          -- the Disenchant spell: its name in the client's language for the enchanting step 2-20
 SR.LEARN = { T = "trainer", V = "vendor recipe", Q = "special trainer (quest)" }
 
@@ -755,19 +756,20 @@ local function build(pf)
     panel.modes.route = small("Route", 56, 8, function() SR.SetMode("route") end)
     panel.modes.cheap = small("Cheapest", 70, 66, function() SR.SetMode("cheap") end)
     panel.buy = {}
+    local x = 140
     for i, n in ipairs(SR.CHEAP_N) do
-        local b = small(n == "major" and "to 150" or ("+" .. n), n == "major" and 52 or 36, 146 + (i - 1) * 38, function() SR.MakeCheapList(n) end)
+        local label = n == "major" and "to 150" or (n == 300 and "to 300") or ("+" .. n)
+        local b = small(label, SR.BUY_W[i] or 36, x, function() SR.MakeCheapList(n) end)
+        x = x + (SR.BUY_W[i] or 36) + 2
         b.n = n
-        b:SetScript("OnEnter", function(self)
-            if not GameTooltip then return end
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:AddLine("Shopping list: cheapest " .. (self.n == "major" and ("skill-ups to " .. (self.to or "")) or (self.n .. " skill-ups")))
-            GameTooltip:AddLine("Materials of the cheapest plan with a buffer from the skill-up chances, enough in about 9 of 10 cases, so one trip to the auction house is enough.", 1, 1, 1, true)
-            GameTooltip:Show()
-        end)
+        b:SetScript("OnEnter", function(self) SR.BuyTooltip(self, false) end)
         b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
         panel.buy[i] = b
     end
+    -- decision 720: in the route view, the list for the rest of the route to 300
+    panel.rest = small("to 300", 46, 140, function() SR.MakeRestList() end)
+    panel.rest:SetScript("OnEnter", function(self) SR.BuyTooltip(self, true) end)
+    panel.rest:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     scroll:SetPoint("TOPLEFT", 4, -52)
     scroll:SetPoint("BOTTOMRIGHT", -26, 34)
     content = CreateFrame("Frame", nil, scroll)
@@ -798,6 +800,7 @@ function SR.PaintModes(cheap)
     panel.modes.route:SetEnabled(cheap and true or false)
     panel.modes.cheap:SetEnabled(not cheap)
     local to = OMQ.SkillPlan and OMQ.SkillPlan.NextMajor(current.skill or 0, current.max)
+    if panel.rest then if cheap then panel.rest:Hide() else panel.rest:Show() end end
     for _, b in ipairs(panel.buy) do
         if cheap then b:Show() else b:Hide() end
         if b.n == "major" and to then b.to = to; b:SetText("to " .. to) end
@@ -845,6 +848,58 @@ function SR.CheapFooter(plan)
     if plan.missing > 0 then t[#t + 1] = plan.missing .. " recipes without a price left out." end
     t[#t + 1] = "Cost: materials + trainer fees - vendor or disenchant return. Click the gold step to craft it."
     return table.concat(t, " ")
+end
+-- decision 720: what a list costs (pieces times the price the list was made with)
+function SR.ListCost(list)
+    local sum, unpriced = 0, 0
+    for _, it in ipairs(list and list.items or {}) do
+        if it.plan then sum = sum + it.plan * it.n else unpriced = unpriced + 1 end
+    end
+    return sum, unpriced
+end
+function SR.RestList()
+    local route, PC = current.route, OMQ.ProfCheck
+    if not (route and PC) then return nil end
+    return PC.ShoppingList(route, nil, current.skill or 0)
+end
+function SR.MakeRestList()
+    local list, S = SR.RestList(), OMQ.Shopping
+    if not (list and S) then return nil end
+    local l = S.Add(list)
+    SR.Note("Shopping list created: " .. l.title)
+    return l
+end
+-- the tooltip of a list button, with what the list would cost (decision 720)
+function SR.BuyTooltip(b, rest)
+    if not GameTooltip then return nil end
+    local list
+    local ok = pcall(function()
+        if rest then list = SR.RestList()
+        elseif current.route and OMQ.SkillPlan then
+            list = OMQ.SkillPlan.ShoppingList(current.route, current.skill or 0, current.max, b.n)
+        end
+    end)
+    GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+    local head
+    if rest then head = "Shopping list: the route from " .. (current.skill or 0) .. " to 300"
+    elseif b.n == "major" then head = "Shopping list: cheapest skill-ups to " .. (b.to or "")
+    elseif b.n == 300 then head = "Shopping list: cheapest skill-ups to 300"
+    else head = "Shopping list: cheapest " .. b.n .. " skill-ups" end
+    GameTooltip:AddLine(head)
+    GameTooltip:AddLine("Materials with a buffer from the skill-up chances, enough in about 9 of 10 cases, so one trip to the auction house is enough.", 1, 1, 1, true)
+    if (rest or b.n == 300) and current.max and current.max < 300 then
+        GameTooltip:AddLine("Learn the next ranks at the trainer on the way (not in the list).", 1, 1, 1, true)
+    end
+    local cost
+    if ok and list then
+        local sum, unpriced = SR.ListCost(list)
+        cost = sum
+        local t = "About " .. OMQ.ProfCheck.Money(sum)
+        if unpriced > 0 then t = t .. string.format(" (+%d without a price)", unpriced) end
+        GameTooltip:AddLine(t, 0.95, 0.82, 0.48)
+    end
+    GameTooltip:Show()
+    return head, cost
 end
 function SR.MakeCheapList(n)
     local route, S = current.route, OMQ.Shopping
