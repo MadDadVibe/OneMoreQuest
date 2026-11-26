@@ -205,3 +205,23 @@ S[8422] = { 8420, "Hot and Itchy", "Impsy", "Impsy", 1448, 41.4, 45.0, "npc" }  
 S[8425] = { 8423, "Warrior Kinship", "Fallen Hero of the Horde", "Gefallener Held der Horde", 1435, 34.3, 66.1, "npc" }  -- warrior
 S[9053] = { 9052, "Bloodpetal Poison", "Torwa Pathfinder", "Torwa Pathfinder", 1449, 71.6, 76.0, "npc" }      -- druid
 
+
+-- Blackrock Depths (decision 714): quest starts after Factoruide (5fee9bc) and Wowhead Forever, 2026-11-26. Hint quests
+-- (breadcrumbs) are no chain start; quests that start inside the dungeon have no stop; Franclorn only shows to ghosts.
+local FRANCLORN = { 3801, "Dark Iron Legacy", "Franclorn Forgewright", "Franclorn Forgewright", 1428, 29.0, 28.9, "npc" }
+S[3801] = FRANCLORN
+S[3802] = FRANCLORN
+S[4024] = { 4023, "A Taste of Flame", "Cyrus Therepentous", "Cyrus Therepentous", 1428, 95.1, 31.6, "npc" }
+S[4126] = { 4126, "Hurley Blackbreath", "Ragnar Thunderbrew", "Ragnar Donnerbräu", 1426, 46.8, 52.5, "npc" }
+S[4132] = { 4081, "KILL ON SIGHT: Dark Iron Dwarves", "WANTED", nil, 1418, 3.7, 47.4, "object" }
+S[4134] = { 4134, "Lost Thunderbrew Recipe", "Shadowmage Vivian Lagrave", "Schattenmagierin Vivian Lagrave", 1418, 2.9, 47.8, "npc" }
+S[4136] = { 4136, "Ribbly Screwspigot", "Yuka Screwspigot", "Yuka Screwspigot", 1428, 66.1, 21.9, "npc" }
+S[4083] = { 4083, "The Spectral Chalice", "Spectral Chalice", "Spektraler Kelch", 0, 0.0, 0.0, "inside" }
+S[4201] = { 4201, "The Love Potion", "Mistress Nagmara", "Herrin Nagmara", 0, 0.0, 0.0, "inside" }
+S[4282] = { 4282, "A Shred of Hope", "Marshal Windsor", "Marshal Windsor", 0, 0.0, 0.0, "inside" }
+S[4295] = { 4295, "Rocknot's Ale", "Private Rocknot", "Gefreiter Rocknot", 0, 0.0, 0.0, "inside" }
+S[4322] = { 4322, "Jail Break!", "Marshal Windsor", "Marshal Windsor", 0, 0.0, 0.0, "inside" }
+S[7604] = { 7604, "A Binding Contract", "Thorium Brotherhood Contract", nil, 0, 0.0, 0.0, "item" }
+S[7848] = { 7848, "Attunement to the Core", "Lothos Riftwaker", "Lothos Riftwaker", 1428, 26.6, 24.6, "npc" }
+S[9015] = { 9015, "The Challenge", "Falrin Treeshaper", "Falrin Treeshaper", 0, 0.0, 0.0, "item" }
+S[97197] = { 97197, "Fragment of the Firelands", "Alaana Stormwalker", nil, 1412, 33.4, 22.6, "npc" }

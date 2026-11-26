@@ -338,6 +338,7 @@ function UI:RenderDungeon(view)
     end
     if #(info.inside or {}) > 0 then lines[#lines + 1] = "Starts inside the dungeon: " .. names(info.inside) end
     if #(info.item or {}) > 0 then lines[#lines + 1] = "Starts from an item: " .. names(info.item) end
+    if #(info.later or {}) > 0 then lines[#lines + 1] = "After your first visit inside: " .. names(info.later) end
     if #(info.unknown or {}) > 0 then lines[#lines + 1] = "No known way yet: " .. names(info.unknown) end
     if #(info.skipped or {}) > 0 then lines[#lines + 1] = "Skipped: " .. names(info.skipped) end
     if (info.inLog or 0) > 0 or (info.done or 0) > 0 then

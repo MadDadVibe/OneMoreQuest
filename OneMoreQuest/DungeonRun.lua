@@ -86,7 +86,31 @@ D.OBJ_FIX = {
     [5781] = { {1423,28.4,86.5,3}, {1423,23.9,74.2,1} },  -- Of Forgotten Memories
     [6804] = { {1423,44.3,40.3,1}, {1423,62.6,27.3,1} },  -- Poisoned Water
     [7640] = { {1423,10.4,20.7,21}, {1423,13.9,21.8,8}, {1423,13.8,24.8,4}, {1423,10.7,16.7,2} },  -- Exorcising Terrordale
+    [4023] = { {1428,94.4,31.8,1} },  -- A Taste of Flame: the molt of the Frenzied Black Drake next to Cyrus (714)
 }
+
+-- Blackrock Depths (decision 714, Factoruide + Wowhead Forever 2026-11-26)
+-- pre-quests that only send you to the quest giver (breadcrumbs): the quest can be taken without them
+D.HINT_PRE = { [4134] = 4133, [4126] = 4128, [4136] = 4324 }
+-- the data says "objectives in a dungeon", but they are outside (Grark Lorkrub in the Burning Steppes; Thrall and
+-- Magni take the news from inside)
+D.OUTSIDE = { [4121] = true, [4122] = true, [4001] = true, [4002] = true, [4361] = true }
+-- of the "one of them" pre-quests this one first: A Taste of Flame via the drake, not the ten quests of Kalaran
+D.PREFER = { [4024] = 4023 }
+-- dungeon quests that come only after a first visit: the quest that starts inside the dungeon (Gor'shak, Kharan)
+D.FIRST_VISIT = { [4003] = 3982, [4362] = 4342 }
+-- a short hint on the run's card for a stop
+D.HINT = {
+    [3801] = "Franclorn is only visible as a ghost (die in Blackrock Mountain)",
+    [3802] = "Franclorn is only visible as a ghost (die in Blackrock Mountain)",
+    [4023] = "kill the Frenzied Black Drake (elite) next to Cyrus for the molt",
+}
+function D.Hint(qid, kind)
+    local h = D.HINT[qid]
+    if not h then return nil end
+    if qid == 4023 and kind ~= "o" then return nil end
+    return h
+end
 
 -- may I take this quest some day? faction, race, class, no excluding quest done (not the level, D2)
 function D.ForMe(id, who, log)
@@ -180,6 +204,7 @@ function D.HavePart(st) return D.Have(st.part, st.partName) end
 local resolve
 local function needsOf(ctx, d, visiting, depth, id)
     local needs = {}
+    if D.HINT_PRE[id] then return needs end                  -- only a breadcrumb before it (714)
     local c = chainOf(id)
     if not d[10] and not d[11] and c and c.prev then       -- the data knows no pre-quest, the chain list does (478)
         d = { [10] = c.prev }
@@ -192,6 +217,12 @@ local function needsOf(ctx, d, visiting, depth, id)
     end
     if d[11] and #d[11] > 0 then                             -- one of them
         local ok = false
+        local pref = D.PREFER[id]
+        if pref and contains(d[11], pref) then               -- this one first (714)
+            local l = { pref }
+            for _, p in ipairs(d[11]) do if p ~= pref then l[#l + 1] = p end end
+            d = { [11] = l }
+        end
         for _, p in ipairs(d[11]) do if ever(p) then ok = true; break end end
         if not ok then
             for _, p in ipairs(d[11]) do if ctx.log[p] and resolve(ctx, p, "turnin", visiting, depth + 1) then ok = true; needs[#needs + 1] = p; break end end
@@ -272,7 +303,7 @@ function resolve(ctx, id, goal, visiting, depth)
     if not D.ForMe(id, ctx.who, ctx.log) then return false end
     local inLog = ctx.log[id] and true or false
     if not inLog and (has(d[13], 4) or not d[7]) then return false end    -- from an item or no known giver
-    if goal == "turnin" and has(d[13], 8) and not NQ().IsComplete(id) then return false end   -- objectives in a dungeon
+    if goal == "turnin" and has(d[13], 8) and not D.OUTSIDE[id] and not NQ().IsComplete(id) then return false end   -- objectives in a dungeon
     visiting[id] = true
     local needs = {}
     if not inLog then
@@ -284,7 +315,7 @@ function resolve(ctx, id, goal, visiting, depth)
     local from = ctx.pos
     if not inLog then e.pick = bestPlace(d[7], from); from = e.pick or from end
     if goal == "turnin" then
-        local objs = d[9] or D.OBJ_FIX[id]
+        local objs = D.OBJ_FIX[id] or d[9]
         if not NQ().IsComplete(id) and objs then e.obj = objPlace(objs, from); from = e.obj or from end
         -- objectives that lie apart (663): one stop per open objective; not for the quests with own rules here
         if not NQ().IsComplete(id) and d[9] and not (D.OBJ_FIX[id] or D.TIMED[id] or D.WAIT[id]) then
@@ -364,12 +395,14 @@ function D.Build(key, pos, log, who, skip)
     skip = skip or {}
     local faction = (who.fac == "A" and "Alliance") or (who.fac == "H" and "Horde") or nil
     local ctx = { pos = pos, log = log or {}, who = who, quests = {}, order = {}, stops = {} }
-    local info = { inside = {}, item = {}, unknown = {}, notForMe = {}, done = 0, inLog = 0, skipped = {} }
+    local info = { inside = {}, item = {}, unknown = {}, notForMe = {}, done = 0, inLog = 0, skipped = {}, later = {} }
     local dqs = {}
     for _, q in ipairs(OMQ:DungeonQuests(dg, faction)) do
         if doneAny(q) then info.done = info.done + 1
         elseif inLogAny(ctx.log, q) then info.inLog = info.inLog + 1
         elseif skip[q.id] then info.skipped[#info.skipped + 1] = q.id
+        elseif D.FIRST_VISIT[q.id] and not ever(D.FIRST_VISIT[q.id]) and not ctx.log[D.FIRST_VISIT[q.id]] then
+            info.later[#info.later + 1] = q.id                -- only after a first visit inside (714)
         else
             local d = data(q.id)
             local before = #ctx.order

@@ -1488,7 +1488,7 @@ function R:Target()
     local s = run.stops[1]
     if not s then return nil end
     local pos = NQ().MyPos()
-    if s.kind == "w" then return R.FollowTarget(s, pos) end
+    if s.kind == "w" then return R.WithHint(R.FollowTarget(s, pos), s) end
     local view = { qid = s.qid, kind = s.kind, place = s.place, title = R.Title(s.qid) }
     -- a turn-in while objectives of the quest are still open (the data knows no place for them, like items from
     -- plants without known spots, fix 619): the objectives first, at the game's own map point when it has one
@@ -1536,6 +1536,13 @@ function R:Target()
     if view.open and OMQ.AreaRun and OMQ.AreaRun.IsBuy(s.qid) then          -- bought or crafted items (622)
         view.buy, view.what = true, "buy or craft: " .. (R.OpenObjective(s.qid) or "the items")
     end
+    return R.WithHint(view, s)
+end
+
+-- a short hint of the Dungeon Run for a stop that needs to know more (decision 714), e.g. a ghost quest giver
+function R.WithHint(view, s)
+    local h = OMQ.DungeonRun and OMQ.DungeonRun.Hint and OMQ.DungeonRun.Hint(s.qid, s.kind)
+    if h and view then view.what, view.hint = (view.what or "") .. " - " .. h, h end
     return view
 end
 
@@ -1629,6 +1636,8 @@ function R:List()
                 seen[s.qid] = true
                 local what = WHAT[s.kind] or "objectives"
                 if s.kind == "p" then what = R.Hunt(s.qid) or what end        -- named mob drop (508)
+                local h = OMQ.DungeonRun and OMQ.DungeonRun.Hint and OMQ.DungeonRun.Hint(s.qid, s.kind)
+                if h then what = what .. " - " .. h end                          -- decision 714
                 out[#out + 1] = { qid = s.qid, title = R.Title(s.qid), what = what, kind = s.kind,
                                   dungeonQuest = q.goal == "pick", current = #out == 0 }
             end
