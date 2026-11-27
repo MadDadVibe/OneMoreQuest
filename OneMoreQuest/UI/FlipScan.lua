@@ -118,6 +118,15 @@ local function reqLevelOf(id)
     local ok, _, _, _, _, lvl = pcall(f, id)
     if ok and type(lvl) == "number" and not isSecret(lvl) then return lvl end
 end
+-- fix 744 (MadDadVibe): never buy a flip for more than twice its vendor price
+F.VENDOR_FACTOR = 2
+local function vendorOf(id)
+    local f = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+    if not f then return nil end
+    local ok, _, _, _, _, _, _, _, _, _, _, v = pcall(f, id)
+    if ok and type(v) == "number" and not isSecret(v) and v > 0 then return v end
+end
+F.VendorOf = vendorOf
 local function classOf(id)
     local f = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
     if not f then return nil end
@@ -191,6 +200,8 @@ function F.Consider(e)
     e.name = name
     e.level = reqLevelOf(e.id)
     if (e.price or 0) > F.MaxBuy(e.level) then e.match = false; return false end   -- fix 733
+    e.vendor = vendorOf(e.id)
+    if e.vendor and F.VENDOR_FACTOR and (e.price or 0) > e.vendor * F.VENDOR_FACTOR then e.match = false; return false end   -- fix 744
     e.suffix = F.SuffixOf(name)
     local c, sc = classOf(e.id)
     if m.only and not (c == m.only.c and sc == m.only.s) then e.match = false; return false end   -- decision 731
@@ -224,7 +235,7 @@ function F.ReadOffers(key)
 end
 
 -- the verdict of an item's offers: nil, or { kind = "gap" | "few", n, sell, maxBuy, buy = offers to buy, cost, profit }
-function F.Judge(offers, method, level)
+function F.Judge(offers, method, level, vendor)
     local m = F.METHODS[method or "flip"] or F.METHODS.flip
     local n = #offers
     if n == 0 then return nil end
@@ -240,6 +251,7 @@ function F.Judge(offers, method, level)
         return nil
     end
     maxBuy = math.min(maxBuy, F.MaxBuy(level))            -- fix 724, 733: 1.50 gold from level 40
+    if vendor and F.VENDOR_FACTOR then maxBuy = math.min(maxBuy, vendor * F.VENDOR_FACTOR) end   -- fix 744
     local buy, cost, profit = {}, 0, 0
     for _, o in ipairs(offers) do
         if not o.mine and o.qty == 1 and o.unit <= maxBuy then
@@ -269,7 +281,8 @@ function F.Take(e, offers, check)
     end
     r.name, r.icon = e.name or r.name, e.icon or r.icon
     r.level = e.level or r.level or reqLevelOf(e.id)
-    local j = F.Judge(offers, F.method, r.level)
+    r.vendor = e.vendor or r.vendor or vendorOf(e.id)
+    local j = F.Judge(offers, F.method, r.level, r.vendor)
     r.offers, r.fresh, r.hold = nil, nil, nil
     if not j then
         r.kind = nil
