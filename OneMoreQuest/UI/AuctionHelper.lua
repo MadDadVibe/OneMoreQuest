@@ -14,7 +14,7 @@
 -- Price: the current lowest price, not undercut. No price on the auction house: stays in the bag.
 -- Worth it: price x quantity - 5% cut is at least 5% above the vendor price. The deposit does not count:
 -- it comes back when the item sells (decision 273).
--- Always 24 hours; commodities with everything I carry of them, gear one by one.
+-- Always 8 hours (duration index 2); commodities with everything I carry of them, gear one by one.
 -- Consumables of my buy list (decision 274) never go to the fast list. The select list offers them as
 -- "sell all" and, when I carry more than the fill-up target, also "keep <target>" (sells the rest).
 -- Trade goods that are not worth it (a price, but under +5%) are remembered for 3 days; "sell grey
@@ -28,7 +28,7 @@ OMQ = _G.OneMoreQuest
 local AH = {}
 OMQ.AuctionHelper = AH
 
-AH.CUT, AH.MARGIN, AH.DURATION = 0.05, 1.05, 2          -- duration index 2 = 24 hours
+AH.CUT, AH.MARGIN, AH.DURATION = 0.05, 1.05, 2          -- duration index 2 = 8 hours on Forever (1 = 2 h, 3 = 24 h; MadDadVibe 2026-11-27)
 AH.MARGIN_HIGH = 1.30      -- green items and trade goods: at least 30% over the vendor price (decision 431)
 AH.MIN_GAIN = 300          -- and at least 3 silver more than the vendor pays for what is posted (decision 445)
 -- the worth rule of one item: +30% for green items of any kind and for trade goods of any quality, else +5%
@@ -267,6 +267,7 @@ function AH.Evaluate()
             local floor = OMQ.Flip and OMQ.Flip.Floor(e.itemID)
             e.flipFloor = nil
             if floor and e.price < floor then e.price, e.flipFloor = floor, true end
+            e.flipWait = e.flip and OMQ.Flip.Waits and OMQ.Flip.Waits(e.itemID, e.price) or nil   -- decision 728
             local gross = e.commodity and e.price * e.qty or e.price
             local net = gross * (1 - AH.CUT)                      -- no deposit: it comes back with the sale (decision 273)
             local vend = (e.vendor or 0) * e.qty
@@ -278,7 +279,8 @@ function AH.Evaluate()
             local worth = net >= vend * margin and net > vend and net - vend >= AH.MIN_GAIN
             e.lowGain = net >= vend * margin and net - vend < AH.MIN_GAIN or nil
             if not e.keep then db().worth[e.itemID] = worth end   -- kept until the next scan (decision 292)
-            if worth then
+            if e.flipWait then e.state = "flipwait"           -- came back: waits for +20 % on its price (decision 728)
+            elseif worth then
                 e.state = "ok"
                 if not e.keep then db().low[e.itemID] = nil; db().lowDay[e.itemID] = nil end
             else
@@ -858,6 +860,7 @@ end
 AH._PostCheck = postCheck
 local function startPosting(e)
     e.posted = true
+    if e.flip and OMQ.Flip and OMQ.Flip.Posted then OMQ.Flip.Posted(e.itemID) end   -- decision 728
     counted(e)
     posting = { entry = e, key = e.key, itemID = e.itemID, before = itemCount(e.itemID), at = now() }
     if C_Timer and C_Timer.After then
@@ -1099,7 +1102,7 @@ local function build()
     post:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     fastUI.post = post
     fastUI.hint = fs(fastUI, "GameFontDisableSmall"); fastUI.hint:SetPoint("TOPLEFT", 16, -158); fastUI.hint:SetWidth(348)
-    fastUI.hint:SetText("Left click: post (24 hours, current price) - right click: skip")
+    fastUI.hint:SetText("Left click: post (8 hours, current price) - right click: skip")
     fastUI.total = fs(fastUI, "GameFontHighlightSmall", 0.79, 0.8, 0.84); fastUI.total:SetWidth(348)
     fastUI.done = fs(fastUI, "GameFontNormalLarge", 0.95, 0.82, 0.48); fastUI.done:SetPoint("TOPLEFT", 16, -8); fastUI.done:SetWidth(348)
 
@@ -1151,7 +1154,7 @@ local function outText(L)
     for i = 1, math.min(3, #L.out) do
         local e = L.out[i]
         local low = e.lowGain and "under 3s more" or string.format("under +%d%%", math.floor(((e.margin or AH.MARGIN) - 1) * 100 + 0.5))
-        local why = ({ low = low, noprice = "no price yet", upgrade = "upgrade for you", disenchant = "worth more disenchanted", needed = "a dad needs it" })[e.state] or e.state
+        local why = ({ low = low, noprice = "no price yet", upgrade = "upgrade for you", disenchant = "worth more disenchanted", needed = "a dad needs it", flipwait = "flip waits for +20%" })[e.state] or e.state
         names[#names + 1] = e.name .. " (" .. why .. ")"
     end
     local more = #L.out > 3 and (" and " .. (#L.out - 3) .. " more") or ""
@@ -1286,7 +1289,7 @@ function AH.Refresh()
         else
             local text
             if L.pending > 0 then text = string.format("Checking prices... %d of %d", L.count - L.pending, L.count)
-            elseif (f.posted or 0) > 0 then text = "All posted!|n|cffe5e3dc" .. f.posted .. " auctions for 24 hours.|r"
+            elseif (f.posted or 0) > 0 then text = "All posted!|n|cffe5e3dc" .. f.posted .. " auctions for 8 hours.|r"
             else text = "Nothing to post today|n|cffc9ccd5Nothing in your bags brings enough more here than at the vendor.|r" end
             local skipped = 0
             for _, e in ipairs(L.select) do if e.skipped then skipped = skipped + 1 end end
@@ -1386,9 +1389,11 @@ function AH.MigrateUnsold()
         if n >= AH.UNSOLD_LIMIT and not d.skip[id] then d.skip[id] = "unsold" end
     end
 end
-function AH.Result(itemID, sold)
+function AH.Result(itemID, sold, got, name)
     if not itemID then return end
     local d = db()
+    -- a flip (decision 728): counted in its history; one that came back fewer than 5 times is posted again
+    if OMQ.Flip and OMQ.Flip.Result and OMQ.Flip.Result(itemID, sold, got, name) then return end
     if sold then d.fails[itemID] = nil; return end
     d.fails[itemID] = (d.fails[itemID] or 0) + 1
     if d.fails[itemID] >= AH.UNSOLD_LIMIT and not d.skip[itemID] then d.skip[itemID] = "unsold" end
@@ -1411,7 +1416,7 @@ function AH.ScanMail()
                     d.mails[key] = t
                     local id = d.names[name]
                     if not id and not sold and GetInboxItem then id = select(2, GetInboxItem(i, 1)) end
-                    if type(id) == "number" then AH.Result(id, sold) end
+                    if type(id) == "number" then AH.Result(id, sold, (type(money_) == "number" and not isSecret(money_)) and money_ or 0, name) end
                     -- what the helper's auctions brought in, per character (decision 262)
                     if sold and id and type(money_) == "number" and not isSecret(money_) and money_ > 0 then
                         local e = AH.Earned()

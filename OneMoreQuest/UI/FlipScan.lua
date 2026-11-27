@@ -590,7 +590,9 @@ function F.OnDone(r, ok)
         F.bought.n = F.bought.n + 1
         F.bought.spent = F.bought.spent + (r.paid or 0)
         F.bought.worth = F.bought.worth + (r.sell and math.floor(r.sell * (1 - F.CUT)) or 0)
+        F.lastName = r.name
         F.Remember(r.itemID, r.paid, r.sell, F.LinkSuffix(r.paidLink))
+        F.lastName = nil
         if not (r.offers and #r.offers > 0) then r.bought = true end
     else
         r.fresh, r.hold = nil, nil
@@ -609,7 +611,115 @@ function F.Remember(id, paid, sell, sfx)
         x.sfx[sfx] = math.max(x.sfx[sfx] or 0, paid or 0)
     end
     o[id] = x
+    F.Note(id, "b", paid, F.lastName)
 end
+
+----------------------------------------------------------------------
+-- decision 728 (MadDadVibe): the flip history (/omq flip) and the resale rules
+-- Per item: bought, sold, came back unsold, vendored, spent and got (OMQDB.flip.items, kept for good); the totals
+-- are their sums. A flip is posted up to REPOSTS times; one that came back unsold that often goes to the vendor
+-- (no protection any more, the helper's "unsold" rule takes it). One that came back is posted again only while
+-- that brings at least REPOST_GAIN over what it cost, after the cut - else it waits in the bags.
+----------------------------------------------------------------------
+F.REPOSTS = 5
+F.REPOST_GAIN = 1.2
+local function items()
+    local d = db()
+    d.items = d.items or {}
+    return d.items
+end
+-- one event of an item: "b" bought (c = paid), "s" sold (c = the money of the mail), "u" unsold, "v" vendored (c = price)
+function F.Note(id, kind, c, name)
+    if type(id) ~= "number" then return end
+    local it = items()[id] or { b = 0, s = 0, u = 0, v = 0, spent = 0, got = 0, cost = 0 }
+    items()[id] = it
+    if type(name) == "string" and not isSecret(name) then it.name = name end
+    c = tonumber(c) or 0
+    if kind == "b" then it.b, it.spent = it.b + 1, it.spent + c
+    elseif kind == "s" then it.s, it.got = it.s + 1, it.got + c
+    elseif kind == "u" then it.u = it.u + 1
+    elseif kind == "v" then it.v, it.got = it.v + 1, it.got + c end
+    it.t = stamp()
+end
+-- the result mail of a flip auction (AH.ScanMail via AH.Result); true when the helper's own unsold rule must not count it
+function F.Result(id, sold, got, name)
+    local x = db().owned[id]
+    if not x then return false end
+    if sold then
+        local paid = F.Paid(id) or 0
+        F.Note(id, "s", got, name)
+        local it = items()[id]
+        it.cost = (it.cost or 0) + paid                    -- what the sold pieces cost
+        x.n = (x.n or 1) - 1
+        if x.n <= 0 then db().owned[id] = nil end
+        return false
+    end
+    F.Note(id, "u", 0, name)
+    x.unsold = (x.unsold or 0) + 1
+    if x.unsold >= F.REPOSTS then x.released = true; return false end   -- to the vendor now
+    return true
+end
+-- sold at the vendor (UI/Vendor.lua): a flip that came back too often, or one sold by hand there
+function F.Vendored(id, price)
+    local x = db().owned[id]
+    if not x then return end
+    local it = items()[id]
+    F.Note(id, "v", price)
+    it = items()[id]
+    it.cost = (it.cost or 0) + (F.PaidAny(id) or 0)
+    x.n = (x.n or 1) - 1
+    if x.n <= 0 then db().owned[id] = nil end
+end
+function F.Posted(id)
+    local x = db().owned[id]
+    if x then x.posts, x.t = (x.posts or 0) + 1, stamp() end
+end
+-- a flip that came back: posted again only when it brings at least REPOST_GAIN times its price after the cut
+function F.Waits(id, price)
+    local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
+    if not (x and (x.unsold or 0) >= 1 and x.paid and x.paid > 0) or type(price) ~= "number" then return false end
+    return price * (1 - F.CUT) < x.paid * F.REPOST_GAIN
+end
+function F.PaidAny(id)
+    local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
+    return x and x.paid
+end
+function F.Totals()
+    local t = { b = 0, s = 0, u = 0, v = 0, spent = 0, got = 0, cost = 0 }
+    for _, it in pairs(items()) do
+        for k in pairs(t) do t[k] = t[k] + (it[k] or 0) end
+    end
+    t.profit = t.got - t.cost                             -- what the sold and vendored pieces brought over their price
+    t.open = t.spent - t.cost                             -- still in the bags or on the auction house
+    return t
+end
+local function signed(c)
+    if c < 0 then return "-" .. money(-c) end
+    return "+" .. money(c)
+end
+function F.History()
+    local out = {}
+    local t = F.Totals()
+    out[#out + 1] = string.format("item flips: bought %d for %s, sold %d (%s), %d came back unsold, %d to the vendor",
+        t.b, money(t.spent), t.s, money(t.got), t.u, t.v)
+    out[#out + 1] = string.format("  earned with flips: %s on %s of sold pieces; still out (bags / auction house): %s",
+        signed(t.profit), money(t.cost), money(t.open))
+    local list_ = {}
+    for id, it in pairs(items()) do list_[#list_ + 1] = { id = id, it = it } end
+    table.sort(list_, function(a, b) return (a.it.t or 0) > (b.it.t or 0) end)
+    for i = 1, math.min(15, #list_) do
+        local it = list_[i].it
+        out[#out + 1] = string.format("  %s: bought %d, sold %d, unsold %d%s, %s", it.name or ("item " .. list_[i].id), it.b, it.s, it.u,
+            it.v > 0 and (", vendor " .. it.v) or "", (it.s + it.v) > 0 and signed((it.got or 0) - (it.cost or 0)) or ("spent " .. money(it.spent)))
+    end
+    if #list_ > 15 then out[#out + 1] = string.format("  ... and %d more items", #list_ - 15) end
+    if #list_ == 0 then out[#out + 1] = "  nothing bought with item flips yet" end
+    return out
+end
+OMQ:RegisterCommand("flip", function(arg)
+    for _, l in ipairs(F.History()) do OMQ:Print(l) end
+end, "item flips: what was bought, sold, came back, gold spent and earned")
+
 -- decision 726 (MadDadVibe): a flip is posted for 2 hours (short) by day, for 8 hours from 23:59 German time until
 -- 8:00 the next morning. German time = UTC+1, UTC+2 from the last Sunday of March to the last Sunday of October (1:00 UTC).
 local function lastSunday(y, m)
@@ -695,6 +805,7 @@ function F.Owns(id)
     local x = OMQDB.flip.owned[id]
     if not x then return false end
     if stamp() - (x.t or 0) > F.KEEP_DAYS * 86400 then OMQDB.flip.owned[id] = nil; return false end
+    if x.released then return false end                     -- came back unsold REPOSTS times: to the vendor (728)
     return true
 end
 -- the lowest price a bought flip is posted at: what it cost plus the house's cut

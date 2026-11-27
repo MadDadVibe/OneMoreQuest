@@ -412,6 +412,7 @@ function V.Sell(e)
     if not (e and C and C.UseContainerItem) or not V.open then return false end
     if not stillThere(e) then V.Refresh(); return false end
     C.UseContainerItem(e.bag, e.slot)
+    if OMQ.Flip and OMQ.Flip.Vendored then OMQ.Flip.Vendored(e.itemID, e.price) end   -- flip history (decision 728)
     for i, x in ipairs(list) do if x == e then table.remove(list, i); break end end
     V.Refresh()
     return true
@@ -425,6 +426,7 @@ function V.SellAll()
         if e.why ~= "back" then
             if stillThere(e) then
                 C.UseContainerItem(e.bag, e.slot)
+                if OMQ.Flip and OMQ.Flip.Vendored then OMQ.Flip.Vendored(e.itemID, e.price) end   -- decision 728
                 n, total = n + 1, total + e.price
             end
             table.remove(list, i)
