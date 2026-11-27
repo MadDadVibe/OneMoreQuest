@@ -417,6 +417,12 @@ local function nextSearch()
         send()
         return
     end
+    if run.pi < #run.parked then                           -- decision 736: my parked flips first
+        run.pi = run.pi + 1
+        run.q = { kind = "item", e = run.parked[run.pi], tries = 1 }
+        send()
+        return
+    end
     if run.qi < #run.queue then
         run.qi = run.qi + 1
         local f = run.queue[run.qi]
@@ -525,7 +531,38 @@ end
 
 local function newRun(queue)
     run = { method = F.method, state = "start", t0 = now(), queue = queue, qi = 0, items = {}, ii = 0, checks = {}, lines = 0, searched = 0,
-            waiting = 0, log = {} }
+            waiting = 0, log = {}, parked = {}, pi = 0 }
+end
+
+-- decision 736 (MadDadVibe): the flips in my bags that came back unsold and wait for their profit are searched first,
+-- with the chosen method's rule (no level range, no suffix filter): maybe buying out the competition makes them pay again
+function F.Parked()
+    local out = {}
+    local C, api = C_Container, A()
+    if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo and api) then return out end
+    local seen = {}
+    for bag = 0, (OMQ.LastBag and OMQ.LastBag()) or 4 do
+        for slot = 1, C.GetContainerNumSlots(bag) or 0 do
+            local it = C.GetContainerItemInfo(bag, slot)
+            local id = it and it.itemID
+            local x = id and not isSecret(id) and OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
+            if x and F.Owns(id) and (x.unsold or 0) >= 1 and not x.released and not it.isBound then
+                local loc = ItemLocation and ItemLocation.CreateFromBagAndSlot and ItemLocation:CreateFromBagAndSlot(bag, slot)
+                local ok, k = false, nil
+                if api.GetItemKeyFromItem then ok, k = pcall(api.GetItemKeyFromItem, loc) end
+                if not (ok and k) and api.MakeItemKey then ok, k = pcall(api.MakeItemKey, id) end
+                if ok and k and k.itemID then
+                    local ks = keyString(k)
+                    if not seen[ks] then
+                        seen[ks] = true
+                        out[#out + 1] = { ks = ks, key = k, id = id, name = it.itemName or (db().items and db().items[id] and db().items[id].name),
+                                          icon = it.iconFileID, parked = true, level = reqLevelOf(id) }
+                    end
+                end
+            end
+        end
+    end
+    return out
 end
 
 function F.Start(method)
@@ -544,9 +581,12 @@ function F.Start(method)
     for k in pairs(lines) do lines[k] = nil end
     for k in pairs(rows) do rows[k] = nil end              -- a new search: every offer is new
     newRun(queue)
+    run.parked = F.Parked()                                -- decision 736
+    for _, e in ipairs(run.parked) do e.queued = true; lines[e.ks] = e end
     F.Build()
     local m = F.METHODS[F.method]
-    status(string.format("searching the auction house for green gear of level %d-%d (%s)...", m.minLevel or F.MIN_LEVEL,
+    status(string.format("%ssearching the auction house for green gear of level %d-%d (%s)...",
+        #run.parked > 0 and string.format("%d parked flips first, then ", #run.parked) or "", m.minLevel or F.MIN_LEVEL,
         m.maxLevel or F.MAX_LEVEL, m.label))
     return true
 end
