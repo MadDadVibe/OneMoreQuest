@@ -197,7 +197,9 @@ function AH.Scan()
                         if comm then byId[it.itemID] = e end
                         -- a material a dad needs is sold like anything else (decision 301)
                         local deNotYet = deMode and DS.UpgradeNotYet and DS.UpgradeNotYet(link, equipLoc)
-                        if upgradeForMe(link, equipLoc) and not deNotYet then e.out = "upgrade"
+                        local flip = OMQ.Flip and OMQ.Flip.Owns(it.itemID)   -- a bought flip is for sale (decision 721)
+                        if flip then e.flip = true
+                        elseif upgradeForMe(link, equipLoc) and not deNotYet then e.out = "upgrade"
                         -- worth more disenchanted (decision 675): stays in the bags for the enchanter
                         elseif deMode and DS.HideFromAH(DS.Takes(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, nil, deMode)) then
                             e.out = "disenchant"
@@ -261,6 +263,10 @@ function AH.Evaluate()
         elseif not p.price then e.state = "noprice"
         else
             e.price = p.price
+            -- a bought flip is never posted under what it cost plus the cut (decision 721)
+            local floor = OMQ.Flip and OMQ.Flip.Floor(e.itemID)
+            e.flipFloor = nil
+            if floor and e.price < floor then e.price, e.flipFloor = floor, true end
             local gross = e.commodity and e.price * e.qty or e.price
             local net = gross * (1 - AH.CUT)                      -- no deposit: it comes back with the sale (decision 273)
             local vend = (e.vendor or 0) * e.qty
@@ -385,6 +391,7 @@ function AH.VendorIt(itemID)
     if AH.Material(itemID) then return false end                  -- fix 589
     if OMQ.BuyKind and OMQ.BuyKind(itemID) then return false end
     if AH.Crafted(itemID) then return false end
+    if OMQ.Flip and OMQ.Flip.Owns(itemID) then return false end    -- a bought flip (decision 721)
     if OMQ.Vendor and OMQ.Vendor.BoughtBack and OMQ.Vendor.BoughtBack(itemID) then return false end   -- fix 559
     if ah.lowDay and ah.lowDay[itemID] and ah.lowDay[itemID] == AH.Today() then return true end
     local t = ah.low and ah.low[itemID]
@@ -688,7 +695,7 @@ function AH._pump()
     -- the price scan of the whole house owns the result list (decision 341). Decision 604: nothing at all is sent
     -- while it runs - also no search asked again after a timeout, which replaced the scan's list; a search still
     -- waiting for its answer is asked again when the scan is over.
-    if (OMQ.Prices and OMQ.Prices.Busy()) or (OMQ.DEBargain and OMQ.DEBargain.Running()) then   -- also the bargain search (decision 710)
+    if (OMQ.Prices and OMQ.Prices.Busy()) or (OMQ.Flip and OMQ.Flip.Running()) then   -- also the flip search (decisions 710, 721)
         if asking then asking.resend, askedAt = true, now() end
         return
     end
@@ -1523,11 +1530,16 @@ OMQ:RegisterCommand("ah", function(arg)
         for _, l in ipairs(B.UpgReport()) do OMQ:Print(l) end
         return
     end
-    if arg == "de" or arg:match("^de ") then              -- disenchant bargains (decision 710)
-        local DB = OMQ.DEBargain
-        if arg == "de log" then for _, l in ipairs(OMQDB.deBargain and OMQDB.deBargain.log or {}) do OMQ:Print(l) end return end   -- fix 712
-        if arg == "de reset" then OMQ:Print(("disenchant bargains: %d discarded items come back"):format(DB.ResetSkip())); return end
-        DB.Open()
+    if arg == "de" or arg:match("^de ") then              -- the disenchant bargains are gone (decision 721)
+        OMQ:Print("auction helper: the disenchant bargains were replaced by item flips - /omq ah flip")
+        OMQ.Flip.Open()
+        return
+    end
+    if arg == "flip" or arg:match("^flip ") then          -- item flips (decision 721)
+        local F = OMQ.Flip
+        if arg == "flip log" then for _, l in ipairs(OMQDB.flip and OMQDB.flip.log or {}) do OMQ:Print(l) end return end
+        if arg == "flip reset" then OMQ:Print(("item flips: %d discarded items come back"):format(F.ResetSkip())); return end
+        F.Open()
         return
     end
     if arg == "food" then                                -- which buff foods still give XP (decision 475)
@@ -1537,5 +1549,5 @@ OMQ:RegisterCommand("ah", function(arg)
     end
     local n = 0
     for _ in pairs(db().skip) do n = n + 1 end
-    OMQ:Print("auction helper: " .. AH.Mode() .. " mode, " .. n .. " skipped items. " .. AH.EarnedText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. ".  /omq ah fast | select | unskip | bags | food | de")
+    OMQ:Print("auction helper: " .. AH.Mode() .. " mode, " .. n .. " skipped items. " .. AH.EarnedText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. ".  /omq ah fast | select | unskip | bags | food | flip")
 end, "auction helper: fast or select mode, forget the skipped items")

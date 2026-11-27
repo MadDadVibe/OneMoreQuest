@@ -208,6 +208,7 @@ function DS.Takes(it, extra, ctx, mode)
     extra = extra or {}
     local V, AH = OMQ.Vendor, OMQ.AuctionHelper
     if V and V.BoughtBack and V.BoughtBack(id) then return nil end
+    if OMQ.Flip and OMQ.Flip.Owns(id) then return nil end        -- a bought flip is sold again (decision 721)
     if V and V.Kept and V.Kept(id) then return nil end
     local link = extra.link or it.hyperlink
     local equipLoc = extra.equipLoc

@@ -185,6 +185,7 @@ function V.Reason(it, extra, ctx)
     local vendor = extra.vendor or 0
     if vendor <= 0 or it.hasNoValue then return nil end
     if db().keep[id] then return nil end
+    if OMQ.Flip and OMQ.Flip.Owns(id) then return nil end       -- a bought flip goes to the auction house (decision 721)
     local classID, equipLoc, link = extra.classID, extra.equipLoc, extra.link
     if classID == 12 or classID == 6 then return nil end                     -- quest items, ammo
     local AH = OMQ.AuctionHelper

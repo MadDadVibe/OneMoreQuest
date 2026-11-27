@@ -1,0 +1,832 @@
+-- One More Quest - item flips in the auction house (decision 721, replaces the disenchant bargains of decision 710)
+-- /omq ah flip opens a window next to the auction helper and looks for green weapons and armor of required level 30
+-- to 50 with one of the suffixes of the Sorcerer, Bandit, Knight, Beast, Elder, Channeler or Hierophant (English and
+-- German names, F.SUFFIXES). Every item with its suffix counts on its own. A flip: at least 6 offers and the 6th
+-- cheapest at least 1.5 times the cheapest - the cheap ones are bought and sold again at the 6th price minus 1 copper;
+-- every offer under 2/3 of that price is bought. Fewer than 6 offers: every offer under 1 gold is listed too
+-- (MadDadVibe). Only buyouts count.
+-- The search: two browse searches (weapons, armor) in the form of the game's own window with the quality filter green
+-- and the levels 30-50 (decision 604), every page, a class whose list stops at a full page per subcategory; then one
+-- search per matching item (its offers, the cheapest first). The list fills while it runs.
+-- Left click on a row buys its next cheap offer: the first click searches that item again (a purchase needs the
+-- auction of the game's latest search, decision 431) and the search holds still a few seconds, every next click buys
+-- one more. Right click: discarded until it is offered cheaper or for SKIP_TIME. "Buy next" buys from the first row.
+-- What I bought is remembered (OMQDB.flip.owned, KEEP_DAYS): never sold to the vendor, never disenchanted, posted at
+-- the auction house never under its price plus the house's cut (F.Floor). While the search runs the auction helper and
+-- the price scan send nothing.
+local ADDON, OMQ = ...
+OMQ = _G.OneMoreQuest
+
+local F = {}
+OMQ.Flip = F
+
+F.CLASSES = { 2, 4 }      -- weapons, armor
+F.MIN_LEVEL, F.MAX_LEVEL = 30, 50
+F.NTH = 6                 -- the offer the cheapest is compared with
+F.RATIO = 1.5             -- the 6th cheapest at least this much times the cheapest
+F.CHEAP = 10000           -- fewer than NTH offers: every offer under 1 gold
+F.CUT = 0.05              -- the auction house's cut of a sale
+-- the suffixes as the game names them, lower case ("Ä" stays as it is: string.lower leaves non-ASCII bytes alone)
+F.SUFFIXES = {
+    { key = "sorcerer",   "of the sorcerer",   "des zauberers" },
+    { key = "bandit",     "of the bandit",     "des banditen" },
+    { key = "knight",     "of the knight",     "des ritters" },
+    { key = "beast",      "of the beast",      "der bestie" },
+    { key = "elder",      "of the elder",      "des \195\132ltesten", "des \195\164ltesten" },
+    { key = "channeler",  "of the channeler",  "des kanalisierers" },
+    { key = "hierophant", "of the hierophant", "des hierophanten" },
+}
+F.PAGE = 500              -- a list that stops at a whole number of these lines may be cut off
+F.PAGES = 100             -- at most this many pages of one browse search
+F.FIRST_WAIT = 2          -- seconds before the first search: an answer of the helper still on its way passes
+F.GAP = 2                 -- seconds between two browse searches (the pace of the price scan, decision 604)
+F.ITEM_GAP = 0.3          -- seconds between two item searches (each also waits for the game's throttle)
+F.QUIET = 15              -- a browse search without any answer for this long is sent again (TRIES in all) or given up
+F.ITEM_QUIET = 8          -- the same for an item search
+F.TRIES = 3
+F.SKIP_TIME = 86400       -- a discarded item stays away this long (or until it is offered cheaper)
+F.LOAD_WAIT = 20          -- seconds an item may take to load (as fix 712)
+F.REBUILD_GAP = 2
+F.KEEP_DAYS = 14          -- a bought flip is protected this long
+F.ROWS = 10
+F.ROW_H = 36
+
+local function isSecret(v) return issecretvalue and issecretvalue(v) end
+local function now() return GetTime() end
+local function stamp() return (time and time()) or 0 end
+local function A() return C_AuctionHouse end
+local function H() return OMQ.AuctionHelper end
+local function B() return OMQ.AuctionBuy end
+local function money(c) return H().Money(c) end
+local function keyString(k) return H()._KeyString(k) end
+local function db()
+    OMQDB = OMQDB or {}
+    OMQDB.deBargain = nil                                  -- the old disenchant bargains (decision 710) are gone
+    OMQDB.flip = OMQDB.flip or {}
+    local d = OMQDB.flip
+    d.skip = d.skip or {}
+    d.owned = d.owned or {}
+    return d
+end
+local function ready()
+    local api = A()
+    if not (api and api.IsThrottledMessageSystemReady) then return true end
+    local ok, r = pcall(api.IsThrottledMessageSystemReady)
+    return not ok or r ~= false
+end
+local function own(fn, ...) return H().Own(fn, ...) end
+local function classOf(id)
+    local f = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    if not f then return nil end
+    local ok, _, _, _, _, _, c = pcall(f, id)
+    if ok then return c end
+end
+local function sorts()
+    local E = Enum and Enum.AuctionHouseSortOrder
+    return { { sortOrder = E and E.Price or 0, reverseSort = false } }
+end
+
+local run = nil           -- the search running now
+local lines = {}          -- what the browse searches found: per item key { key, id, price, qty }
+local rows = {}           -- per item key: the item's offers and its purchase state
+local list = {}           -- the flips shown
+local frame
+F.bought = { n = 0, spent = 0, worth = 0 }
+
+----------------------------------------------------------------------
+-- The suffix
+----------------------------------------------------------------------
+-- the key of the suffix a name ends with ("Polierter Bidenhänder des Banditen" -> "bandit"), or nil
+function F.SuffixOf(name)
+    if type(name) ~= "string" or isSecret(name) then return nil end
+    local l = name:lower()
+    for _, s in ipairs(F.SUFFIXES) do
+        for _, w in ipairs(s) do
+            if #l > #w and l:sub(-#w - 1) == " " .. w then return s.key end
+        end
+    end
+    return nil
+end
+
+-- the name and quality of a browse line: the item key's own name carries the suffix; nil while the game loads it
+local function nameOf(e)
+    local api = A()
+    if api and api.GetItemKeyInfo then
+        local ok, ki = pcall(api.GetItemKeyInfo, e.key)
+        if ok and type(ki) == "table" and type(ki.itemName) == "string" and not isSecret(ki.itemName) then
+            e.icon = ki.iconFileID or e.icon
+            local q = ki.quality
+            if isSecret(q) then q = nil end
+            return ki.itemName, q
+        end
+    end
+    local f = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+    local link = B() and B().KeyLink and B().KeyLink(e.key)
+    if not (f and link) then return nil end
+    local ok, name, _, q, _, _, _, _, _, _, icon = pcall(f, link)
+    if not ok or type(name) ~= "string" or isSecret(name) then return nil end
+    e.icon = e.icon or icon
+    if isSecret(q) then q = nil end
+    return name, q
+end
+
+-- is a browse line an item to look at closely: true, false, or "wait" while the game loads it
+function F.Consider(e)
+    if e.match ~= nil then return e.match end
+    if not ((e.qty or 0) >= F.NTH or (e.price or 0) < F.CHEAP) then e.match = false; return false end
+    local name, q = nameOf(e)
+    if not name then
+        if not e.askedAt then
+            e.askedAt = now()
+            if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, e.id) end
+            return "wait"
+        end
+        if now() - e.askedAt > F.LOAD_WAIT then e.match = false; return false end
+        return "wait"
+    end
+    e.name = name
+    e.suffix = F.SuffixOf(name)
+    e.match = (e.suffix ~= nil and (q == nil or q == 2)) and true or false
+    return e.match
+end
+
+----------------------------------------------------------------------
+-- What is a flip
+----------------------------------------------------------------------
+-- the offers of one item search: buyouts, the cheapest first; mine marked
+function F.ReadOffers(key)
+    local api = A()
+    local out = {}
+    local n = api.GetNumItemSearchResults and api.GetNumItemSearchResults(key) or 0
+    for i = 1, n do
+        local x = api.GetItemSearchResultInfo(key, i)
+        local b = x and x.buyoutAmount
+        if b and not isSecret(b) and b > 0 then
+            local qty = math.max(1, x.quantity or 1)
+            out[#out + 1] = { auctionID = x.auctionID, buyout = b, qty = qty, unit = math.floor(b / qty), link = x.itemLink,
+                              mine = (x.containsOwnerItem or x.containsAccountItem) and true or nil }
+        end
+    end
+    table.sort(out, function(a, b) return a.unit < b.unit end)
+    return out
+end
+
+-- the verdict of an item's offers: nil, or { kind = "gap" | "few", n, sell, maxBuy, buy = offers to buy, cost, profit }
+function F.Judge(offers)
+    local n = #offers
+    if n == 0 then return nil end
+    local sell, maxBuy, kind
+    if n >= F.NTH then
+        local c1, c6 = offers[1].unit, offers[F.NTH].unit
+        if c6 < c1 * F.RATIO then return nil end
+        kind, sell = "gap", c6 - 1
+        maxBuy = math.floor(sell / F.RATIO)
+    else
+        kind, maxBuy = "few", F.CHEAP - 1
+    end
+    local buy, cost, profit = {}, 0, 0
+    for _, o in ipairs(offers) do
+        if not o.mine and o.qty == 1 and o.unit <= maxBuy then
+            buy[#buy + 1] = o
+            cost = cost + o.buyout
+            if sell then profit = profit + math.floor(sell * (1 - F.CUT)) - o.buyout end
+        end
+    end
+    if #buy == 0 then return nil end
+    return { kind = kind, n = n, sell = sell, maxBuy = maxBuy, buy = buy, cost = cost, profit = sell and profit or nil }
+end
+
+local function skipped(ks, price)
+    local s = db().skip[ks]
+    if not s then return false end
+    if stamp() - (s.t or 0) > F.SKIP_TIME or price < (s.p or 0) then db().skip[ks] = nil; return false end
+    return true
+end
+
+-- the answer of one item search: the row of the item, judged
+function F.Take(e, offers, check)
+    local ks = e.ks
+    local r = rows[ks]
+    if not r then
+        r = { ks = ks, itemKey = e.key, itemID = e.id, commodity = false, onDone = F.OnDone }
+        rows[ks] = r
+    end
+    r.name, r.icon = e.name or r.name, e.icon or r.icon
+    local j = F.Judge(offers)
+    r.offers, r.fresh, r.hold = nil, nil, nil
+    if not j then
+        r.kind = nil
+        if check then OMQ:Print("item flips: " .. (r.name or ("item " .. r.itemID)) .. " is no flip any more") end
+    else
+        r.kind, r.n, r.sell, r.maxBuy, r.cost, r.profit = j.kind, j.n, j.sell, j.maxBuy, j.cost, j.profit
+        r.offers = j.buy
+        r.price = j.buy[1].buyout
+        r.link = j.buy[1].link or r.link
+        r.fresh = { at = now(), seq = H().searchSeq or 0 }
+        if check then r.hold = now() + ((B() and B().FRESH) or 10) end    -- the next clicks buy: no other search meanwhile
+    end
+    F.Build()
+    return r
+end
+
+function F.Build()
+    for i = #list, 1, -1 do list[i] = nil end
+    for ks, r in pairs(rows) do
+        if r.kind and r.offers and #r.offers > 0 and not r.bought and not skipped(ks, r.offers[1].unit) then list[#list + 1] = r end
+    end
+    table.sort(list, function(a, b)
+        if (a.kind == "gap") ~= (b.kind == "gap") then return a.kind == "gap" end
+        if a.kind == "gap" and a.profit ~= b.profit then return a.profit > b.profit end
+        if a.kind ~= "gap" and a.cost ~= b.cost then return a.cost < b.cost end
+        return a.ks < b.ks
+    end)
+    if frame and frame:IsShown() then F.Paint() end
+end
+function F.List() return list end
+F._rows = function() return rows end
+
+----------------------------------------------------------------------
+-- The searches
+----------------------------------------------------------------------
+function F.Quality()
+    local Q = Enum and Enum.AuctionHouseFilter and Enum.AuctionHouseFilter.UncommonQuality
+    return Q and { Q } or {}
+end
+function F.Query(c, s)
+    local q = OMQ.Prices.GameQuery(c, s, F.MIN_LEVEL, F.MAX_LEVEL, sorts())
+    q.filters = F.Quality()
+    return q
+end
+
+function F.Running() return run ~= nil end
+F._run = function() return run end
+
+local function status(text)
+    F.statusText = text
+    if frame and frame:IsShown() then F.Paint() end
+end
+local function progress()
+    if not run then return end
+    if run.qi < #run.queue or run.q and run.q.kind == "browse" then
+        status(string.format("searching the auction house... %d of %d searches, %d items to look at", run.qi, #run.queue, #run.items))
+    else
+        status(string.format("looking at the items... %d of %d, %d flips so far", run.ii, #run.items, #list))
+    end
+end
+
+local function send()
+    local q = run.q
+    q.lastAt, q.resp, q.dropped, q.answered = now(), nil, nil, nil
+    run.state = "waiting"
+    local api = A()
+    local ok, err
+    if q.kind == "browse" then ok, err = pcall(own, api.SendBrowseQuery, F.Query(q.c, q.s))
+    else ok, err = pcall(own, api.SendSearchQuery, q.e.key, sorts(), true) end
+    if not ok then F.Finish("the search failed: " .. tostring(err)) end
+end
+
+-- the lines of the browse list; false when it is not ours (its items belong to another class)
+local function readList()
+    local api = A()
+    local ok, l = pcall(api.GetBrowseResults)
+    if not ok or type(l) ~= "table" then return {}, true end
+    local foreign, checked = 0, 0
+    for _, res in ipairs(l) do
+        local id = res.itemKey and res.itemKey.itemID
+        if id and not isSecret(id) and checked < 30 then
+            checked = checked + 1
+            local c = classOf(id)
+            if c and c ~= run.q.c then foreign = foreign + 1 end
+        end
+    end
+    if foreign >= 2 or (foreign >= 1 and checked < 10) then return l, false end
+    return l, true
+end
+local function fullBrowse()
+    local api = A()
+    if not api.HasFullBrowseResults then return true end
+    local ok, f = pcall(api.HasFullBrowseResults)
+    return ok and f and true or false
+end
+
+-- the loaded lines that match go into the queue of item searches; how many still load
+local function consider()
+    if not run then return 0 end
+    local waiting = 0
+    for _, e in pairs(lines) do
+        if not e.queued then
+            local m = F.Consider(e)
+            if m == "wait" then waiting = waiting + 1
+            elseif m then e.queued = true; run.items[#run.items + 1] = e end
+        end
+    end
+    run.waiting = waiting
+    return waiting
+end
+F.waitingCount = function() return run and run.waiting or 0 end
+
+local function browseDone(l, how)
+    local q = run.q
+    local capped = l and #l > 0 and #l % F.PAGE == 0
+    local P = OMQ.Prices
+    local subs = capped and q.s == nil and P and P.Subclasses and P.Subclasses(q.c) or nil
+    if subs and #subs >= 2 then
+        for _, s in ipairs(subs) do run.queue[#run.queue + 1] = { c = q.c, s = s } end
+    else
+        for _, res in ipairs(l or {}) do
+            local k, price, qty = res.itemKey, res.minPrice, res.totalQuantity
+            if k and k.itemID and not isSecret(k.itemID) and type(price) == "number" and not isSecret(price) and price > 0 then
+                local ks = keyString(k)
+                local e = lines[ks]
+                if not e then
+                    lines[ks] = { ks = ks, key = k, id = k.itemID, price = math.floor(price), qty = (not isSecret(qty) and tonumber(qty)) or 1 }
+                end
+            end
+        end
+        run.lines = run.lines + #(l or {})
+    end
+    run.log[#run.log + 1] = string.format("%d%s: %s, %d lines, %d pages", q.c, q.s and ("." .. q.s) or "", how, #(l or {}), q.pages or 0)
+    run.q, run.state, run.gapAt = nil, "gap", now()
+    consider()
+    progress()
+end
+
+local function itemDone(offers, how)
+    local q = run.q
+    run.q, run.state, run.gapAt = nil, "gap", now()
+    if offers then F.Take(q.e, offers, q.check) end
+    if how ~= "ok" then run.log[#run.log + 1] = string.format("item %s: %s", q.e.ks, how) end
+    run.searched = run.searched + 1
+    progress()
+end
+
+-- a row checked for a click holds the searches still, so its auctions stay the game's latest
+function F.Holding()
+    for _, r in pairs(rows) do
+        if r.hold and now() < r.hold and r.offers and #r.offers > 0 and not r.bought then return true end
+    end
+    return false
+end
+
+local function nextSearch()
+    if #run.checks > 0 then
+        local e = table.remove(run.checks, 1)
+        run.q = { kind = "item", e = e, check = true, tries = 1 }
+        send()
+        return
+    end
+    if run.qi < #run.queue then
+        run.qi = run.qi + 1
+        local f = run.queue[run.qi]
+        run.q = { kind = "browse", c = f.c, s = f.s, pages = 1, tries = 1 }
+        send()
+        return
+    end
+    if run.ii < #run.items then
+        run.ii = run.ii + 1
+        run.q = { kind = "item", e = run.items[run.ii], tries = 1 }
+        send()
+        return
+    end
+    -- items still loading: their searches come when they are there
+    if consider() > 0 or run.ii < #run.items then return end
+    F.Finish()
+end
+
+function F.Step()
+    if not run then return end
+    local h = H()
+    if not (h and h.open) then F.Finish("the auction house closed"); return end
+    h.quietUntil = now() + 60                              -- the helper holds still while the search runs
+    local P = OMQ.Prices
+    if run.state == "start" or run.state == "gap" then
+        if P and P.Busy and P.Busy() then status("waiting for the price scan to end..."); return end
+        local wait = run.state == "start" and F.FIRST_WAIT or ((run.qi < #run.queue and #run.checks == 0) and F.GAP or F.ITEM_GAP)
+        if now() - (run.state == "start" and run.t0 or run.gapAt) < wait then return end
+        if F.Holding() then return end
+        if not ready() then return end
+        if B() and B().Busy and B().Busy() then return end   -- a purchase on its way goes first
+        nextSearch()
+        return
+    end
+    local q = run.q
+    if not q then return end
+    if q.kind == "item" then
+        if q.dropped then
+            if not ready() then return end
+            q.dropped = nil
+            if q.tries >= F.TRIES then itemDone(nil, "no answer") else q.tries = q.tries + 1; send() end
+            return
+        end
+        if now() - q.lastAt > F.ITEM_QUIET then
+            if q.answered then itemDone(F.ReadOffers(q.e.key), "stopped")
+            elseif q.tries >= F.TRIES then itemDone(nil, "no answer")
+            elseif ready() then q.tries = q.tries + 1; send() end
+        end
+        return
+    end
+    if q.dropped then
+        if not ready() then return end
+        q.dropped = nil
+        if q.answered then q.more, q.pages = true, q.pages - 1
+        elseif q.tries >= F.TRIES then browseDone(nil, "no answer"); return
+        else q.tries = q.tries + 1; send(); return end
+    end
+    if q.more then
+        if not ready() then return end
+        q.more, q.lastAt, q.pages = false, now(), q.pages + 1
+        local ok, err = pcall(own, A().RequestMoreBrowseResults)
+        if not ok then browseDone(nil, "page failed: " .. tostring(err)) end
+        return
+    end
+    if now() - q.lastAt > F.QUIET then
+        if q.answered then browseDone(readList(), "stopped")
+        elseif q.tries >= F.TRIES then browseDone(nil, "no answer")
+        elseif ready() then q.tries = q.tries + 1; send() end
+    end
+end
+
+function F.OnBrowse()
+    if not run or run.state ~= "waiting" or not run.q or run.q.kind ~= "browse" then return end
+    local q = run.q
+    local l, mine = readList()
+    if not mine then return end                            -- the answer to another search
+    if #l == 0 then
+        if q.resp and fullBrowse() then browseDone(l, "empty") end
+        return
+    end
+    q.answered, q.lastAt = true, now()
+    if fullBrowse() then browseDone(l, "complete")
+    elseif q.pages >= F.PAGES then browseDone(l, "page limit")
+    elseif A().RequestMoreBrowseResults then q.more = true; F.Step()
+    else browseDone(l, "one page") end
+end
+
+local function sameKey(a, b)
+    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    return a.itemID == b.itemID and (a.itemSuffix or 0) == (b.itemSuffix or 0)
+end
+function F.OnItem(key)
+    if not run or run.state ~= "waiting" or not run.q or run.q.kind ~= "item" then return end
+    local q = run.q
+    if not sameKey(key, q.e.key) then return end
+    q.answered, q.lastAt = true, now()
+    local offers = F.ReadOffers(q.e.key)
+    local api = A()
+    local full = true
+    if api.HasFullItemSearchResults then
+        local ok, f = pcall(api.HasFullItemSearchResults, q.e.key)
+        full = not ok or f ~= false
+    end
+    if #offers >= F.NTH or full then itemDone(offers, "ok") end   -- the first page holds the cheapest ones
+end
+
+local function newRun(queue)
+    run = { state = "start", t0 = now(), queue = queue, qi = 0, items = {}, ii = 0, checks = {}, lines = 0, searched = 0,
+            waiting = 0, log = {} }
+end
+
+function F.Start()
+    if run then return false, "already searching" end
+    local h = H()
+    if not (h and h.open) then return false, "open the auction house first (with the auction helper on)" end
+    local api = A()
+    if not (api and api.SendBrowseQuery and api.GetBrowseResults and api.SendSearchQuery) then return false, "this client has no browse list" end
+    if OMQ.AHTest and OMQ.AHTest.Running and OMQ.AHTest.Running() then return false, "the test window is searching" end
+    local queue = {}
+    for _, c in ipairs(F.CLASSES) do queue[#queue + 1] = { c = c } end
+    for k in pairs(lines) do lines[k] = nil end
+    for k in pairs(rows) do rows[k] = nil end              -- a new search: every offer is new
+    newRun(queue)
+    F.Build()
+    status("searching the auction house for green gear of level 30-50...")
+    return true
+end
+
+function F.Finish(why)
+    if not run then return end
+    local r = run
+    run = nil
+    local h = H()
+    if h then h.quietUntil = nil end
+    if not r.checkOnly then
+        F.last = { why = why, lines = r.lines, items = #r.items, secs = now() - r.t0, log = r.log }
+        db().log = r.log
+    end
+    F.Build()
+    if why then status("search stopped: " .. why)
+    elseif not r.checkOnly then
+        status(string.format("%d flips among %d items with the suffixes (%d offers, %.0f s)", #list, #r.items, r.lines, now() - r.t0))
+    end
+    if h and h.Pump then pcall(h.Pump) end
+end
+function F.Cancel() if run then F.Finish("cancelled") end end
+
+-- a row searched again for a click: ahead of everything else; without a running search a short one just for it
+function F.Check(r)
+    local e = { ks = r.ks, key = r.itemKey, id = r.itemID, name = r.name, icon = r.icon }
+    if not run then
+        local h = H()
+        if not (h and h.open) then return false end
+        newRun({})
+        run.checkOnly, run.state, run.gapAt = true, "gap", now() - 10
+    end
+    for _, x in ipairs(run.checks) do if x.ks == e.ks then return true end end
+    table.insert(run.checks, 1, e)
+    r.checking = true
+    F.Step()
+    return true
+end
+
+----------------------------------------------------------------------
+-- Buying (from a click)
+----------------------------------------------------------------------
+local function fresh(r)
+    return r.fresh and r.offers and #r.offers > 0 and B().Fresh(r)
+end
+function F.Ready(r) return fresh(r) and true or false end
+
+function F.Buy(r)
+    local b, h = B(), H()
+    if not (type(r) == "table" and h.open) then return false end
+    if r.bought or b.Busy() then return false end
+    if fresh(r) then
+        r.paid = r.offers[1].buyout
+        r.hold = now() + (b.FRESH or 10)
+        return b.Buy(r, 1)
+    end
+    if run and run.q and run.q.kind == "item" and run.q.check and run.q.e.ks == r.ks then return false end   -- on its way
+    return F.Check(r)
+end
+function F.BuyNext() return F.Buy(list[1]) end
+
+-- the purchase of one offer is through (or refused)
+function F.OnDone(r, ok)
+    if ok then
+        F.bought.n = F.bought.n + 1
+        F.bought.spent = F.bought.spent + (r.paid or 0)
+        F.bought.worth = F.bought.worth + (r.sell and math.floor(r.sell * (1 - F.CUT)) or 0)
+        F.Remember(r.itemID, r.paid, r.sell)
+        if not (r.offers and #r.offers > 0) then r.bought = true end
+    else
+        r.fresh, r.hold = nil, nil
+    end
+    F.Build()
+end
+
+-- the flips I bought: never to the vendor or the enchanter, never posted under what they cost
+function F.Remember(id, paid, sell)
+    if not id then return end
+    local o = db().owned
+    local x = o[id] or { n = 0, paid = 0 }
+    x.n, x.paid, x.sell, x.t = x.n + 1, math.max(x.paid or 0, paid or 0), sell or x.sell, stamp()
+    o[id] = x
+end
+function F.Owns(id)
+    if type(id) ~= "number" or isSecret(id) or not OMQDB or not OMQDB.flip or not OMQDB.flip.owned then return false end
+    local x = OMQDB.flip.owned[id]
+    if not x then return false end
+    if stamp() - (x.t or 0) > F.KEEP_DAYS * 86400 then OMQDB.flip.owned[id] = nil; return false end
+    return true
+end
+-- the lowest price a bought flip is posted at: what it cost plus the house's cut
+function F.Floor(id)
+    if not F.Owns(id) then return nil end
+    local x = OMQDB.flip.owned[id]
+    if not x.paid or x.paid <= 0 then return nil end
+    return math.ceil(x.paid / (1 - F.CUT)) + 1
+end
+
+function F.Discard(r)
+    if type(r) ~= "table" then return end
+    db().skip[r.ks] = { p = r.offers and r.offers[1] and r.offers[1].unit or r.price, t = stamp() }
+    r.hold = nil
+    F.Build()
+end
+function F.ResetSkip()
+    local n = 0
+    for k in pairs(db().skip) do db().skip[k] = nil; n = n + 1 end
+    F.Build()
+    return n
+end
+
+----------------------------------------------------------------------
+-- The window
+----------------------------------------------------------------------
+F.offset = 0
+local rowFrames = {}
+F._rowFrames = function() return rowFrames end
+
+local function rowState(r)
+    if run and run.q and run.q.kind == "item" and run.q.check and run.q.e.ks == r.ks then return "searching the auction..." end
+    if r.checking and run then for _, x in ipairs(run.checks) do if x.ks == r.ks then return "searching the auction..." end end end
+    if r.hold and fresh(r) then return "ready - click to buy" end
+    return nil
+end
+
+local function makeRow(i)
+    local r = B()._makeRow(frame.list, F.ROW_H)            -- the row of the Buy tab (icon, name, two lines right)
+    r:SetPoint("TOPLEFT", frame.list, "TOPLEFT", 0, -(i - 1) * (F.ROW_H + 2))
+    r:SetScript("OnClick", function(self, mouse)
+        local ok, err = pcall(function()
+            if mouse == "RightButton" then F.Discard(self.omq) else F.Buy(self.omq) end
+            F.Paint()
+        end)
+        if not ok then OMQ:Error("item flips", err) end
+    end)
+    r:SetScript("OnEnter", function(self)
+        local x = self.omq
+        if type(x) ~= "table" then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        if x.link and GameTooltip.SetHyperlink then GameTooltip:SetHyperlink(x.link)
+        elseif GameTooltip.SetItemByID then GameTooltip:SetItemByID(x.itemID) end
+        if x.kind == "gap" then
+            GameTooltip:AddLine(string.format("%d offers; %d under %s, sell at %s", x.n or 0, #(x.offers or {}), money(x.maxBuy or 0), money(x.sell or 0)), 1, 0.82, 0)
+        else
+            GameTooltip:AddLine(string.format("only %d offers, %d of them under 1 gold", x.n or 0, #(x.offers or {})), 1, 0.82, 0)
+        end
+        GameTooltip:AddLine("Left click: buy the next cheap one (the first click looks for the auctions)", 0.6, 0.6, 0.6)
+        GameTooltip:AddLine("Right click: discard (back when it is offered cheaper)", 0.6, 0.6, 0.6)
+        GameTooltip:Show()
+    end)
+    r:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    rowFrames[i] = r
+    return r
+end
+
+local function build()
+    local ok, f = pcall(CreateFrame, "Frame", "OneMoreQuestFlip", UIParent, "BasicFrameTemplateWithInset")
+    if not ok or not f then return end
+    frame = f
+    f:SetSize(380, 128 + F.ROWS * (F.ROW_H + 2))
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:SetFrameStrata("HIGH")
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOP", 0, -5)
+    title:SetText("One More Quest - item flips")
+    local st = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    st:SetPoint("TOPLEFT", 14, -32)
+    st:SetWidth(352)
+    st:SetJustifyH("LEFT")
+    f.status = st
+    local again = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    again:SetSize(110, 22)
+    again:SetPoint("TOPLEFT", 12, -60)
+    again:SetText("Search again")
+    again:SetScript("OnClick", function()
+        if run and not run.checkOnly then F.Cancel() else
+            if run then F.Cancel() end
+            local started, why = F.Start()
+            if not started then OMQ:Print("item flips: " .. tostring(why)) end
+        end
+        F.Paint()
+    end)
+    f.again = again
+    local all = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    all:SetSize(236, 22)
+    all:SetPoint("LEFT", again, "RIGHT", 6, 0)
+    all:SetScript("OnClick", function()
+        local ok2, err = pcall(function() F.BuyNext(); F.Paint() end)
+        if not ok2 then OMQ:Error("item flips", err) end
+    end)
+    f.all = all
+    local listFrame = CreateFrame("Frame", nil, f)
+    listFrame:SetPoint("TOPLEFT", 14, -88)
+    listFrame:SetSize(348, F.ROWS * (F.ROW_H + 2))
+    listFrame:EnableMouseWheel(true)
+    listFrame:SetScript("OnMouseWheel", function(_, d)
+        F.offset = math.max(0, math.min(math.max(0, #list - F.ROWS), F.offset - d))
+        F.Paint()
+    end)
+    f.list = listFrame
+    local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    hint:SetPoint("BOTTOMLEFT", 14, 12)
+    hint:SetWidth(352)
+    hint:SetJustifyH("LEFT")
+    hint:SetText("Left click: buy   Right click: discard   Mouse wheel: scroll")
+    f.hint = hint
+    f:SetScript("OnHide", function() if run then F.Cancel() end end)
+    if UISpecialFrames then table.insert(UISpecialFrames, "OneMoreQuestFlip") end
+end
+
+local function anchor()
+    frame:ClearAllPoints()
+    frame:SetPoint("TOPLEFT", _G.OneMoreQuestAuctionHelper or UIParent, "TOPRIGHT", 6, 0)   -- right of the auction helper
+end
+
+function F.Paint()
+    if not frame or not frame:IsShown() then return end
+    local text = F.statusText or ""
+    if F.bought.n > 0 then
+        text = text .. string.format("\nbought: %d for %s, sells for about %s", F.bought.n, money(F.bought.spent), money(F.bought.worth))
+    end
+    frame.status:SetText(text)
+    frame.again:SetText((run and not run.checkOnly) and "Cancel" or "Search again")
+    local nx = list[1]
+    if not nx then frame.all:SetText("Buy next: nothing to buy")
+    else
+        local st = rowState(nx)
+        frame.all:SetText(string.format("Buy next: %s%s", money(nx.offers[1].buyout),
+            st == "ready - click to buy" and "" or (st and " (searching)" or "")))
+    end
+    if frame.all.SetEnabled then frame.all:SetEnabled(nx ~= nil) end
+    F.offset = math.max(0, math.min(F.offset, math.max(0, #list - F.ROWS)))
+    local qc = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[2]
+    for i = 1, F.ROWS do
+        local r = rowFrames[i] or makeRow(i)
+        local x = list[F.offset + i]
+        r.omq = x
+        if x then
+            r.name:SetText(x.name or ("item " .. x.itemID))
+            if qc then r.name:SetTextColor(qc.r, qc.g, qc.b) else r.name:SetTextColor(0.12, 1, 0) end
+            local st = rowState(x)
+            if x.kind == "gap" then
+                r.sub:SetText(st or string.format("%d cheap, sell at %s", #x.offers, money(x.sell or 0)))
+                r.bottom:SetText("+" .. money(x.profit or 0))
+            else
+                r.sub:SetText(st or string.format("only %d on offer", x.n or 0))
+                r.bottom:SetText("under 1g")
+            end
+            r.top:SetText(money(x.cost or 0))
+            r.icon:SetTexture(x.icon)
+            if st == "ready - click to buy" then r.bg:SetColorTexture(0.1, 0.3, 0.12, 1) else r.bg:SetColorTexture(0.11, 0.122, 0.153, 1) end
+            r:Show()
+        else
+            r:Hide()
+        end
+    end
+end
+
+function F.Show()
+    if not frame then build() end
+    if not frame then return false end
+    anchor()
+    frame:Show()
+    F.Paint()
+    return true
+end
+function F.Frame() return frame end
+function F.Open()
+    local h = H()
+    if not (h and h.open) then OMQ:Print("item flips: open the auction house first (with the auction helper on)"); return false end
+    F.Show()
+    if not run then
+        local started, why = F.Start()
+        if not started then OMQ:Print("item flips: " .. tostring(why)); return false end
+    end
+    return true
+end
+
+----------------------------------------------------------------------
+-- Events
+----------------------------------------------------------------------
+local ev = CreateFrame("Frame")
+for _, e in ipairs({ "AUCTION_HOUSE_CLOSED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED",
+                     "AUCTION_HOUSE_BROWSE_FAILURE", "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED",
+                     "AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED", "AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
+                     "ITEM_SEARCH_RESULTS_UPDATED", "GET_ITEM_INFO_RECEIVED", "ITEM_KEY_ITEM_INFO_RECEIVED" }) do
+    pcall(ev.RegisterEvent, ev, e)
+end
+local considerAt = nil
+ev:SetScript("OnEvent", function(_, event, a1)
+    local ok, err = pcall(function()
+        if event == "AUCTION_HOUSE_CLOSED" then
+            if run then F.Finish("the auction house closed") end
+            if frame then frame:Hide() end
+            for k in pairs(lines) do lines[k] = nil end
+            for k in pairs(rows) do rows[k] = nil end
+            for i = #list, 1, -1 do list[i] = nil end
+            F.bought = { n = 0, spent = 0, worth = 0 }
+        elseif event == "GET_ITEM_INFO_RECEIVED" or event == "ITEM_KEY_ITEM_INFO_RECEIVED" then
+            if run and (run.waiting or 0) > 0 and not considerAt then considerAt = now() + F.REBUILD_GAP end
+        elseif not run then return
+        elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then F.OnBrowse()
+        elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then F.OnItem(a1)
+        elseif event == "AUCTION_HOUSE_BROWSE_FAILURE" or event == "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED" then
+            if run.q and run.state == "waiting" then run.q.dropped = true end
+        elseif event == "AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED" then
+            if run.q and run.state == "waiting" then run.q.resp = true end
+        elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then F.Step() end
+    end)
+    if not ok then OMQ:Error("item flips", err); run = nil end
+end)
+-- a slow tick: the pace of the searches, the items that finished loading
+local acc = 0
+ev:SetScript("OnUpdate", function(_, el)
+    acc = acc + (el or 0)
+    if acc < 0.25 then return end
+    acc = 0
+    if considerAt and now() >= considerAt then
+        considerAt = nil
+        pcall(consider)
+    end
+    if run then
+        local ok, err = pcall(F.Step)
+        if not ok then OMQ:Error("item flips", err); run = nil end
+    end
+    if frame and frame:IsShown() then pcall(F.Paint) end   -- "ready" runs out after a few seconds
+end)

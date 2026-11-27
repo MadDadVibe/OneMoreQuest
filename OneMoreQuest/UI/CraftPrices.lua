@@ -705,7 +705,7 @@ function P.Start(manual)
     if scan then return false, "a scan is running" end
     if OMQ.PriceProbe and OMQ.PriceProbe.Running() then return false, "the probe is running" end   -- fix 587
     if OMQ.AHTest and OMQ.AHTest.Running() then return false, "the test window is searching" end   -- decision 597
-    if OMQ.DEBargain and OMQ.DEBargain.Running() then return false, "the disenchant bargain search is running" end   -- decision 710
+    if OMQ.Flip and OMQ.Flip.Running() then return false, "the item flip search is running" end   -- decisions 710, 721
     local H = helper()
     if not (H and H.open) then return false, "open the auction house first" end
     local api = A()
