@@ -49,6 +49,8 @@ F.SUFFIXES = {
 -- fix 723 (MadDadVibe): melee weapons are blue all the time, nobody buys green ones - weapons count only with a
 -- caster suffix; armor keeps all seven
 F.CASTER = { sorcerer = true, elder = true, channeler = true, hierophant = true }
+-- fix 729 (MadDadVibe): of the weapons only staves, daggers and maces (one- and two-handed), the rest never
+F.WEAPON_KINDS = { [4] = true, [5] = true, [10] = true, [15] = true }
 F.PAGE = 500              -- a list that stops at a whole number of these lines may be cut off
 F.PAGES = 100             -- at most this many pages of one browse search
 F.FIRST_WAIT = 2          -- seconds before the first search: an answer of the helper still on its way passes
@@ -91,8 +93,8 @@ local function own(fn, ...) return H().Own(fn, ...) end
 local function classOf(id)
     local f = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
     if not f then return nil end
-    local ok, _, _, _, _, _, c = pcall(f, id)
-    if ok then return c end
+    local ok, _, _, _, _, _, c, sc = pcall(f, id)
+    if ok then return c, sc end
 end
 local function sorts()
     local E = Enum and Enum.AuctionHouseSortOrder
@@ -160,7 +162,8 @@ function F.Consider(e)
     end
     e.name = name
     e.suffix = F.SuffixOf(name)
-    if e.suffix and not F.CASTER[e.suffix] and classOf(e.id) == 2 then e.suffix = nil end   -- fix 723
+    local c, sc = classOf(e.id)
+    if e.suffix and c == 2 and not (F.CASTER[e.suffix] and F.WEAPON_KINDS[sc]) then e.suffix = nil end   -- fixes 723, 729
     e.match = (e.suffix ~= nil and (q == nil or q == 2)) and true or false
     return e.match
 end
