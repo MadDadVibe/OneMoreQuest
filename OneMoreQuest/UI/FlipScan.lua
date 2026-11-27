@@ -692,6 +692,8 @@ function F.Remember(id, paid, sell, sfx)
     end
     o[id] = x
     F.Note(id, "b", paid, F.lastName)
+    x.sk = F.SuffixOf(F.lastName) or x.sk                  -- decision 743: the suffix of what I bought
+    F.Stat(id, "b", paid, F.lastName)
 end
 
 -- decision 735 (MadDadVibe): green BoE gear I looted (mailed to the flip character) is sold like a flip; what it "cost"
@@ -755,6 +757,7 @@ function F.Result(id, sold, got, name)
         if x.dep and got > x.dep then got = got - x.dep end   -- decision 732: the mail gives the deposit back, not earned
         x.dep = nil
         F.Note(id, "s", got, name)
+        F.Stat(id, "s", got, name, paid)                   -- decision 743
         local it = items()[id]
         it.cost = (it.cost or 0) + paid                    -- what the sold pieces cost
         x.n = (x.n or 1) - 1
@@ -762,6 +765,7 @@ function F.Result(id, sold, got, name)
         return false
     end
     F.Note(id, "u", 0, name)
+    F.Stat(id, "u", 0, name, nil, x.dep)                   -- decision 743
     local it = items()[id]
     it.fees = (it.fees or 0) + (x.dep or 0)                -- decision 732: the deposit of an unsold auction is lost
     x.dep = nil
@@ -775,6 +779,8 @@ function F.Vendored(id, price)
     if not x then return end
     local it = items()[id]
     F.Note(id, "v", price)
+    F.Stat(id, "v", price, nil, F.PaidAny(id) or 0)        -- decision 743
+    if x.released then F.NoteVendored(id, price, x) end
     it = items()[id]
     it.cost = (it.cost or 0) + (F.PaidAny(id) or 0)
     x.n = (x.n or 1) - 1
@@ -794,6 +800,119 @@ function F.PaidAny(id)
     local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
     return x and x.paid
 end
+----------------------------------------------------------------------
+-- decision 743 (MadDadVibe): which suffixes sell - per suffix (and armor kind): bought, sold, came back, to the vendor,
+-- spent, got, cost of the sold/vendored pieces, lost deposits. OMQDB.flip.sfx[key] = { all = rec, [subclass] = rec }.
+-- Suffix from the item name (EN + DE), else the one remembered at the purchase, else "other".
+----------------------------------------------------------------------
+F.ARMOR_KINDS = { [1] = "cloth", [2] = "leather", [3] = "mail", [4] = "plate" }
+local function newRec() return { b = 0, s = 0, u = 0, v = 0, spent = 0, got = 0, cost = 0, fees = 0 } end
+local function addRec(r, kind, c, cost, fee)
+    c = tonumber(c) or 0
+    if kind == "b" then r.b, r.spent = r.b + 1, r.spent + c
+    elseif kind == "s" then r.s, r.got, r.cost = r.s + 1, r.got + c, r.cost + (cost or 0)
+    elseif kind == "u" then r.u, r.fees = r.u + 1, r.fees + (tonumber(fee) or 0)
+    elseif kind == "v" then r.v, r.got, r.cost = r.v + 1, r.got + c, r.cost + (cost or 0) end
+end
+function F.KindOf(id)
+    local c, sc = classOf(id)
+    if c == 4 and F.ARMOR_KINDS[sc] then return sc end
+    return 0                                                -- rings, amulets, cloaks of no kind, weapons
+end
+function F.Stat(id, kind, c, name, cost, fee)
+    if type(id) ~= "number" then return end
+    F.MigrateStats()                                       -- the old history first, so nothing counts twice
+    local d = db()
+    d.sfx = d.sfx or {}
+    local x = d.owned and d.owned[id]
+    local key = F.SuffixOf(name) or (x and x.sk) or "other"
+    local e = d.sfx[key] or { all = newRec() }
+    d.sfx[key] = e
+    local k = F.KindOf(id)
+    e[k] = e[k] or newRec()
+    addRec(e.all, kind, c, cost, fee)
+    addRec(e[k], kind, c, cost, fee)
+end
+-- the last flips that came back too often and went to the vendor
+F.VENDOR_LOG = 10
+function F.NoteVendored(id, price, x)
+    local d = db()
+    d.vlog = d.vlog or {}
+    local it = items()[id] or {}
+    local paid = F.PaidAny(id) or 0
+    table.insert(d.vlog, 1, { id = id, name = it.name or ("item " .. id), sk = x.sk or F.SuffixOf(it.name) or "other",
+        back = x.unsold or 0, loss = (tonumber(price) or 0) - paid - (it.fees or 0), t = stamp() })
+    while #d.vlog > F.VENDOR_LOG do table.remove(d.vlog) end
+end
+-- once: the per-item history from before, where the stored name shows the suffix clearly
+function F.MigrateStats()
+    local d = db()
+    if d.sfxDone then return end
+    d.sfxDone = true
+    d.sfx = d.sfx or {}
+    for id, it in pairs(items()) do
+        local key = F.SuffixOf(it.name)
+        if key then
+            local e = d.sfx[key] or { all = newRec() }
+            d.sfx[key] = e
+            local k = F.KindOf(id)
+            e[k] = e[k] or newRec()
+            for _, r in ipairs({ e.all, e[k] }) do
+                for _, f in ipairs({ "b", "s", "u", "v", "spent", "got", "cost", "fees" }) do r[f] = r[f] + (it[f] or 0) end
+            end
+        end
+    end
+end
+local function label(key)
+    if key == "other" then return "other suffixes" end
+    return "of the " .. key:sub(1, 1):upper() .. key:sub(2)
+end
+local function rate(r)
+    local n = r.s + r.v
+    if n == 0 then return nil end
+    return math.floor(r.s * 100 / n + 0.5)
+end
+-- the rows of the suffix view: one per suffix, best selling first, then the vendor log
+function F.SuffixRows()
+    F.MigrateStats()
+    local d = db()
+    local out = {}
+    for key, e in pairs(d.sfx or {}) do
+        local r = e.all
+        local tip = {}
+        for k = 1, 4 do
+            local a = e[k]
+            if a and a.b + a.s + a.u + a.v > 0 then
+                local q = rate(a)
+                tip[#tip + 1] = string.format("%s: bought %d, sold %d, back %d, vendor %d%s", F.ARMOR_KINDS[k], a.b, a.s, a.u, a.v,
+                    q and (", " .. q .. "% sold") or "")
+            end
+        end
+        if e[0] and e[0].b + e[0].s + e[0].u + e[0].v > 0 then
+            tip[#tip + 1] = string.format("other gear: bought %d, sold %d, back %d, vendor %d", e[0].b, e[0].s, e[0].u, e[0].v)
+        end
+        local q = rate(r)
+        local profit = r.got - r.cost - r.fees
+        out[#out + 1] = { key = key, name = label(key), rate = q,
+            text = string.format("bought %d, sold %d, back %d, vendor %d", r.b, r.s, r.u, r.v),
+            result = (q and (q .. "% sold, ") or "") .. F.Signed(profit), gain = (r.s + r.v) > 0 and profit or nil,
+            low = q and q < 50, tip = tip }
+    end
+    table.sort(out, function(a, b)
+        if (a.rate or -1) ~= (b.rate or -1) then return (a.rate or -1) > (b.rate or -1) end
+        return a.key < b.key
+    end)
+    local vl = d.vlog or {}
+    if #vl > 0 then
+        out[#out + 1] = { name = "|cffffd100To the vendor after " .. F.REPOSTS .. "x unsold:|r", text = "", result = "", head = true }
+        for _, v in ipairs(vl) do
+            out[#out + 1] = { name = "  " .. v.name, text = label(v.sk) .. ", back " .. v.back .. "x", result = F.Signed(v.loss),
+                gain = v.loss }
+        end
+    end
+    return out
+end
+
 function F.Totals()
     local t = { b = 0, s = 0, u = 0, v = 0, spent = 0, got = 0, cost = 0, fees = 0, loot = 0 }
     for _, it in pairs(items()) do
@@ -807,6 +926,7 @@ local function signed(c)
     if c < 0 then return "-" .. money(-c) end
     return "+" .. money(c)
 end
+F.Signed = signed
 -- decision 732 (MadDadVibe): the history in a small window; F.Rows gives its lines, F.History the same as text
 function F.Rows()
     local t = F.Totals()
@@ -844,6 +964,9 @@ function F.History()
     for i = 1, math.min(15, #rows) do out[#out + 1] = "  " .. rows[i].name .. ": " .. rows[i].text .. ", " .. rows[i].result end
     if #rows > 15 then out[#out + 1] = string.format("  ... and %d more items", #rows - 15) end
     if #rows == 0 then out[#out + 1] = "  nothing bought with item flips yet" end
+    local sr = F.SuffixRows()                              -- decision 743
+    if #sr > 0 then out[#out + 1] = "by suffix:" end
+    for _, r in ipairs(sr) do out[#out + 1] = "  " .. r.name .. (r.text ~= "" and (": " .. r.text) or "") .. (r.result ~= "" and (", " .. r.result) or "") end
     return out
 end
 
@@ -865,6 +988,15 @@ local function histBuild()
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOP", 0, -5)
     title:SetText("One More Quest - flip history")
+    local view = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")   -- decision 743: items / suffixes
+    view:SetSize(90, 20)
+    view:SetPoint("TOPRIGHT", -12, -28)
+    view:SetScript("OnClick", function()
+        F.histView = (F.histView == "sfx") and "items" or "sfx"
+        F.histOffset = 0
+        F.PaintHistory()
+    end)
+    f.view = view
     f.head = {}
     for i = 1, 8 do
         local l = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -900,8 +1032,9 @@ local function histBuild()
             if not (self.data and GameTooltip) then return end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:AddLine(self.data.name)
-            GameTooltip:AddLine(self.data.text, 1, 1, 1, true)
-            GameTooltip:AddLine(self.data.result, 1, 1, 1)
+            if self.data.text ~= "" then GameTooltip:AddLine(self.data.text, 1, 1, 1, true) end
+            if self.data.result ~= "" then GameTooltip:AddLine(self.data.result, 1, 1, 1) end
+            for _, l in ipairs(self.data.tip or {}) do GameTooltip:AddLine(l, 0.8, 0.8, 0.8) end
             GameTooltip:Show()
         end)
         r:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -919,14 +1052,17 @@ function F.PaintHistory()
     if not hist then return end
     local head, rows = F.Rows()
     for i, h in ipairs(head) do hist.head[i].l:SetText(h[1]); hist.head[i].v:SetText(h[2]) end
+    local sfxView = F.histView == "sfx"
+    if sfxView then rows = F.SuffixRows() end
+    if hist.view then hist.view:SetText(sfxView and "Items" or "Suffixes") end
     F.histOffset = math.max(0, math.min(F.histOffset, math.max(0, #rows - F.HIST_ROWS)))
     for i, r in ipairs(hist.rows) do
         local d = rows[i + F.histOffset]
         r.data = d
         if d then
-            r.name:SetText(d.name .. "  |cffaaaaaa" .. d.text .. "|r")
+            r.name:SetText(d.name .. (d.text ~= "" and ("  |cffaaaaaa" .. d.text .. "|r") or ""))
             r.res:SetText(d.result)
-            if d.gain and d.gain < 0 then r.res:SetTextColor(1, 0.3, 0.3) elseif d.gain then r.res:SetTextColor(0.3, 1, 0.3) else r.res:SetTextColor(0.8, 0.8, 0.8) end
+            if d.low or (d.gain and d.gain < 0) then r.res:SetTextColor(1, 0.3, 0.3) elseif d.gain then r.res:SetTextColor(0.3, 1, 0.3) else r.res:SetTextColor(0.8, 0.8, 0.8) end
             r:Show()
         else r:Hide() end
     end
