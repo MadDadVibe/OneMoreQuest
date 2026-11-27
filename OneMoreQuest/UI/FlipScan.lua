@@ -20,7 +20,8 @@ OMQ = _G.OneMoreQuest
 local F = {}
 OMQ.Flip = F
 
-F.CLASSES = { 2, 4 }      -- weapons, armor
+F.CLASSES = { 4 }         -- armor only (fix 737, MadDadVibe: green weapons do not sell; was weapons + armor)
+F.WEAPONS = false         -- fix 737: weapons never looked at
 F.MIN_LEVEL, F.MAX_LEVEL = 30, 50
 F.NTH = 6                 -- the offer the cheapest is compared with
 F.RATIO = 1.5             -- the 6th cheapest at least this much times the cheapest
@@ -181,6 +182,7 @@ function F.Consider(e)
     e.suffix = F.SuffixOf(name)
     local c, sc = classOf(e.id)
     if m.only and not (c == m.only.c and sc == m.only.s) then e.match = false; return false end   -- decision 731
+    if c == 2 and not F.WEAPONS then e.match = false; return false end   -- fix 737
     if e.suffix and c == 2 and not (F.CASTER[e.suffix] and F.WEAPON_KINDS[sc]) then e.suffix = nil end   -- fixes 723, 729
     e.match = (e.suffix ~= nil and (q == nil or q == 2)) and true or false
     return e.match
