@@ -419,6 +419,17 @@ local function readPrice(e)
         end
     else
         local n = A.GetNumItemSearchResults and A.GetNumItemSearchResults(e.itemKey) or 0
+        local F = e.flip and OMQ.Flip
+        if F and F.SellPrice then                       -- a bought flip: its own price rule, same suffix only (decision 725)
+            local offers = {}
+            for i = 1, n do
+                local r = A.GetItemSearchResultInfo(e.itemKey, i)
+                if r and r.buyoutAmount and r.buyoutAmount > 0 and not r.containsOwnerItem then
+                    offers[#offers + 1] = { unit = math.floor(r.buyoutAmount / math.max(1, r.quantity or 1)), link = r.itemLink }
+                end
+            end
+            return F.SellPrice(e, offers)
+        end
         for i = 1, n do
             local r = A.GetItemSearchResultInfo(e.itemKey, i)
             if r and r.buyoutAmount and r.buyoutAmount > 0 then return r.buyoutAmount end
@@ -427,6 +438,7 @@ local function readPrice(e)
     return false
 end
 
+AH._ReadPrice = function(e) return readPrice(e) end   -- for the tests (decision 725)
 local function gotPrice(e)
     e.timeouts = nil
     if e.onResult then                                   -- a search of the buy mode (decision 264)
@@ -669,7 +681,7 @@ local function batchQuery()
     local list, keys = {}, {}
     for _, e in ipairs(entries) do
         if #list >= AH.BATCH then break end
-        if e.state == "price" and not tried[e.key] and not e.keep then list[#list + 1] = e; keys[#keys + 1] = e.itemKey end
+        if e.state == "price" and not tried[e.key] and not e.keep and not e.flip then list[#list + 1] = e; keys[#keys + 1] = e.itemKey end   -- a flip: own search (725)
     end
     local B = OMQ.AuctionBuy
     if AH.view == "buy" and B and B.BatchRows then

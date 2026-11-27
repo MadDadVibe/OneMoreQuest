@@ -570,7 +570,7 @@ function F.Buy(r)
     if not (type(r) == "table" and h.open) then return false end
     if r.bought or b.Busy() then return false end
     if fresh(r) then
-        r.paid = r.offers[1].buyout
+        r.paid, r.paidLink = r.offers[1].buyout, r.offers[1].link
         r.hold = now() + (b.FRESH or 10)
         return b.Buy(r, 1)
     end
@@ -585,7 +585,7 @@ function F.OnDone(r, ok)
         F.bought.n = F.bought.n + 1
         F.bought.spent = F.bought.spent + (r.paid or 0)
         F.bought.worth = F.bought.worth + (r.sell and math.floor(r.sell * (1 - F.CUT)) or 0)
-        F.Remember(r.itemID, r.paid, r.sell)
+        F.Remember(r.itemID, r.paid, r.sell, F.LinkSuffix(r.paidLink))
         if not (r.offers and #r.offers > 0) then r.bought = true end
     else
         r.fresh, r.hold = nil, nil
@@ -594,12 +594,63 @@ function F.OnDone(r, ok)
 end
 
 -- the flips I bought: never to the vendor or the enchanter, never posted under what they cost
-function F.Remember(id, paid, sell)
+function F.Remember(id, paid, sell, sfx)
     if not id then return end
     local o = db().owned
     local x = o[id] or { n = 0, paid = 0 }
     x.n, x.paid, x.sell, x.t = x.n + 1, math.max(x.paid or 0, paid or 0), sell or x.sell, stamp()
+    if sfx then                                            -- per suffix (decision 725)
+        x.sfx = x.sfx or {}
+        x.sfx[sfx] = math.max(x.sfx[sfx] or 0, paid or 0)
+    end
     o[id] = x
+end
+-- the random suffix number in an item link ("item:id:enchant:gem1:gem2:gem3:gem4:suffix:..."), nil without one
+function F.LinkSuffix(link)
+    if type(link) ~= "string" or isSecret(link) then return nil end
+    local body = link:match("item:([%-%d:]+)")
+    if not body then return nil end
+    local i = 0
+    for f in (body .. ":"):gmatch("([^:]*):") do
+        i = i + 1
+        if i == 7 then local n = tonumber(f); return (n and n ~= 0) and n or nil end
+    end
+    return nil
+end
+-- what I paid for a bought flip with this suffix (the highest of that item when the suffix is unknown)
+function F.Paid(id, sfx)
+    if not F.Owns(id) then return nil end
+    local x = OMQDB.flip.owned[id]
+    return (sfx and x.sfx and x.sfx[sfx]) or x.paid
+end
+-- decision 725 (MadDadVibe): a bought flip is posted at twice what it cost, but at most at the next auction of
+-- exactly its suffix (minus 1 copper; the game's sell search also shows the other suffixes of the item, they do not
+-- count, neither do my own). offers: the other auctions of the item { unit, link }. The floor (F.Floor) comes after.
+function F.SellPrice(e, offers)
+    local sfx = F.LinkSuffix(e.link)
+    local paid = F.Paid(e.itemID, sfx)
+    local name = e.name
+    local nextP
+    for _, o in ipairs(offers or {}) do
+        local same
+        local os = F.LinkSuffix(o.link)
+        if sfx or os then same = os == sfx
+        else
+            local f = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+            local ok, n = pcall(f, o.link or "")
+            same = not ok or n == nil or n == name
+        end
+        if same and o.unit and (not nextP or o.unit < nextP) then nextP = o.unit end
+    end
+    local price
+    if paid and paid > 0 then
+        price = paid * 2
+        if nextP and nextP - 1 < price then price = nextP - 1 end
+    else
+        price = nextP or false
+    end
+    if price and price < 1 then price = 1 end
+    return price
 end
 function F.Owns(id)
     if type(id) ~= "number" or isSecret(id) or not OMQDB or not OMQDB.flip or not OMQDB.flip.owned then return false end
