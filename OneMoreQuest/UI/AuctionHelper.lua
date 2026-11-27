@@ -890,12 +890,14 @@ function AH.Post(e, fromSelect)
     local price = e.price
     if A.SupportsCopperValues and not A.SupportsCopperValues() then price = math.max(100, math.floor(price / 100) * 100) end
     local args, needs
+    local dur = AH.DURATION
+    if e.flip and OMQ.Flip and OMQ.Flip.PostDuration then dur = OMQ.Flip.PostDuration() end   -- decision 726
     if e.commodity then
-        args = { e.loc, AH.DURATION, e.qty, price }
+        args = { e.loc, dur, e.qty, price }
         needs = AH.Own(A.PostCommodity, unpack(args))
     else
-        args = { e.loc, AH.DURATION, 1, nil, price }
-        needs = AH.Own(A.PostItem, e.loc, AH.DURATION, 1, nil, price)
+        args = { e.loc, dur, 1, nil, price }
+        needs = AH.Own(A.PostItem, e.loc, dur, 1, nil, price)
     end
     if fromSelect then db().skip[e.itemID] = nil; AH.PostedByHand(e.itemID) end   -- posted in the select mode: a fresh start
     if e.name then db().names[e.name] = e.itemID end
@@ -1275,6 +1277,9 @@ function AH.Refresh()
             local unit = next_.price or 0
             local qty = next_.commodity and (next_.qty or 1) or 1
             f.post.gain:SetText(qty > 1 and (money(unit) .. " each") or "")
+            if next_.flip and OMQ.Flip and OMQ.Flip.PostHours then          -- a bought flip (decision 726)
+                f.post.gain:SetText(string.format("|cff66ccfflip|r - %d hours", OMQ.Flip.PostHours()))
+            end
             f.post.stack:SetText(money(unit * qty))
             h = AH.HEAD + 176
             f.total:ClearAllPoints(); f.total:SetPoint("TOPLEFT", 16, -176)

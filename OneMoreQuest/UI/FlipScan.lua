@@ -605,6 +605,39 @@ function F.Remember(id, paid, sell, sfx)
     end
     o[id] = x
 end
+-- decision 726 (MadDadVibe): a flip is posted for 2 hours (short) by day, for 8 hours from 23:59 German time until
+-- 8:00 the next morning. German time = UTC+1, UTC+2 from the last Sunday of March to the last Sunday of October (1:00 UTC).
+local function lastSunday(y, m)
+    local last = (m == 3) and 31 or 31                     -- March and October both have 31 days
+    local t = time({ year = y, month = m, day = last, hour = 12 })
+    local wd = tonumber(date("!%w", t)) or 0               -- 0 = Sunday
+    return last - wd
+end
+function F.BerlinClock(utc)
+    if not (date and time) then return 12, 0 end            -- no clock: daytime
+    utc = utc or time() or 0
+    local u = date("!*t", utc)
+    local summer = false
+    if u.month > 3 and u.month < 10 then summer = true
+    elseif u.month == 3 then summer = u.day > lastSunday(u.year, 3) or (u.day == lastSunday(u.year, 3) and u.hour >= 1)
+    elseif u.month == 10 then summer = u.day < lastSunday(u.year, 10) or (u.day == lastSunday(u.year, 10) and u.hour < 1) end
+    local b = date("!*t", utc + (summer and 7200 or 3600))
+    return b.hour, b.min
+end
+function F.PostHours(utc)
+    local h, m = F.BerlinClock(utc)
+    if (h == 23 and m >= 59) or h < 8 then return 8 end
+    return 2
+end
+-- the game's duration index for so many hours: read from its own names ("2 Hours", "8 Stunden"), else 1 = short, 2 = medium
+function F.DurationIndex(hours)
+    for i, s in ipairs({ AUCTION_DURATION_ONE or false, AUCTION_DURATION_TWO or false, AUCTION_DURATION_THREE or false }) do
+        if type(s) == "string" and tonumber(s:match("(%d+)")) == hours then return i end
+    end
+    return hours == 8 and 2 or 1
+end
+function F.PostDuration(utc) return F.DurationIndex(F.PostHours(utc)) end
+
 -- the random suffix number in an item link ("item:id:enchant:gem1:gem2:gem3:gem4:suffix:..."), nil without one
 function F.LinkSuffix(link)
     if type(link) ~= "string" or isSecret(link) then return nil end
