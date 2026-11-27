@@ -624,6 +624,7 @@ end
 -- (no protection any more, the helper's "unsold" rule takes it). One that came back is posted again only while
 -- that brings at least REPOST_GAIN over what it cost, after the cut - else it waits in the bags.
 ----------------------------------------------------------------------
+F.SELL_FACTOR = 3        -- fix 730 (MadDadVibe): a flip is posted at up to 3 times its price (decision 725: 2)
 F.REPOSTS = 5
 F.REPOST_GAIN = 1.2
 local function items()
@@ -774,7 +775,7 @@ function F.Paid(id, sfx)
     local x = OMQDB.flip.owned[id]
     return (sfx and x.sfx and x.sfx[sfx]) or x.paid
 end
--- decision 725 (MadDadVibe): a bought flip is posted at twice what it cost, but at most at the next auction of
+-- decision 725 (MadDadVibe): a bought flip is posted at F.SELL_FACTOR times what it cost (3, fix 730; was 2), but at most at the next auction of
 -- exactly its suffix (minus 1 copper; the game's sell search also shows the other suffixes of the item, they do not
 -- count, neither do my own). offers: the other auctions of the item { unit, link }. The floor (F.Floor) comes after.
 function F.SellPrice(e, offers)
@@ -795,7 +796,7 @@ function F.SellPrice(e, offers)
     end
     local price
     if paid and paid > 0 then
-        price = paid * 2
+        price = paid * F.SELL_FACTOR
         if nextP and nextP - 1 < price then price = nextP - 1 end
     else
         price = nextP or false
