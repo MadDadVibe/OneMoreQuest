@@ -3,7 +3,7 @@
 -- to 50 with one of the suffixes of the Sorcerer, Bandit, Knight, Beast, Elder, Channeler or Hierophant (English and
 -- German names, F.SUFFIXES; weapons only with the caster ones, F.CASTER, fix 723). Every item with its suffix counts on its own. A flip: at least 6 offers and the 6th
 -- cheapest at least 1.5 times the cheapest - the cheap ones are bought and sold again at the 6th price minus 1 copper;
--- every offer under 2/3 of that price is bought (never one over 1 gold, fix 724; a second method "gap3": 3rd >= 2x 1st). Fewer than 6 offers: every offer under 1 gold is listed too
+-- every offer under 2/3 of that price is bought (never one over 1 gold, 1.50 gold from required level 40 - fix 733; fix 724; a second method "gap3": 3rd >= 2x 1st). Fewer than 6 offers: every offer under 1 gold is listed too
 -- (MadDadVibe). Only buyouts count.
 -- The search: two browse searches (weapons, armor) in the form of the game's own window with the quality filter green
 -- and the levels 30-50 (decision 604), every page, a class whose list stops at a full page per subcategory; then one
@@ -26,6 +26,12 @@ F.NTH = 6                 -- the offer the cheapest is compared with
 F.RATIO = 1.5             -- the 6th cheapest at least this much times the cheapest
 F.CHEAP = 10000           -- fewer than NTH offers: every offer under 1 gold
 F.MAX_BUY = 10000         -- fix 724 (MadDadVibe): no offer over 1 gold is ever bought or shown
+F.MAX_BUY_HIGH = 15000    -- fix 733 (MadDadVibe): items of required level 40 and up may cost up to 1.50 gold
+F.HIGH_LEVEL = 40
+function F.MaxBuy(level)
+    if type(level) == "number" and level >= F.HIGH_LEVEL then return F.MAX_BUY_HIGH end
+    return F.MAX_BUY
+end
 -- fix 724: two methods, chosen with the two buttons on top; the search starts only after the choice
 --   "flip": the 6th cheapest >= 1.5x the cheapest (decision 721), fewer than 6 offers: every one under 1 gold
 --   "gap3": the 3rd cheapest >= 2x the cheapest - easy buyouts, sold again at the 3rd price minus 1 copper
@@ -93,6 +99,12 @@ local function ready()
     return not ok or r ~= false
 end
 local function own(fn, ...) return H().Own(fn, ...) end
+local function reqLevelOf(id)
+    local f = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+    if not f then return nil end
+    local ok, _, _, _, _, lvl = pcall(f, id)
+    if ok and type(lvl) == "number" and not isSecret(lvl) then return lvl end
+end
 local function classOf(id)
     local f = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
     if not f then return nil end
@@ -152,7 +164,7 @@ end
 function F.Consider(e)
     if e.match ~= nil then return e.match end
     local m = F.METHODS[(run and run.method) or "flip"]
-    if (e.price or 0) > F.MAX_BUY or not ((e.qty or 0) >= m.nth or (m.few and (e.price or 0) < F.CHEAP)) then e.match = false; return false end
+    if (e.price or 0) > F.MAX_BUY_HIGH or not ((e.qty or 0) >= m.nth or (m.few and (e.price or 0) < F.CHEAP)) then e.match = false; return false end
     local name, q = nameOf(e)
     if not name then
         if not e.askedAt then
@@ -164,6 +176,8 @@ function F.Consider(e)
         return "wait"
     end
     e.name = name
+    e.level = reqLevelOf(e.id)
+    if (e.price or 0) > F.MaxBuy(e.level) then e.match = false; return false end   -- fix 733
     e.suffix = F.SuffixOf(name)
     local c, sc = classOf(e.id)
     if m.only and not (c == m.only.c and sc == m.only.s) then e.match = false; return false end   -- decision 731
@@ -194,7 +208,7 @@ function F.ReadOffers(key)
 end
 
 -- the verdict of an item's offers: nil, or { kind = "gap" | "few", n, sell, maxBuy, buy = offers to buy, cost, profit }
-function F.Judge(offers, method)
+function F.Judge(offers, method, level)
     local m = F.METHODS[method or "flip"] or F.METHODS.flip
     local n = #offers
     if n == 0 then return nil end
@@ -209,7 +223,7 @@ function F.Judge(offers, method)
     else
         return nil
     end
-    maxBuy = math.min(maxBuy, F.MAX_BUY)                   -- fix 724
+    maxBuy = math.min(maxBuy, F.MaxBuy(level))            -- fix 724, 733: 1.50 gold from level 40
     local buy, cost, profit = {}, 0, 0
     for _, o in ipairs(offers) do
         if not o.mine and o.qty == 1 and o.unit <= maxBuy then
@@ -238,7 +252,8 @@ function F.Take(e, offers, check)
         rows[ks] = r
     end
     r.name, r.icon = e.name or r.name, e.icon or r.icon
-    local j = F.Judge(offers, F.method)
+    r.level = e.level or r.level or reqLevelOf(e.id)
+    local j = F.Judge(offers, F.method, r.level)
     r.offers, r.fresh, r.hold = nil, nil, nil
     if not j then
         r.kind = nil
