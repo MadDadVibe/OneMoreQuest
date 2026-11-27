@@ -1,7 +1,7 @@
 -- One More Quest - item flips in the auction house (decision 721, replaces the disenchant bargains of decision 710)
 -- /omq ah flip opens a window next to the auction helper and looks for green weapons and armor of required level 30
 -- to 50 with one of the suffixes of the Sorcerer, Bandit, Knight, Beast, Elder, Channeler or Hierophant (English and
--- German names, F.SUFFIXES). Every item with its suffix counts on its own. A flip: at least 6 offers and the 6th
+-- German names, F.SUFFIXES; weapons only with the caster ones, F.CASTER, fix 723). Every item with its suffix counts on its own. A flip: at least 6 offers and the 6th
 -- cheapest at least 1.5 times the cheapest - the cheap ones are bought and sold again at the 6th price minus 1 copper;
 -- every offer under 2/3 of that price is bought. Fewer than 6 offers: every offer under 1 gold is listed too
 -- (MadDadVibe). Only buyouts count.
@@ -36,6 +36,9 @@ F.SUFFIXES = {
     { key = "channeler",  "of the channeler",  "des kanalisierers" },
     { key = "hierophant", "of the hierophant", "des hierophanten" },
 }
+-- fix 723 (MadDadVibe): melee weapons are blue all the time, nobody buys green ones - weapons count only with a
+-- caster suffix; armor keeps all seven
+F.CASTER = { sorcerer = true, elder = true, channeler = true, hierophant = true }
 F.PAGE = 500              -- a list that stops at a whole number of these lines may be cut off
 F.PAGES = 100             -- at most this many pages of one browse search
 F.FIRST_WAIT = 2          -- seconds before the first search: an answer of the helper still on its way passes
@@ -146,6 +149,7 @@ function F.Consider(e)
     end
     e.name = name
     e.suffix = F.SuffixOf(name)
+    if e.suffix and not F.CASTER[e.suffix] and classOf(e.id) == 2 then e.suffix = nil end   -- fix 723
     e.match = (e.suffix ~= nil and (q == nil or q == 2)) and true or false
     return e.match
 end
