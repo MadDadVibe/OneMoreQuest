@@ -638,6 +638,29 @@ function F.Remember(id, paid, sell, sfx)
     F.Note(id, "b", paid, F.lastName)
 end
 
+-- decision 735 (MadDadVibe): green BoE gear I looted (mailed to the flip character) is sold like a flip; what it "cost"
+-- is its vendor price. Taken in at the bag scan of the auction helper, once per item while it is mine.
+function F.LootGreen(it, classID, equipLoc, comm)
+    if comm or not it or it.isBound then return false end
+    if it.quality ~= 2 or not (classID == 2 or classID == 4) then return false end
+    return type(equipLoc) == "string" and equipLoc ~= "" and equipLoc ~= "INVTYPE_NON_EQUIP_IGNORE" and equipLoc ~= "INVTYPE_BAG"
+end
+function F.AdoptLoot(id, vendor, link, name)
+    if type(id) ~= "number" or F.Owns(id) then return false end
+    F.lastName = name
+    F.Remember(id, vendor or 0, nil, F.LinkSuffix(link))
+    F.lastName = nil
+    local x = db().owned[id]
+    x.loot = true
+    local it = db().items and db().items[id]               -- F.Note (below) made it
+    if it then it.loot = (it.loot or 0) + 1 end
+    return true
+end
+function F.IsLoot(id)
+    local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
+    return x and x.loot and true or false
+end
+
 ----------------------------------------------------------------------
 -- decision 728 (MadDadVibe): the flip history (/omq flip) and the resale rules
 -- Per item: bought, sold, came back unsold, vendored, spent and got (OMQDB.flip.items, kept for good); the totals
@@ -716,7 +739,7 @@ function F.PaidAny(id)
     return x and x.paid
 end
 function F.Totals()
-    local t = { b = 0, s = 0, u = 0, v = 0, spent = 0, got = 0, cost = 0, fees = 0 }
+    local t = { b = 0, s = 0, u = 0, v = 0, spent = 0, got = 0, cost = 0, fees = 0, loot = 0 }
     for _, it in pairs(items()) do
         for k in pairs(t) do t[k] = t[k] + (it[k] or 0) end
     end
@@ -739,6 +762,7 @@ function F.Rows()
         { "Deposits lost (unsold)", money(t.fees) },
         { "Earned with flips", signed(t.profit) .. " (on " .. money(t.cost) .. " of sold pieces)" },
         { "Still out (bags / AH)", money(t.open) },
+        { "Of them from loot", string.format("%d (vendor price as cost)", t.loot) },   -- decision 735
     }
     local rows = {}
     for id, it in pairs(items()) do rows[#rows + 1] = { id = id, it = it } end
@@ -774,7 +798,7 @@ local function histBuild()
     local ok, f = pcall(CreateFrame, "Frame", "OneMoreQuestFlipHistory", UIParent, "BasicFrameTemplateWithInset")
     if not ok or not f then return end
     hist = f
-    f:SetSize(420, 196 + F.HIST_ROWS * 16)
+    f:SetSize(420, 212 + F.HIST_ROWS * 16)
     f:SetPoint("CENTER")
     f:SetMovable(true)
     f:EnableMouse(true)
@@ -786,7 +810,7 @@ local function histBuild()
     title:SetPoint("TOP", 0, -5)
     title:SetText("One More Quest - flip history")
     f.head = {}
-    for i = 1, 7 do
+    for i = 1, 8 do
         local l = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         l:SetPoint("TOPLEFT", 16, -30 - (i - 1) * 16)
         local v = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -796,7 +820,7 @@ local function histBuild()
         f.head[i] = { l = l, v = v }
     end
     local box = CreateFrame("Frame", nil, f)
-    box:SetPoint("TOPLEFT", 14, -150)
+    box:SetPoint("TOPLEFT", 14, -166)
     box:SetSize(392, F.HIST_ROWS * 16)
     box:EnableMouseWheel(true)
     box:SetScript("OnMouseWheel", function(_, d)
@@ -947,7 +971,10 @@ function F.SellPrice(e, offers)
         if same and o.unit and (not nextP or o.unit < nextP) then nextP = o.unit end
     end
     local price
-    if paid and paid > 0 then
+    if F.IsLoot(e.itemID) then                             -- decision 735: looted greens at the market price
+        if not nextP then return nil end                   -- nothing of its suffix on sale: the helper's normal price
+        price = nextP - 1
+    elseif paid and paid > 0 then
         price = paid * F.SELL_FACTOR + F.JewelBonus(e.itemID)   -- fix 734: rings and amulets 1 gold more
         if nextP and nextP - 1 < price then price = nextP - 1 end
     else

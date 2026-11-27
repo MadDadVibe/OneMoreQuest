@@ -204,6 +204,9 @@ function AH.Scan()
                         elseif deMode and DS.HideFromAH(DS.Takes(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, nil, deMode)) then
                             e.out = "disenchant"
                         elseif deNotYet then e.out = "upgrade"          -- not worth disenchanting: kept as before
+                        elseif OMQ.Flip and OMQ.Flip.LootGreen and OMQ.Flip.LootGreen(it, classID, equipLoc, comm)
+                               and OMQ.Flip.AdoptLoot(it.itemID, vendor, link, name or it.itemName) then
+                            e.flip = true                                -- looted green BoE: sold as a flip (decision 735)
                         end
                         local k = A.GetItemKeyFromItem and A.GetItemKeyFromItem(loc)
                         e.itemKey = k or (A.MakeItemKey and A.MakeItemKey(it.itemID)) or { itemID = it.itemID }
@@ -430,7 +433,8 @@ local function readPrice(e)
                     offers[#offers + 1] = { unit = math.floor(r.buyoutAmount / math.max(1, r.quantity or 1)), link = r.itemLink }
                 end
             end
-            return F.SellPrice(e, offers)
+            local sp = F.SellPrice(e, offers)
+            if sp ~= nil then return sp end                 -- nil: a looted green with no auction of its suffix (decision 735)
         end
         for i = 1, n do
             local r = A.GetItemSearchResultInfo(e.itemKey, i)
