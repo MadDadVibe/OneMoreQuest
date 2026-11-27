@@ -301,6 +301,16 @@ function AH.Evaluate()
     end)
 end
 
+-- fix 738 (MadDadVibe): a flip held back by the flip rules shows why in the select list
+function AH.FlipWhy(e)
+    local F = OMQ.Flip
+    local paid = F and F.PaidAny and F.PaidAny(e.itemID)
+    local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[e.itemID]
+    local need = paid and math.ceil(paid * (F.REPOST_GAIN or 1.2) / (1 - (F.CUT or 0.05))) or nil
+    local back = x and x.unsold or 0
+    return string.format("|cffff9a6aflip back %dx: +20%% needs %s|r, now %s", back, need and money(need) or "?", money(e.price or 0))
+end
+
 -- the lists the panel shows
 function AH.Lists()
     local fast, select, out, pending, total, income, value = {}, {}, {}, 0, 0, 0, 0
@@ -310,6 +320,7 @@ function AH.Lists()
                 select[#select + 1] = e
                 if not e.skipped and not e.useful then fast[#fast + 1] = e; total = total + e.gain; income = income + (e.income or 0); value = value + (e.value or 0) end
             elseif e.keep then                                -- the second way of a consumable: counted once
+            elseif e.state == "flipwait" then select[#select + 1] = e   -- fix 738: in the select list with its reason, never fast
             elseif e.state == "price" then pending = pending + 1
             else out[#out + 1] = e end
         end
@@ -319,6 +330,8 @@ function AH.Lists()
     local function g(e) return (e.keep and e.twin) and e.twin.gain or e.gain end
     table.sort(select, function(a, b)
         if a.skipped ~= b.skipped then return not a.skipped end
+        local fa, fb = a.state == "flipwait", b.state == "flipwait"
+        if fa ~= fb then return fb end                         -- fix 738: held flips at the end
         if g(a) ~= g(b) then return g(a) > g(b) end
         if a.itemID ~= b.itemID then return a.itemID < b.itemID end
         return not a.keep and b.keep
@@ -445,6 +458,8 @@ local function readPrice(e)
 end
 
 AH._ReadPrice = function(e) return readPrice(e) end   -- for the tests (decision 725)
+AH._Entries = function() return entries end           -- for the tests (fix 738)
+AH._Prices = function() return prices end
 local function gotPrice(e)
     e.timeouts = nil
     if e.onResult then                                   -- a search of the buy mode (decision 264)
@@ -880,7 +895,7 @@ end
 
 function AH.Post(e, fromSelect)
     local A = CA()
-    if not (A and e and e.state == "ok" and AH.open) then return false end
+    if not (A and e and (e.state == "ok" or (fromSelect and e.state == "flipwait")) and AH.open) then return false end   -- fix 738: by hand anyway
     AH.Quiet()
     postCheck()
     if AH.Busy() then AH.Refresh(); return false end         -- still on its way: this click is ignored (decision 281)
@@ -1312,7 +1327,7 @@ function AH.Refresh()
         local list = L.select
         selUI.offset = math.min(selUI.offset, math.max(0, #list - AH.ROWS))
         local open = 0
-        for _, e in ipairs(list) do if not e.skipped then open = open + 1 end end
+        for _, e in ipairs(list) do if not e.skipped and e.state ~= "flipwait" then open = open + 1 end end
         selUI.head:SetText(L.pending > 0 and string.format("Checking prices... %d of %d", L.count - L.pending, L.count)
             or string.format("%d to post - left click: post, right click: skip", open))
         local shown = 0
@@ -1337,8 +1352,10 @@ function AH.Refresh()
                 -- a consumable I use: which of the two ways this row is (decision 274)
                 if e.keep then each = "|cff7fc8ffyour consumable|r - |cff9fdc8akeep " .. e.keep .. "|r" .. (each ~= "" and (" - " .. each) or "")
                 elseif e.useful then each = "|cff7fc8ffyour consumable|r - |cffff9a6asell all|r" .. (each ~= "" and (" - " .. each) or "") end
+                if e.state == "flipwait" then each = AH.FlipWhy(e) end   -- fix 738: why the flip rules hold it back
                 r.prices:SetText(each)
                 if pendingConfirm and pendingConfirm.entry == e then r.right:SetText("Click: confirm"); r.right:SetTextColor(0.95, 0.82, 0.48)
+                elseif e.state == "flipwait" then r.right:SetText("Flip waits"); r.right:SetTextColor(0.54, 0.56, 0.61)
                 elseif e.skipped then r.right:SetText(db().skip[e.itemID] == "unsold" and "Unsold" or "Skipped"); r.right:SetTextColor(0.54, 0.56, 0.61)
                 else r.right:SetText(money((e.price or 0) * (e.commodity and (e.qty or 1) or 1))); r.right:SetTextColor(0.95, 0.82, 0.48) end
             end
