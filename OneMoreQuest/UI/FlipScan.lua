@@ -34,6 +34,9 @@ F.METHODS = {
     gap3 = { nth = 3, ratio = 2, few = false, label = "3rd 2x, lvl 30-50" },
     -- decision 727: the same for the levels 10-29
     gap3low = { nth = 3, ratio = 2, few = false, label = "3rd 2x, lvl 10-29", minLevel = 10, maxLevel = 29 },
+    -- decision 731: the same for plate armor of level 40-42 only (one browse: armor, subcategory plate)
+    gap3plate = { nth = 3, ratio = 2, few = false, label = "3rd 2x, plate 40-42", minLevel = 40, maxLevel = 42,
+                  only = { c = 4, s = 4 } },
 }
 F.CUT = 0.05              -- the auction house's cut of a sale
 -- the suffixes as the game names them, lower case ("Ä" stays as it is: string.lower leaves non-ASCII bytes alone)
@@ -163,6 +166,7 @@ function F.Consider(e)
     e.name = name
     e.suffix = F.SuffixOf(name)
     local c, sc = classOf(e.id)
+    if m.only and not (c == m.only.c and sc == m.only.s) then e.match = false; return false end   -- decision 731
     if e.suffix and c == 2 and not (F.CASTER[e.suffix] and F.WEAPON_KINDS[sc]) then e.suffix = nil end   -- fixes 723, 729
     e.match = (e.suffix ~= nil and (q == nil or q == 2)) and true or false
     return e.match
@@ -519,7 +523,9 @@ function F.Start(method)
     if not (api and api.SendBrowseQuery and api.GetBrowseResults and api.SendSearchQuery) then return false, "this client has no browse list" end
     if OMQ.AHTest and OMQ.AHTest.Running and OMQ.AHTest.Running() then return false, "the test window is searching" end
     local queue = {}
-    for _, c in ipairs(F.CLASSES) do queue[#queue + 1] = { c = c } end
+    local om = F.METHODS[F.method].only
+    if om then queue[1] = { c = om.c, s = om.s }                -- decision 731: one subcategory
+    else for _, c in ipairs(F.CLASSES) do queue[#queue + 1] = { c = c } end end
     for k in pairs(lines) do lines[k] = nil end
     for k in pairs(rows) do rows[k] = nil end              -- a new search: every offer is new
     newRun(queue)
@@ -893,7 +899,7 @@ local function build()
     local ok, f = pcall(CreateFrame, "Frame", "OneMoreQuestFlip", UIParent, "BasicFrameTemplateWithInset")
     if not ok or not f then return end
     frame = f
-    f:SetSize(380, 156 + F.ROWS * (F.ROW_H + 2))
+    f:SetSize(380, 180 + F.ROWS * (F.ROW_H + 2))
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
@@ -910,13 +916,13 @@ local function build()
     f.status = st
     local again = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     again:SetSize(110, 22)
-    again:SetPoint("TOPLEFT", 12, -88)
+    again:SetPoint("TOPLEFT", 12, -112)
     -- fix 724: the two methods; a click starts the search with it
     f.methods = {}
-    for i, key in ipairs({ "flip", "gap3", "gap3low" }) do
+    for i, key in ipairs({ "flip", "gap3", "gap3low", "gap3plate" }) do
         local mb = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        mb:SetSize(116, 22)
-        mb:SetPoint("TOPLEFT", 12 + (i - 1) * 120, -60)
+        mb:SetSize(173, 22)                                 -- two rows of two (decision 731)
+        mb:SetPoint("TOPLEFT", 12 + ((i - 1) % 2) * 179, -60 - math.floor((i - 1) / 2) * 24)
         mb:SetText(F.METHODS[key].label)
         mb:SetScript("OnClick", function()
             local ok2, err = pcall(function()
@@ -949,7 +955,7 @@ local function build()
     end)
     f.all = all
     local listFrame = CreateFrame("Frame", nil, f)
-    listFrame:SetPoint("TOPLEFT", 14, -116)
+    listFrame:SetPoint("TOPLEFT", 14, -140)
     listFrame:SetSize(348, F.ROWS * (F.ROW_H + 2))
     listFrame:EnableMouseWheel(true)
     listFrame:SetScript("OnMouseWheel", function(_, d)
