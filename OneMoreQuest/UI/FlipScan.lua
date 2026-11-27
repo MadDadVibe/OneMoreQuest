@@ -57,7 +57,7 @@ F.SUFFIXES = {
     { key = "hierophant", "of the hierophant", "des hierophanten" },
 }
 -- fix 739 (MadDadVibe): Hierophant no longer looked for; Knight only on plate armor of required level 40 and up
-F.OFF = { hierophant = true }
+F.OFF = { hierophant = true, channeler = true }   -- fix 740: Channeler out too
 F.KNIGHT_PLATE = 40       -- false: Knight everywhere
 -- fix 723 (MadDadVibe): melee weapons are blue all the time, nobody buys green ones - weapons count only with a
 -- caster suffix; armor keeps all seven
