@@ -920,6 +920,16 @@ end
 -- decision 725 (MadDadVibe): a bought flip is posted at F.SELL_FACTOR times what it cost (3, fix 730; was 2), but at most at the next auction of
 -- exactly its suffix (minus 1 copper; the game's sell search also shows the other suffixes of the item, they do not
 -- count, neither do my own). offers: the other auctions of the item { unit, link }. The floor (F.Floor) comes after.
+-- fix 734 (MadDadVibe): rings and amulets may be posted up to 1 gold over 3 times their price
+F.JEWEL_BONUS = 10000
+F.JEWEL_SLOTS = { INVTYPE_FINGER = true, INVTYPE_NECK = true }
+function F.JewelBonus(id)
+    local f = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    if not (f and id) then return 0 end
+    local ok, _, _, _, slot = pcall(f, id)
+    if ok and F.JEWEL_SLOTS[slot] then return F.JEWEL_BONUS end
+    return 0
+end
 function F.SellPrice(e, offers)
     local sfx = F.LinkSuffix(e.link)
     local paid = F.Paid(e.itemID, sfx)
@@ -938,7 +948,7 @@ function F.SellPrice(e, offers)
     end
     local price
     if paid and paid > 0 then
-        price = paid * F.SELL_FACTOR
+        price = paid * F.SELL_FACTOR + F.JewelBonus(e.itemID)   -- fix 734: rings and amulets 1 gold more
         if nextP and nextP - 1 < price then price = nextP - 1 end
     else
         price = nextP or false
