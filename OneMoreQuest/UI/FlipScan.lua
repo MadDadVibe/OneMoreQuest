@@ -59,6 +59,15 @@ F.SUFFIXES = {
 -- fix 739 (MadDadVibe): Hierophant no longer looked for; Knight only on plate armor of required level 40 and up
 F.OFF = { hierophant = true, channeler = true }   -- fix 740: Channeler out too
 F.KNIGHT_PLATE = 40       -- false: Knight everywhere
+F.KNIGHT_MAIL = { 10, 39 } -- fix 741 (MadDadVibe): Knight also on mail ("Schwere Ruestung") of required level 10-39
+function F.KnightFits(c, sc, level)
+    if not F.KNIGHT_PLATE then return true end
+    local l = level or 0
+    if c ~= 4 then return false end
+    if sc == 4 then return l >= F.KNIGHT_PLATE end
+    if sc == 3 and F.KNIGHT_MAIL then return l >= F.KNIGHT_MAIL[1] and l <= F.KNIGHT_MAIL[2] end
+    return false
+end
 -- fix 723 (MadDadVibe): melee weapons are blue all the time, nobody buys green ones - weapons count only with a
 -- caster suffix; armor keeps all seven
 F.CASTER = { sorcerer = true, elder = true, channeler = true, hierophant = true }
@@ -187,7 +196,7 @@ function F.Consider(e)
     if m.only and not (c == m.only.c and sc == m.only.s) then e.match = false; return false end   -- decision 731
     if c == 2 and not F.WEAPONS then e.match = false; return false end   -- fix 737
     if e.suffix and F.OFF[e.suffix] then e.suffix = nil end                -- fix 739
-    if e.suffix == "knight" and F.KNIGHT_PLATE and not (c == 4 and sc == 4 and (e.level or 0) >= F.KNIGHT_PLATE) then e.suffix = nil end
+    if e.suffix == "knight" and not F.KnightFits(c, sc, e.level) then e.suffix = nil end   -- fixes 739, 741
     if e.suffix and c == 2 and not (F.CASTER[e.suffix] and F.WEAPON_KINDS[sc]) then e.suffix = nil end   -- fixes 723, 729
     e.match = (e.suffix ~= nil and (q == nil or q == 2)) and true or false
     return e.match
