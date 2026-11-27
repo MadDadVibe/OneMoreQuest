@@ -480,6 +480,11 @@ local function allSections()
               tip = "Lists what in your bags brings at least 5% more on the auction house than at the vendor and posts it with one click per auction. Fast mode: one button. Select mode: one row per item. Buy: weapon upgrades and the buff items of your class, stock up with one click per item.",
               get = function() return OMQ.db.options.ahHelper ~= false end,
               set = function(v) OMQ.db.options.ahHelper = v and true or false end },
+            -- decision 722
+            { type = "check", label = "Trading company reputation (Rep tab)", unlock = "auction",
+              tip = "A Rep tab in the auction helper: your standing with the trading company and Merchant's Favor, every Waylaid Crate ranked by the cost of one Favor (crate plus the cheapest bundle, from the scanned prices) and the cheapest way to your goal standing, made into a shopping list with one click. Also a card when a crate in your bags can be filled with what you carry. Off by default. /omq rep prints the plan.",
+              get = function() return OMQ.db.options.tradeRep == true end,
+              set = function(v) if OMQ.TradeRep then OMQ.TradeRep.SetEnabled(v) else OMQ.db.options.tradeRep = v and true or false end end },
             -- decision 341: auction prices of everything and the crafting profit
             { type = "check", label = "Scan all auction prices when the auction house opens", unlock = "auction",
               tip = "Reads the whole auction house once an hour (it gives way to the auction helper) and keeps the lowest price of every item. The crafting profit uses these prices. /omq prices scan starts a scan by hand.",

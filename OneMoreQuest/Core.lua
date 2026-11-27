@@ -5,7 +5,7 @@ OMQ = OMQ or {}
 _G.OneMoreQuest = OMQ
 
 OMQ.name = "One More Quest"
-OMQ.version = "1.3.324"
+OMQ.version = "1.3.325"
 
 -- the last bag to look into for what I carry: the reagent bag too, if the client has one (decision 272)
 function OMQ.LastBag()
@@ -27,6 +27,8 @@ local DEFAULTS = {
         autoShare = true,
         snoozeUntil = 0,
         buffOnlyAddon = false,
+        tradeRep = false,            -- the Rep tab of the auction helper and the fill card, off by default (decision 722)
+        tradeRepGoal = 6,            -- its goal standing: Honored (decision 722)
         rangeButtons = false,        -- red tint on out-of-range action buttons, off by default (decision 718)
         rangeDisplay = false,        -- distance bar to the target, off by default (decision 718)
         petSteps = false,            -- mute pet sounds while the own pet is out (decision 718)

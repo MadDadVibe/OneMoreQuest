@@ -1025,7 +1025,9 @@ local function build()
     panel.buyBtn = tab("Buy", "buy", 10 + AH.TAB_W)
     panel.upgBtn = tab("Upgrades", "upg", 10 + 2 * AH.TAB_W)    -- gear, weapons and bags (decision 637)
     panel.shopBtn = tab("Shopping", "shop", 10 + 3 * AH.TAB_W)  -- the shopping lists (decision 551)
+    panel.repBtn = tab("Rep", "rep", 10 + 4 * AH.TAB_W)     -- the trading company reputation, optional (decision 722)
     panel.sellBtn.mode, panel.buyBtn.mode, panel.upgBtn.mode, panel.shopBtn.mode = "sell", "buy", "upg", "shop"
+    panel.repBtn.mode = "rep"
     panel.BOX = BOX
     local function segment(label, mode, x, onClick)
         local b = CreateFrame("Button", nil, panel)
@@ -1157,8 +1159,22 @@ end
 AH.MODE_HINT = { fast = "one button, item after item", select = "pick item by item",
                  fill = "a click fills up to the target", single = "a click buys one piece" }
 
+-- four tabs of 90, or five of 72 with the optional Rep tab (decision 722)
+function AH.LayoutTabs(repOn)
+    if not panel then return end
+    local tabs = { panel.sellBtn, panel.buyBtn, panel.upgBtn, panel.shopBtn }
+    if repOn then tabs[5] = panel.repBtn end
+    local w = math.floor(AH.TAB_W * 4 / #tabs)
+    for i, t in ipairs(tabs) do
+        t:SetWidth(w); t:ClearAllPoints(); t:SetPoint("TOPLEFT", 10 + (i - 1) * w, -30)
+        t.text:SetFontObject(repOn and "GameFontNormalSmall" or "GameFontNormal")
+    end
+    if repOn then panel.repBtn:Show() else panel.repBtn:Hide() end
+end
+
 function AH.SetView(v, auto)
-    AH.view = (v == "buy" or v == "shop" or v == "upg") and v or "sell"
+    local rep = v == "rep" and OMQ.TradeRep and OMQ.TradeRep.Enabled()
+    AH.view = (v == "buy" or v == "shop" or v == "upg" or rep) and v or "sell"
     if AH.view == "upg" and OMQ.AuctionBuy and OMQ.AuctionBuy.OpenUpgrades then OMQ.AuctionBuy.OpenUpgrades() end
     if not auto then AH.manualView = true end
     AH.Refresh()
@@ -1170,17 +1186,29 @@ function AH.Refresh()
     paintScan()
     local L = AH.Lists()
     -- the helper stays on Sell until the dad opens Buy himself (decision 431; before: on to buying when nothing was left)
-    local buy, shop, upg = AH.view == "buy", AH.view == "shop", AH.view == "upg"
+    local T = OMQ.TradeRep
+    local repOn = T and T.Enabled() or false
+    if AH.view == "rep" and not repOn then AH.view = "sell" end
+    AH.LayoutTabs(repOn)
+    local buy, shop, upg, rep = AH.view == "buy", AH.view == "shop", AH.view == "upg", AH.view == "rep"
     local S, U = OMQ.Shopping, OMQ.AuctionUpgrades
-    paintTab(panel.sellBtn, not buy and not shop and not upg); paintTab(panel.buyBtn, buy)
-    paintTab(panel.upgBtn, upg); paintTab(panel.shopBtn, shop)
+    paintTab(panel.sellBtn, not buy and not shop and not upg and not rep); paintTab(panel.buyBtn, buy)
+    paintTab(panel.upgBtn, upg); paintTab(panel.shopBtn, shop); paintTab(panel.repBtn, rep)
     local nLists = S and S.Count() or 0
     panel.shopBtn.text:SetText(nLists > 0 and string.format("Shopping |cff66d17a(%d)|r", nLists) or "Shopping")
-    for _, b in ipairs({ panel.fastBtn, panel.selBtn }) do b:SetShown(not buy and not shop and not upg) end
+    for _, b in ipairs({ panel.fastBtn, panel.selBtn }) do b:SetShown(not buy and not shop and not upg and not rep) end
     for _, b in ipairs({ panel.fillBtn, panel.oneBtn }) do b:SetShown(buy) end
-    panel.modeHint:SetShown(not shop and not upg)
+    panel.modeHint:SetShown(not shop and not upg and not rep)
     if not shop and S then S.Hide() end
     if not upg and U then U.Hide() end
+    if not rep and T then T.Hide() end
+    if rep then                                        -- the trading company reputation (decision 722)
+        if OMQ.AuctionBuy then OMQ.AuctionBuy.Hide() end
+        fastUI:Hide(); selUI:Hide(); panel.out:SetText("")
+        local h = T.Render(panel, AH.HEAD)
+        panel:SetHeight(AH.HEAD + h + 16)
+        return
+    end
     if upg and U then                                  -- the Upgrades tab (decision 637)
         if OMQ.AuctionBuy then OMQ.AuctionBuy.Hide() end
         fastUI:Hide(); selUI:Hide(); panel.out:SetText("")

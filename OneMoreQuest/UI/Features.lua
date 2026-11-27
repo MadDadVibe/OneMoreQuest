@@ -91,6 +91,7 @@ FE.SECTIONS = {
         "Quests at the NPC: accepted (not the grey ones), finished ones handed in, the best reward marked by item score",
         "Quest item tooltips name their quests: level coloured by difficulty, zone and state (in log with progress, done, not accepted, turned in)",
         { "Auction helper: everything worth more on the auction house (green items and materials at least 30% more), posted with one click each - fast or select mode; it starts with a scan of the whole auction house every 4 hours", unlock = "auction" },
+        { "Optional, in the options: a Rep tab in the auction helper - the cheapest way to the trading company reputation (Waylaid Crates by the price of one Merchant's Favor, delivery receipts, writs) as a shopping list, and a card when a crate in your bags can be filled", unlock = "auction" },
         { "Auction helper, shopping lists: the Shopping tab buys a list (from the Profession Check) item by item with one button; items cheaper at a vendor are listed apart", unlock = "auction" },
         { "Auction helper, buy mode: weapon upgrades you can wear right now, cheap potions, elixirs, stones, oils, scrolls, buff food and armor kits under a price limit, bags, reagent bags and quivers for your class - stock up or buy single pieces", unlock = "auction" },
         "Vendor helper: what to sell at the vendor - grey items, gear not worth the auction house or unsold, old food and drink, recipes of professions you do not have",
