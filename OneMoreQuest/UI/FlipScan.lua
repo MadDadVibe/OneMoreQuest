@@ -30,8 +30,10 @@ F.MAX_BUY = 10000         -- fix 724 (MadDadVibe): no offer over 1 gold is ever 
 --   "flip": the 6th cheapest >= 1.5x the cheapest (decision 721), fewer than 6 offers: every one under 1 gold
 --   "gap3": the 3rd cheapest >= 2x the cheapest - easy buyouts, sold again at the 3rd price minus 1 copper
 F.METHODS = {
-    flip = { nth = 6, ratio = 1.5, few = true, label = "6th cheapest 1.5x" },
-    gap3 = { nth = 3, ratio = 2, few = false, label = "3rd cheapest 2x" },
+    flip = { nth = 6, ratio = 1.5, few = true, label = "6th 1.5x, lvl 30-50" },
+    gap3 = { nth = 3, ratio = 2, few = false, label = "3rd 2x, lvl 30-50" },
+    -- decision 727: the same for the levels 10-29
+    gap3low = { nth = 3, ratio = 2, few = false, label = "3rd 2x, lvl 10-29", minLevel = 10, maxLevel = 29 },
 }
 F.CUT = 0.05              -- the auction house's cut of a sale
 -- the suffixes as the game names them, lower case ("Ä" stays as it is: string.lower leaves non-ASCII bytes alone)
@@ -270,7 +272,8 @@ function F.Quality()
     return Q and { Q } or {}
 end
 function F.Query(c, s)
-    local q = OMQ.Prices.GameQuery(c, s, F.MIN_LEVEL, F.MAX_LEVEL, sorts())
+    local m = F.METHODS[(run and run.method) or F.method or "flip"] or F.METHODS.flip
+    local q = OMQ.Prices.GameQuery(c, s, m.minLevel or F.MIN_LEVEL, m.maxLevel or F.MAX_LEVEL, sorts())
     q.filters = F.Quality()
     return q
 end
@@ -518,7 +521,9 @@ function F.Start(method)
     for k in pairs(rows) do rows[k] = nil end              -- a new search: every offer is new
     newRun(queue)
     F.Build()
-    status("searching the auction house for green gear of level 30-50 (" .. F.METHODS[F.method].label .. ")...")
+    local m = F.METHODS[F.method]
+    status(string.format("searching the auction house for green gear of level %d-%d (%s)...", m.minLevel or F.MIN_LEVEL,
+        m.maxLevel or F.MAX_LEVEL, m.label))
     return true
 end
 
@@ -793,10 +798,10 @@ local function build()
     again:SetPoint("TOPLEFT", 12, -88)
     -- fix 724: the two methods; a click starts the search with it
     f.methods = {}
-    for i, key in ipairs({ "flip", "gap3" }) do
+    for i, key in ipairs({ "flip", "gap3", "gap3low" }) do
         local mb = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        mb:SetSize(173, 22)
-        mb:SetPoint("TOPLEFT", 12 + (i - 1) * 179, -60)
+        mb:SetSize(116, 22)
+        mb:SetPoint("TOPLEFT", 12 + (i - 1) * 120, -60)
         mb:SetText(F.METHODS[key].label)
         mb:SetScript("OnClick", function()
             local ok2, err = pcall(function()
