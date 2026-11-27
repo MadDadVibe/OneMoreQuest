@@ -204,9 +204,8 @@ function AH.Scan()
                         elseif deMode and DS.HideFromAH(DS.Takes(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, nil, deMode)) then
                             e.out = "disenchant"
                         elseif deNotYet then e.out = "upgrade"          -- not worth disenchanting: kept as before
-                        elseif OMQ.Flip and OMQ.Flip.LootGreen and OMQ.Flip.LootGreen(it, classID, equipLoc, comm)
-                               and OMQ.Flip.AdoptLoot(it.itemID, vendor, link, name or it.itemName) then
-                            e.flip = true                                -- looted green BoE: sold as a flip (decision 735)
+                        -- fix 742 (MadDadVibe): looted green BoE gear no longer becomes a flip by itself (decision 735 taken back);
+                        -- only what the flip window bought is a flip. Loot taken in before stays a flip until it is sold.
                         end
                         local k = A.GetItemKeyFromItem and A.GetItemKeyFromItem(loc)
                         e.itemKey = k or (A.MakeItemKey and A.MakeItemKey(it.itemID)) or { itemID = it.itemID }

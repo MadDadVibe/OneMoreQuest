@@ -963,7 +963,9 @@ function P.TooltipLines(id, count, shift)
         vendor, _, vLimited = P.NearestVendor(id)
         if vendor then buy = P.BuyPrice(id) end
     end
-    if not a and not sell and not deText and not vendor then return nil end
+    local F = OMQ.Flip                                      -- fix 742: what a flip of mine cost ("buy in")
+    local paidIn = F and F.Owns and F.Owns(id) and F.PaidAny and F.PaidAny(id) or nil
+    if not a and not sell and not deText and not vendor and not paidIn then return nil end
     local head = "OMQ"
     if a then
         local live = store().items[id] and store().items[id].t
@@ -975,6 +977,7 @@ function P.TooltipLines(id, count, shift)
     if sell then rows[#rows + 1] = { "Vendor:", stackText(sell, count), C.vendor, sell } end
     if a then rows[#rows + 1] = { "Auction:", stackText(a, count), C.auction, a } end
     if deText then rows[#rows + 1] = { "Disenchant:", deText, C.disenchant, deValue }; if D then D.last = id end end
+    if paidIn then rows[#rows + 1] = { "Buy in:", money(paidIn), C.buy } end   -- fix 742: never the "best" one
     local best
     for _, r in ipairs(rows) do if r[4] and r[4] > 0 and (not best or r[4] > best[4]) then best = r end end
     if best then best[3] = C.best end
