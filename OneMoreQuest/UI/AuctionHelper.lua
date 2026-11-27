@@ -860,7 +860,7 @@ end
 AH._PostCheck = postCheck
 local function startPosting(e)
     e.posted = true
-    if e.flip and OMQ.Flip and OMQ.Flip.Posted then OMQ.Flip.Posted(e.itemID) end   -- decision 728
+    if e.flip and OMQ.Flip and OMQ.Flip.Posted then OMQ.Flip.Posted(e.itemID, e.deposit) end   -- decision 728, 732: with its deposit
     counted(e)
     posting = { entry = e, key = e.key, itemID = e.itemID, before = itemCount(e.itemID), at = now() }
     if C_Timer and C_Timer.After then
@@ -895,6 +895,11 @@ function AH.Post(e, fromSelect)
     local args, needs
     local dur = AH.DURATION
     if e.flip and OMQ.Flip and OMQ.Flip.PostDuration then dur = OMQ.Flip.PostDuration() end   -- decision 726
+    e.deposit = nil
+    if e.flip and not e.commodity and A.CalculateItemDeposit then   -- decision 732: what an unsold flip costs
+        local okD, d = pcall(A.CalculateItemDeposit, e.loc, dur, 1)
+        if okD and type(d) == "number" then e.deposit = d end
+    end
     if e.commodity then
         args = { e.loc, dur, e.qty, price }
         needs = AH.Own(A.PostCommodity, unpack(args))

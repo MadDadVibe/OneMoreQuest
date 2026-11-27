@@ -657,6 +657,9 @@ function F.Result(id, sold, got, name)
     if not x then return false end
     if sold then
         local paid = F.Paid(id) or 0
+        got = tonumber(got) or 0
+        if x.dep and got > x.dep then got = got - x.dep end   -- decision 732: the mail gives the deposit back, not earned
+        x.dep = nil
         F.Note(id, "s", got, name)
         local it = items()[id]
         it.cost = (it.cost or 0) + paid                    -- what the sold pieces cost
@@ -665,6 +668,9 @@ function F.Result(id, sold, got, name)
         return false
     end
     F.Note(id, "u", 0, name)
+    local it = items()[id]
+    it.fees = (it.fees or 0) + (x.dep or 0)                -- decision 732: the deposit of an unsold auction is lost
+    x.dep = nil
     x.unsold = (x.unsold or 0) + 1
     if x.unsold >= F.REPOSTS then x.released = true; return false end   -- to the vendor now
     return true
@@ -680,9 +686,9 @@ function F.Vendored(id, price)
     x.n = (x.n or 1) - 1
     if x.n <= 0 then db().owned[id] = nil end
 end
-function F.Posted(id)
+function F.Posted(id, deposit)
     local x = db().owned[id]
-    if x then x.posts, x.t = (x.posts or 0) + 1, stamp() end
+    if x then x.posts, x.t, x.dep = (x.posts or 0) + 1, stamp(), tonumber(deposit) or 0 end
 end
 -- a flip that came back: posted again only when it brings at least REPOST_GAIN times its price after the cut
 function F.Waits(id, price)
@@ -695,11 +701,11 @@ function F.PaidAny(id)
     return x and x.paid
 end
 function F.Totals()
-    local t = { b = 0, s = 0, u = 0, v = 0, spent = 0, got = 0, cost = 0 }
+    local t = { b = 0, s = 0, u = 0, v = 0, spent = 0, got = 0, cost = 0, fees = 0 }
     for _, it in pairs(items()) do
         for k in pairs(t) do t[k] = t[k] + (it[k] or 0) end
     end
-    t.profit = t.got - t.cost                             -- what the sold and vendored pieces brought over their price
+    t.profit = t.got - t.cost - t.fees                    -- what the sold and vendored pieces brought over their price, minus lost deposits
     t.open = t.spent - t.cost                             -- still in the bags or on the auction house
     return t
 end
@@ -707,28 +713,143 @@ local function signed(c)
     if c < 0 then return "-" .. money(-c) end
     return "+" .. money(c)
 end
-function F.History()
-    local out = {}
+-- decision 732 (MadDadVibe): the history in a small window; F.Rows gives its lines, F.History the same as text
+function F.Rows()
     local t = F.Totals()
-    out[#out + 1] = string.format("item flips: bought %d for %s, sold %d (%s), %d came back unsold, %d to the vendor",
-        t.b, money(t.spent), t.s, money(t.got), t.u, t.v)
-    out[#out + 1] = string.format("  earned with flips: %s on %s of sold pieces; still out (bags / auction house): %s",
-        signed(t.profit), money(t.cost), money(t.open))
-    local list_ = {}
-    for id, it in pairs(items()) do list_[#list_ + 1] = { id = id, it = it } end
-    table.sort(list_, function(a, b) return (a.it.t or 0) > (b.it.t or 0) end)
-    for i = 1, math.min(15, #list_) do
-        local it = list_[i].it
-        out[#out + 1] = string.format("  %s: bought %d, sold %d, unsold %d%s, %s", it.name or ("item " .. list_[i].id), it.b, it.s, it.u,
-            it.v > 0 and (", vendor " .. it.v) or "", (it.s + it.v) > 0 and signed((it.got or 0) - (it.cost or 0)) or ("spent " .. money(it.spent)))
+    local head = {
+        { "Bought", string.format("%d for %s", t.b, money(t.spent)) },
+        { "Sold", string.format("%d for %s", t.s, money(t.got)) },
+        { "Came back unsold", tostring(t.u) },
+        { "To the vendor", tostring(t.v) },
+        { "Deposits lost (unsold)", money(t.fees) },
+        { "Earned with flips", signed(t.profit) .. " (on " .. money(t.cost) .. " of sold pieces)" },
+        { "Still out (bags / AH)", money(t.open) },
+    }
+    local rows = {}
+    for id, it in pairs(items()) do rows[#rows + 1] = { id = id, it = it } end
+    table.sort(rows, function(a, b) return (a.it.t or 0) > (b.it.t or 0) end)
+    local out = {}
+    for _, r in ipairs(rows) do
+        local it = r.it
+        local done = (it.s + it.v) > 0
+        out[#out + 1] = {
+            id = r.id, name = it.name or ("item " .. r.id),
+            text = string.format("bought %d, sold %d, unsold %d%s%s", it.b, it.s, it.u, it.v > 0 and (", vendor " .. it.v) or "",
+                (it.fees or 0) > 0 and (", deposits " .. money(it.fees)) or ""),
+            result = done and signed((it.got or 0) - (it.cost or 0) - (it.fees or 0)) or ("spent " .. money(it.spent)),
+            gain = done and ((it.got or 0) - (it.cost or 0) - (it.fees or 0)) or nil,
+        }
     end
-    if #list_ > 15 then out[#out + 1] = string.format("  ... and %d more items", #list_ - 15) end
-    if #list_ == 0 then out[#out + 1] = "  nothing bought with item flips yet" end
+    return head, out
+end
+function F.History()
+    local head, rows = F.Rows()
+    local out = { "item flips:" }
+    for _, h in ipairs(head) do out[#out + 1] = "  " .. h[1] .. ": " .. h[2] end
+    for i = 1, math.min(15, #rows) do out[#out + 1] = "  " .. rows[i].name .. ": " .. rows[i].text .. ", " .. rows[i].result end
+    if #rows > 15 then out[#out + 1] = string.format("  ... and %d more items", #rows - 15) end
+    if #rows == 0 then out[#out + 1] = "  nothing bought with item flips yet" end
     return out
 end
+
+local hist
+F.HIST_ROWS = 14
+F.histOffset = 0
+local function histBuild()
+    local ok, f = pcall(CreateFrame, "Frame", "OneMoreQuestFlipHistory", UIParent, "BasicFrameTemplateWithInset")
+    if not ok or not f then return end
+    hist = f
+    f:SetSize(420, 196 + F.HIST_ROWS * 16)
+    f:SetPoint("CENTER")
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:SetFrameStrata("HIGH")
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOP", 0, -5)
+    title:SetText("One More Quest - flip history")
+    f.head = {}
+    for i = 1, 7 do
+        local l = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        l:SetPoint("TOPLEFT", 16, -30 - (i - 1) * 16)
+        local v = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        v:SetPoint("TOPLEFT", 170, -30 - (i - 1) * 16)
+        v:SetWidth(234)
+        v:SetJustifyH("LEFT")
+        f.head[i] = { l = l, v = v }
+    end
+    local box = CreateFrame("Frame", nil, f)
+    box:SetPoint("TOPLEFT", 14, -150)
+    box:SetSize(392, F.HIST_ROWS * 16)
+    box:EnableMouseWheel(true)
+    box:SetScript("OnMouseWheel", function(_, d)
+        F.histOffset = math.max(0, F.histOffset - d)
+        F.PaintHistory()
+    end)
+    f.rows = {}
+    for i = 1, F.HIST_ROWS do
+        local r = CreateFrame("Frame", nil, box)
+        r:SetSize(392, 16)
+        r:SetPoint("TOPLEFT", 0, -(i - 1) * 16)
+        r:EnableMouse(true)
+        r.name = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.name:SetPoint("LEFT", 2, 0)
+        r.name:SetWidth(300)
+        r.name:SetJustifyH("LEFT")
+        r.res = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.res:SetPoint("RIGHT", -2, 0)
+        r.res:SetJustifyH("RIGHT")
+        r:SetScript("OnEnter", function(self)
+            if not (self.data and GameTooltip) then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(self.data.name)
+            GameTooltip:AddLine(self.data.text, 1, 1, 1, true)
+            GameTooltip:AddLine(self.data.result, 1, 1, 1)
+            GameTooltip:Show()
+        end)
+        r:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+        f.rows[i] = r
+    end
+    f.empty = box:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    f.empty:SetPoint("TOPLEFT", 2, -2)
+    f.empty:SetText("nothing bought with item flips yet")
+    local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    hint:SetPoint("BOTTOMLEFT", 16, 12)
+    hint:SetText("Mouse wheel: scroll   Hover: details")
+    if UISpecialFrames then table.insert(UISpecialFrames, "OneMoreQuestFlipHistory") end
+end
+function F.PaintHistory()
+    if not hist then return end
+    local head, rows = F.Rows()
+    for i, h in ipairs(head) do hist.head[i].l:SetText(h[1]); hist.head[i].v:SetText(h[2]) end
+    F.histOffset = math.max(0, math.min(F.histOffset, math.max(0, #rows - F.HIST_ROWS)))
+    for i, r in ipairs(hist.rows) do
+        local d = rows[i + F.histOffset]
+        r.data = d
+        if d then
+            r.name:SetText(d.name .. "  |cffaaaaaa" .. d.text .. "|r")
+            r.res:SetText(d.result)
+            if d.gain and d.gain < 0 then r.res:SetTextColor(1, 0.3, 0.3) elseif d.gain then r.res:SetTextColor(0.3, 1, 0.3) else r.res:SetTextColor(0.8, 0.8, 0.8) end
+            r:Show()
+        else r:Hide() end
+    end
+    hist.empty:SetShown(#rows == 0)
+end
+function F.ShowHistory()
+    if not hist then histBuild() end
+    if not hist then return false end
+    F.histOffset = 0
+    F.PaintHistory()
+    hist:Show()
+    return true
+end
 OMQ:RegisterCommand("flip", function(arg)
-    for _, l in ipairs(F.History()) do OMQ:Print(l) end
-end, "item flips: what was bought, sold, came back, gold spent and earned")
+    if arg == "chat" or not F.ShowHistory() then
+        for _, l in ipairs(F.History()) do OMQ:Print(l) end
+    end
+end, "item flips: window with what was bought, sold, came back, deposits, gold spent and earned (chat = as text)")
 
 -- decision 726 (MadDadVibe): a flip is posted for 2 hours (short) by day, for 8 hours from 23:59 German time until
 -- 8:00 the next morning. German time = UTC+1, UTC+2 from the last Sunday of March to the last Sunday of October (1:00 UTC).
