@@ -3,14 +3,14 @@
 -- to 50 with one of the suffixes of the Sorcerer, Bandit, Knight, Beast, Elder, Channeler or Hierophant (English and
 -- German names, F.SUFFIXES; weapons only with the caster ones, F.CASTER, fix 723). Every item with its suffix counts on its own. A flip: at least 6 offers and the 6th
 -- cheapest at least 1.5 times the cheapest - the cheap ones are bought and sold again at the 6th price minus 1 copper;
--- every offer under 2/3 of that price is bought. Fewer than 6 offers: every offer under 1 gold is listed too
+-- every offer under 2/3 of that price is bought (never one over 1 gold, fix 724; a second method "gap3": 3rd >= 2x 1st). Fewer than 6 offers: every offer under 1 gold is listed too
 -- (MadDadVibe). Only buyouts count.
 -- The search: two browse searches (weapons, armor) in the form of the game's own window with the quality filter green
 -- and the levels 30-50 (decision 604), every page, a class whose list stops at a full page per subcategory; then one
 -- search per matching item (its offers, the cheapest first). The list fills while it runs.
 -- Left click on a row buys its next cheap offer: the first click searches that item again (a purchase needs the
 -- auction of the game's latest search, decision 431) and the search holds still a few seconds, every next click buys
--- one more. Right click: discarded until it is offered cheaper or for SKIP_TIME. "Buy next" buys from the first row.
+-- one more. Shift + left click shows the item in the game's own window (fix 724). Right click: discarded until it is offered cheaper or for SKIP_TIME. "Buy next" buys from the first row.
 -- What I bought is remembered (OMQDB.flip.owned, KEEP_DAYS): never sold to the vendor, never disenchanted, posted at
 -- the auction house never under its price plus the house's cut (F.Floor). While the search runs the auction helper and
 -- the price scan send nothing.
@@ -25,6 +25,14 @@ F.MIN_LEVEL, F.MAX_LEVEL = 30, 50
 F.NTH = 6                 -- the offer the cheapest is compared with
 F.RATIO = 1.5             -- the 6th cheapest at least this much times the cheapest
 F.CHEAP = 10000           -- fewer than NTH offers: every offer under 1 gold
+F.MAX_BUY = 10000         -- fix 724 (MadDadVibe): no offer over 1 gold is ever bought or shown
+-- fix 724: two methods, chosen with the two buttons on top; the search starts only after the choice
+--   "flip": the 6th cheapest >= 1.5x the cheapest (decision 721), fewer than 6 offers: every one under 1 gold
+--   "gap3": the 3rd cheapest >= 2x the cheapest - easy buyouts, sold again at the 3rd price minus 1 copper
+F.METHODS = {
+    flip = { nth = 6, ratio = 1.5, few = true, label = "6th cheapest 1.5x" },
+    gap3 = { nth = 3, ratio = 2, few = false, label = "3rd cheapest 2x" },
+}
 F.CUT = 0.05              -- the auction house's cut of a sale
 -- the suffixes as the game names them, lower case ("Ä" stays as it is: string.lower leaves non-ASCII bytes alone)
 F.SUFFIXES = {
@@ -136,7 +144,8 @@ end
 -- is a browse line an item to look at closely: true, false, or "wait" while the game loads it
 function F.Consider(e)
     if e.match ~= nil then return e.match end
-    if not ((e.qty or 0) >= F.NTH or (e.price or 0) < F.CHEAP) then e.match = false; return false end
+    local m = F.METHODS[(run and run.method) or "flip"]
+    if (e.price or 0) > F.MAX_BUY or not ((e.qty or 0) >= m.nth or (m.few and (e.price or 0) < F.CHEAP)) then e.match = false; return false end
     local name, q = nameOf(e)
     if not name then
         if not e.askedAt then
@@ -176,18 +185,22 @@ function F.ReadOffers(key)
 end
 
 -- the verdict of an item's offers: nil, or { kind = "gap" | "few", n, sell, maxBuy, buy = offers to buy, cost, profit }
-function F.Judge(offers)
+function F.Judge(offers, method)
+    local m = F.METHODS[method or "flip"] or F.METHODS.flip
     local n = #offers
     if n == 0 then return nil end
     local sell, maxBuy, kind
-    if n >= F.NTH then
-        local c1, c6 = offers[1].unit, offers[F.NTH].unit
-        if c6 < c1 * F.RATIO then return nil end
-        kind, sell = "gap", c6 - 1
-        maxBuy = math.floor(sell / F.RATIO)
-    else
+    if n >= m.nth then
+        local c1, cn = offers[1].unit, offers[m.nth].unit
+        if cn < c1 * m.ratio then return nil end
+        kind, sell = "gap", cn - 1
+        maxBuy = math.floor(sell / m.ratio)
+    elseif m.few then
         kind, maxBuy = "few", F.CHEAP - 1
+    else
+        return nil
     end
+    maxBuy = math.min(maxBuy, F.MAX_BUY)                   -- fix 724
     local buy, cost, profit = {}, 0, 0
     for _, o in ipairs(offers) do
         if not o.mine and o.qty == 1 and o.unit <= maxBuy then
@@ -216,7 +229,7 @@ function F.Take(e, offers, check)
         rows[ks] = r
     end
     r.name, r.icon = e.name or r.name, e.icon or r.icon
-    local j = F.Judge(offers)
+    local j = F.Judge(offers, F.method)
     r.offers, r.fresh, r.hold = nil, nil, nil
     if not j then
         r.kind = nil
@@ -482,16 +495,18 @@ function F.OnItem(key)
         local ok, f = pcall(api.HasFullItemSearchResults, q.e.key)
         full = not ok or f ~= false
     end
-    if #offers >= F.NTH or full then itemDone(offers, "ok") end   -- the first page holds the cheapest ones
+    if #offers >= F.METHODS[run.method or "flip"].nth or full then itemDone(offers, "ok") end   -- the first page holds the cheapest ones
 end
 
 local function newRun(queue)
-    run = { state = "start", t0 = now(), queue = queue, qi = 0, items = {}, ii = 0, checks = {}, lines = 0, searched = 0,
+    run = { method = F.method, state = "start", t0 = now(), queue = queue, qi = 0, items = {}, ii = 0, checks = {}, lines = 0, searched = 0,
             waiting = 0, log = {} }
 end
 
-function F.Start()
+function F.Start(method)
+    if method then F.method = method end
     if run then return false, "already searching" end
+    if not F.METHODS[F.method or ""] then return false, "choose a method first" end
     local h = H()
     if not (h and h.open) then return false, "open the auction house first (with the auction helper on)" end
     local api = A()
@@ -503,7 +518,7 @@ function F.Start()
     for k in pairs(rows) do rows[k] = nil end              -- a new search: every offer is new
     newRun(queue)
     F.Build()
-    status("searching the auction house for green gear of level 30-50...")
+    status("searching the auction house for green gear of level 30-50 (" .. F.METHODS[F.method].label .. ")...")
     return true
 end
 
@@ -601,6 +616,15 @@ function F.Floor(id)
     return math.ceil(x.paid / (1 - F.CUT)) + 1
 end
 
+-- fix 724: Shift + left click opens exactly this item (with its suffix) in the game's own window, its Buy page
+function F.ShowInGame(r)
+    local f = _G.AuctionHouseFrame
+    if type(r) ~= "table" or not (f and f.SelectBrowseResult) then return false end
+    local ok, err = pcall(f.SelectBrowseResult, f, { itemKey = r.itemKey, minPrice = r.price })
+    if not ok then OMQ:Print("item flips: the auction house window could not show it (" .. tostring(err) .. ")") end
+    return ok
+end
+
 function F.Discard(r)
     if type(r) ~= "table" then return end
     db().skip[r.ks] = { p = r.offers and r.offers[1] and r.offers[1].unit or r.price, t = stamp() }
@@ -633,7 +657,9 @@ local function makeRow(i)
     r:SetPoint("TOPLEFT", frame.list, "TOPLEFT", 0, -(i - 1) * (F.ROW_H + 2))
     r:SetScript("OnClick", function(self, mouse)
         local ok, err = pcall(function()
-            if mouse == "RightButton" then F.Discard(self.omq) else F.Buy(self.omq) end
+            if mouse == "RightButton" then F.Discard(self.omq)
+            elseif IsShiftKeyDown and IsShiftKeyDown() then F.ShowInGame(self.omq)    -- fix 724
+            else F.Buy(self.omq) end
             F.Paint()
         end)
         if not ok then OMQ:Error("item flips", err) end
@@ -650,6 +676,7 @@ local function makeRow(i)
             GameTooltip:AddLine(string.format("only %d offers, %d of them under 1 gold", x.n or 0, #(x.offers or {})), 1, 0.82, 0)
         end
         GameTooltip:AddLine("Left click: buy the next cheap one (the first click looks for the auctions)", 0.6, 0.6, 0.6)
+        GameTooltip:AddLine("Shift + left click: show it in the auction house window", 0.6, 0.6, 0.6)
         GameTooltip:AddLine("Right click: discard (back when it is offered cheaper)", 0.6, 0.6, 0.6)
         GameTooltip:Show()
     end)
@@ -662,7 +689,7 @@ local function build()
     local ok, f = pcall(CreateFrame, "Frame", "OneMoreQuestFlip", UIParent, "BasicFrameTemplateWithInset")
     if not ok or not f then return end
     frame = f
-    f:SetSize(380, 128 + F.ROWS * (F.ROW_H + 2))
+    f:SetSize(380, 156 + F.ROWS * (F.ROW_H + 2))
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
@@ -679,7 +706,26 @@ local function build()
     f.status = st
     local again = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     again:SetSize(110, 22)
-    again:SetPoint("TOPLEFT", 12, -60)
+    again:SetPoint("TOPLEFT", 12, -88)
+    -- fix 724: the two methods; a click starts the search with it
+    f.methods = {}
+    for i, key in ipairs({ "flip", "gap3" }) do
+        local mb = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+        mb:SetSize(173, 22)
+        mb:SetPoint("TOPLEFT", 12 + (i - 1) * 179, -60)
+        mb:SetText(F.METHODS[key].label)
+        mb:SetScript("OnClick", function()
+            local ok2, err = pcall(function()
+                if run then F.Cancel() end
+                local started, why = F.Start(key)
+                if not started then OMQ:Print("item flips: " .. tostring(why)) end
+                F.Paint()
+            end)
+            if not ok2 then OMQ:Error("item flips", err) end
+        end)
+        mb.key = key
+        f.methods[i] = mb
+    end
     again:SetText("Search again")
     again:SetScript("OnClick", function()
         if run and not run.checkOnly then F.Cancel() else
@@ -699,7 +745,7 @@ local function build()
     end)
     f.all = all
     local listFrame = CreateFrame("Frame", nil, f)
-    listFrame:SetPoint("TOPLEFT", 14, -88)
+    listFrame:SetPoint("TOPLEFT", 14, -116)
     listFrame:SetSize(348, F.ROWS * (F.ROW_H + 2))
     listFrame:EnableMouseWheel(true)
     listFrame:SetScript("OnMouseWheel", function(_, d)
@@ -730,6 +776,10 @@ function F.Paint()
     end
     frame.status:SetText(text)
     frame.again:SetText((run and not run.checkOnly) and "Cancel" or "Search again")
+    if frame.again.SetEnabled then frame.again:SetEnabled(F.method ~= nil) end
+    for _, mb in ipairs(frame.methods) do
+        if mb.SetButtonState then mb:SetButtonState(mb.key == F.method and "PUSHED" or "NORMAL", mb.key == F.method) end
+    end
     local nx = list[1]
     if not nx then frame.all:SetText("Buy next: nothing to buy")
     else
@@ -778,10 +828,7 @@ function F.Open()
     local h = H()
     if not (h and h.open) then OMQ:Print("item flips: open the auction house first (with the auction helper on)"); return false end
     F.Show()
-    if not run then
-        local started, why = F.Start()
-        if not started then OMQ:Print("item flips: " .. tostring(why)); return false end
-    end
+    if not run and not F.method then status("choose a method above - the search starts then") end   -- fix 724
     return true
 end
 
