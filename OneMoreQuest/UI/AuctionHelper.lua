@@ -1083,8 +1083,9 @@ local function build()
     -- the flip helper's tabs (fix 753): Sell (the same as the auction helper's) | Buy | Blacklist
     panel.fbuyBtn = tab("Buy", "fbuy", 10 + AH.TAB_W)
     panel.fblackBtn = tab("Blacklist", "fblack", 10 + 2 * AH.TAB_W)
-    panel.fbuyBtn.mode, panel.fblackBtn.mode = "fbuy", "fblack"
-    panel.fbuyBtn:Hide(); panel.fblackBtn:Hide()
+    panel.fstatsBtn = tab("Stats", "fstats", 10 + 3 * AH.TAB_W)     -- fix 754
+    panel.fbuyBtn.mode, panel.fblackBtn.mode, panel.fstatsBtn.mode = "fbuy", "fblack", "fstats"
+    panel.fbuyBtn:Hide(); panel.fblackBtn:Hide(); panel.fstatsBtn:Hide()
     panel.BOX = BOX
     local function segment(label, mode, x, onClick)
         local b = CreateFrame("Button", nil, panel)
@@ -1220,11 +1221,11 @@ AH.MODE_HINT = { fast = "one button, item after item", select = "pick item by it
 function AH.LayoutTabs(repOn)
     if not panel then return end
     local flip = AH.helper == "flip"
-    local tabs = flip and { panel.sellBtn, panel.fbuyBtn, panel.fblackBtn } or { panel.sellBtn, panel.buyBtn, panel.upgBtn, panel.shopBtn }
+    local tabs = flip and { panel.sellBtn, panel.fbuyBtn, panel.fblackBtn, panel.fstatsBtn } or { panel.sellBtn, panel.buyBtn, panel.upgBtn, panel.shopBtn }
     if repOn and not flip then tabs[5] = panel.repBtn end
     local function shown(t, on) if on then t:Show() else t:Hide() end end
     for _, t in ipairs({ panel.buyBtn, panel.upgBtn, panel.shopBtn }) do shown(t, not flip) end
-    shown(panel.fbuyBtn, flip); shown(panel.fblackBtn, flip)
+    shown(panel.fbuyBtn, flip); shown(panel.fblackBtn, flip); shown(panel.fstatsBtn, flip)
     local w = math.floor(AH.TAB_W * 4 / #tabs)
     for i, t in ipairs(tabs) do
         t:SetWidth(w); t:ClearAllPoints(); t:SetPoint("TOPLEFT", 10 + (i - 1) * w, -30)
@@ -1236,7 +1237,7 @@ end
 -- fix 753 (MadDadVibe): the auction helper or the flip helper; the auction house opens with the one it was closed
 -- with (per character). The flip helper only when it is switched on for this character (options, Interface).
 AH.helper = "ah"
-AH.FLIP_VIEWS = { sell = true, fbuy = true, fblack = true }
+AH.FLIP_VIEWS = { sell = true, fbuy = true, fblack = true, fstats = true }
 local function flipOn() return OMQ.Flip and OMQ.Flip.Enabled and OMQ.Flip.Enabled() or false end
 function AH.SwitchHelper(which, keepView)
     which = (which == "flip" and flipOn()) and "flip" or "ah"
@@ -1265,7 +1266,7 @@ end
 
 function AH.SetView(v, auto)
     local rep = v == "rep" and OMQ.TradeRep and OMQ.TradeRep.Enabled()
-    if (v == "fbuy" or v == "fblack") and flipOn() then          -- fix 753: a tab of the flip helper
+    if (v == "fbuy" or v == "fblack" or v == "fstats") and flipOn() then          -- fix 753: a tab of the flip helper
         if AH.helper ~= "flip" then AH.helper = "flip"; if OMQ.Flip.SaveHelper then OMQ.Flip.SaveHelper("flip") end end
         AH.view = v
         if not auto then AH.manualView = true end
@@ -1294,19 +1295,20 @@ function AH.Refresh()
     if AH.view == "rep" and not repOn then AH.view = "sell" end
     if AH.helper == "flip" and not flipOn() then AH.helper = "ah" end   -- fix 753
     if AH.helper == "flip" and not AH.FLIP_VIEWS[AH.view] then AH.view = "sell" end
-    if AH.helper ~= "flip" and (AH.view == "fbuy" or AH.view == "fblack") then AH.view = "sell" end
+    if AH.helper ~= "flip" and (AH.view == "fbuy" or AH.view == "fblack" or AH.view == "fstats") then AH.view = "sell" end
     paintFlipButton()
     AH.LayoutTabs(repOn)
     local buy, shop, upg, rep = AH.view == "buy", AH.view == "shop", AH.view == "upg", AH.view == "rep"
-    local fbuy, fblack = AH.view == "fbuy", AH.view == "fblack"
+    local fbuy, fblack, fstats = AH.view == "fbuy", AH.view == "fblack", AH.view == "fstats"
     local S, U = OMQ.Shopping, OMQ.AuctionUpgrades
     local FL = OMQ.Flip
-    paintTab(panel.sellBtn, not buy and not shop and not upg and not rep and not fbuy and not fblack); paintTab(panel.buyBtn, buy)
+    paintTab(panel.sellBtn, not buy and not shop and not upg and not rep and not fbuy and not fblack and not fstats); paintTab(panel.buyBtn, buy)
     paintTab(panel.upgBtn, upg); paintTab(panel.shopBtn, shop); paintTab(panel.repBtn, rep)
-    paintTab(panel.fbuyBtn, fbuy); paintTab(panel.fblackBtn, fblack)
+    paintTab(panel.fbuyBtn, fbuy); paintTab(panel.fblackBtn, fblack); paintTab(panel.fstatsBtn, fstats)
     if not fbuy and FL and FL.Hide then FL.Hide() end
     if not fblack and FL and FL.HideBlack then FL.HideBlack() end
-    if fbuy or fblack then                             -- the flip helper's Buy and Blacklist tabs (fix 753)
+    if not fstats and FL and FL.HideStats then FL.HideStats() end
+    if fbuy or fblack or fstats then                             -- the flip helper's Buy and Blacklist tabs (fix 753)
         for _, b in ipairs({ panel.fastBtn, panel.selBtn, panel.fillBtn, panel.oneBtn }) do b:Hide() end
         panel.modeHint:Hide()
         if S then S.Hide() end
@@ -1314,7 +1316,7 @@ function AH.Refresh()
         if T then T.Hide() end
         if OMQ.AuctionBuy then OMQ.AuctionBuy.Hide() end
         fastUI:Hide(); selUI:Hide(); panel.out:SetText("")
-        local h = fbuy and FL.Render(panel, AH.HEAD) or FL.RenderBlack(panel, AH.HEAD)
+        local h = (fbuy and FL.Render(panel, AH.HEAD)) or (fblack and FL.RenderBlack(panel, AH.HEAD)) or FL.RenderStats(panel, AH.HEAD)
         panel:SetHeight(AH.HEAD + h + 16)
         return
     end

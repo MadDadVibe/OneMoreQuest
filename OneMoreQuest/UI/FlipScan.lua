@@ -47,12 +47,12 @@ F.METHODS = {
                   only = { c = 4, s = 4 } },
     -- decision 746 (MadDadVibe): always the 2nd cheapest (>= 2x the cheapest; only the cheapest is bought); a single
     -- offer is bought when it costs at most twice the vendor price ("the perfect flip"); six level brackets
-    b10 = { nth = 2, ratio = 2, single = true, label = "2nd 2x, lvl 10-19", minLevel = 10, maxLevel = 19 },
-    b20 = { nth = 2, ratio = 2, single = true, label = "2nd 2x, lvl 20-29", minLevel = 20, maxLevel = 29 },
-    b30 = { nth = 2, ratio = 2, single = true, label = "2nd 2x, lvl 30-39", minLevel = 30, maxLevel = 39 },
-    b40 = { nth = 2, ratio = 2, single = true, label = "2nd 2x, lvl 40-49", minLevel = 40, maxLevel = 49 },
-    b50 = { nth = 2, ratio = 2, single = true, label = "2nd 2x, lvl 50-59", minLevel = 50, maxLevel = 59 },
-    plate = { nth = 2, ratio = 2, single = true, label = "2nd 2x, plate 40-42", minLevel = 40, maxLevel = 42,
+    b10 = { nth = 2, ratio = 2, single = true, label = "lvl 10-19", minLevel = 10, maxLevel = 19 },
+    b20 = { nth = 2, ratio = 2, single = true, label = "lvl 20-29", minLevel = 20, maxLevel = 29 },
+    b30 = { nth = 2, ratio = 2, single = true, label = "lvl 30-39", minLevel = 30, maxLevel = 39 },
+    b40 = { nth = 2, ratio = 2, single = true, label = "lvl 40-49", minLevel = 40, maxLevel = 49 },
+    b50 = { nth = 2, ratio = 2, single = true, label = "lvl 50-59", minLevel = 50, maxLevel = 59 },
+    plate = { nth = 2, ratio = 2, single = true, label = "plate 40-42", minLevel = 40, maxLevel = 42,
               only = { c = 4, s = 4 } },
 }
 F.BUTTONS = { "b10", "b20", "b30", "b40", "b50", "plate" }   -- decision 746: the six buttons (the older methods stay for the tests)
@@ -796,6 +796,7 @@ function F.Vendored(id, price)
     local it = items()[id]
     F.Note(id, "v", price)
     F.Stat(id, "v", price, nil, F.PaidAny(id) or 0)        -- decision 743
+    F.Lost((F.PaidAny(id) or 0) - (tonumber(price) or 0))  -- fix 754
     F.Release(id)                                          -- fix 750
     if x.released or F.Expired(x) then F.NoteVendored(id, price, x) end   -- 5x unsold or 48 hours (decision 745)
     it = items()[id]
@@ -947,12 +948,124 @@ local function rate(r)
     if n == 0 then return nil end
     return math.floor(r.s * 100 / n + 0.5)
 end
--- the rows of the suffix view: one per suffix, best selling first, then the vendor log
+-- fix 754 (MadDadVibe): the old loot adoption (decision 735, taken back in 742) took one item in again at every bag
+-- scan once its flip was over: hundreds of "purchases" at its vendor price. Taken out of every record once; the
+-- sales of looted pieces stay. Waits while an item's level or vendor price is not loaded yet.
+function F.CleanLoot()
+    local d = db()
+    if d.lootClean then return true end
+    local todo = {}
+    for id, it in pairs(items()) do
+        if (it.loot or 0) > 0 then
+            local per = vendorOf(id) or ((it.b or 0) > 0 and math.floor((it.spent or 0) / it.b) or nil)
+            if not per or not reqLevelOf(id) then return false end   -- not loaded yet: next time
+            todo[#todo + 1] = { id = id, it = it, n = it.loot, per = per }
+        end
+    end
+    F.MigrateStats(); F.MigrateBrackets()                  -- the old history is in the records before it is cleaned
+    local function sub(r, n, c)
+        if not r then return end
+        r.b = math.max(0, (r.b or 0) - n)
+        r.spent = math.max(0, (r.spent or 0) - c)
+    end
+    for _, t in ipairs(todo) do
+        local it, n = t.it, t.n
+        local c = math.min(it.spent or 0, n * t.per)
+        sub(it, n, c)
+        it.loot = nil
+        local key = F.SuffixOf(it.name) or (d.owned[t.id] and d.owned[t.id].sk) or "other"
+        local e = d.sfx and d.sfx[key]
+        if e then sub(e.all, n, c); sub(e[F.KindOf(t.id)], n, c) end
+        for _, b in ipairs(F.BracketsOf(t.id)) do sub(d.brk and d.brk[b], n, c) end
+    end
+    for _, x in pairs(d.owned) do x.loot = nil end
+    d.lootClean = true
+    return true
+end
+
+-- fix 754: what went to the vendor or the enchanter lost against its price (price paid minus vendor price or the
+-- expected disenchant value), summed; the vendor log of before gives the first ones
+function F.Lost(c)
+    local d = db()
+    if not d.lostInit then
+        d.lostInit = true
+        local s = 0
+        for _, v in ipairs(d.vlog or {}) do s = s - (tonumber(v.loss) or 0) end
+        d.lost = (d.lost or 0) + s
+    end
+    if c then d.lost = (d.lost or 0) + c end
+    return d.lost or 0
+end
+
+-- what is still out (bags and auction house): the price paid and the vendor price of every open piece
+function F.OpenPieces()
+    local spent, vend, n = 0, 0, 0
+    for id, x in pairs(db().owned) do
+        if stamp() - (x.t or 0) <= F.KEEP_DAYS * 86400 then
+            local k = x.n or 1
+            n = n + k
+            spent = spent + k * (x.paid or 0)
+            vend = vend + k * (vendorOf(id) or 0)
+        end
+    end
+    return spent, vend, n
+end
+
+function F.Totals()
+    F.CleanLoot()
+    local t = { b = 0, s = 0, u = 0, v = 0, d = 0, spent = 0, got = 0, cost = 0, fees = 0 }
+    for _, it in pairs(items()) do
+        for k in pairs(t) do t[k] = t[k] + (it[k] or 0) end
+    end
+    t.profit = t.got - t.cost - t.fees                    -- what the sold and vendored pieces brought over their price, minus lost deposits
+    t.open, t.openVendor, t.openN = F.OpenPieces()
+    t.lost = F.Lost()
+    return t
+end
+local function signed(c)
+    if c < 0 then return "-" .. money(-c) end
+    return "+" .. money(c)
+end
+F.Signed = signed
+-- the numbers on top of the Stats tab (and of /omq flip in the chat)
+function F.Rows()
+    local t = F.Totals()
+    return {
+        { "Bought", string.format("%d for %s", t.b, money(t.spent)) },
+        { "Sold", string.format("%d for %s", t.s, money(t.got)) },
+        { "Came back unsold", tostring(t.u) },
+        { "To the vendor / disenchanted", t.v .. " / " .. t.d },   -- decision 745
+        { "Lost to vendor / disenchant", money(math.max(0, t.lost)) .. (t.lost < 0 and (" (" .. signed(-t.lost) .. ")") or "") },
+        { "Deposits lost (unsold)", money(t.fees) },
+        { "Earned with flips", signed(t.profit) .. " (on " .. money(t.cost) .. " of sold pieces)" },
+        { "Still out (bags / AH)", string.format("%s (%d pieces)", money(t.open), t.openN) },
+        { "Still out at the vendor", money(t.openVendor) },
+    }
+end
+function F.History()
+    local out = { "item flips:" }
+    for _, h in ipairs(F.Rows()) do out[#out + 1] = "  " .. h[1] .. ": " .. h[2] end
+    return out
+end
+
+-- the detailed stats: one row per search profile, suffix or armor type
+local function detail(name, r, key)
+    local profit = (r.got or 0) - (r.cost or 0) - (r.fees or 0)
+    local done = (r.s or 0) + (r.v or 0) + (r.d or 0)
+    return { key = key, name = name, b = r.b or 0, s = r.s or 0, u = r.u or 0, v = (r.v or 0) + (r.d or 0),
+             gain = done > 0 and profit or nil, result = done > 0 and signed(profit) or "-" }
+end
+function F.ProfileRows()
+    F.CleanLoot()
+    local out = {}
+    for _, key in ipairs(F.BUTTONS) do out[#out + 1] = detail(F.METHODS[key].label, F.BracketRec(key), key) end
+    return out
+end
 function F.SuffixRows()
     F.MigrateStats()
-    local d = db()
+    F.CleanLoot()
     local out = {}
-    for key, e in pairs(d.sfx or {}) do
+    for key, e in pairs(db().sfx or {}) do
         local r = e.all
         local tip = {}
         for k = 1, 4 do
@@ -963,196 +1076,182 @@ function F.SuffixRows()
                     q and (", " .. q .. "% sold") or "")
             end
         end
-        if e[0] and e[0].b + e[0].s + e[0].u + e[0].v > 0 then
-            tip[#tip + 1] = string.format("other gear: bought %d, sold %d, back %d, vendor %d", e[0].b, e[0].s, e[0].u, e[0].v)
-        end
-        local q = rate(r)
-        local profit = r.got - r.cost - r.fees
-        out[#out + 1] = { key = key, name = label(key), rate = q,
-            text = string.format("bought %d, sold %d, back %d, vendor %d%s", r.b, r.s, r.u, r.v,
-                (r.d or 0) > 0 and (", disenchanted " .. r.d) or ""),
-            result = (q and (q .. "% sold, ") or "") .. F.Signed(profit), gain = (r.s + r.v + (r.d or 0)) > 0 and profit or nil,
-            low = q and q < 50, tip = tip }
+        local row = detail(label(key), r, key)
+        row.rate, row.tip = rate(r), tip
+        out[#out + 1] = row
     end
     table.sort(out, function(a, b)
         if (a.rate or -1) ~= (b.rate or -1) then return (a.rate or -1) > (b.rate or -1) end
         return a.key < b.key
     end)
-    local vl = d.vlog or {}
-    if #vl > 0 then
-        out[#out + 1] = { name = "|cffffd100To the vendor after " .. F.REPOSTS .. "x unsold:|r", text = "", result = "", head = true }
-        for _, v in ipairs(vl) do
-            out[#out + 1] = { name = "  " .. v.name, text = label(v.sk) .. ", back " .. v.back .. "x", result = F.Signed(v.loss),
-                gain = v.loss }
+    return out
+end
+-- armor type by the item: cloth, leather, mail, plate, back (cloaks), ring, amulet
+F.TYPES = { "cloth", "leather", "mail", "plate", "back", "ring", "amulet" }
+F.TYPE_NAMES = { cloth = "Cloth", leather = "Leather", mail = "Mail", plate = "Plate", back = "Back", ring = "Ring", amulet = "Amulet" }
+function F.TypeOf(id)
+    local inst = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    if not inst then return nil end
+    local ok, _, _, _, loc, _, c, sc = pcall(inst, id)
+    if not ok then return nil end
+    if loc == "INVTYPE_CLOAK" then return "back" end
+    if loc == "INVTYPE_FINGER" then return "ring" end
+    if loc == "INVTYPE_NECK" then return "amulet" end
+    if c == 4 and F.ARMOR_KINDS[sc] then return F.ARMOR_KINDS[sc] end
+    return nil
+end
+function F.TypeRows()
+    F.CleanLoot()
+    local by = {}
+    for id, it in pairs(items()) do
+        local k = F.TypeOf(id)
+        if k then
+            local r = by[k] or newRec()
+            by[k] = r
+            for _, f in ipairs({ "b", "s", "u", "v", "d", "got", "cost", "fees" }) do r[f] = (r[f] or 0) + (it[f] or 0) end
         end
     end
-    return out
-end
-
-function F.Totals()
-    local t = { b = 0, s = 0, u = 0, v = 0, d = 0, spent = 0, got = 0, cost = 0, fees = 0, loot = 0 }
-    for _, it in pairs(items()) do
-        for k in pairs(t) do t[k] = t[k] + (it[k] or 0) end
-    end
-    t.profit = t.got - t.cost - t.fees                    -- what the sold and vendored pieces brought over their price, minus lost deposits
-    t.open = t.spent - t.cost                             -- still in the bags or on the auction house
-    return t
-end
-local function signed(c)
-    if c < 0 then return "-" .. money(-c) end
-    return "+" .. money(c)
-end
-F.Signed = signed
--- decision 732 (MadDadVibe): the history in a small window; F.Rows gives its lines, F.History the same as text
-function F.Rows()
-    local t = F.Totals()
-    local head = {
-        { "Bought", string.format("%d for %s", t.b, money(t.spent)) },
-        { "Sold", string.format("%d for %s", t.s, money(t.got)) },
-        { "Came back unsold", tostring(t.u) },
-        { "To the vendor / disenchanted", t.v .. " / " .. t.d },   -- decision 745
-        { "Deposits lost (unsold)", money(t.fees) },
-        { "Earned with flips", signed(t.profit) .. " (on " .. money(t.cost) .. " of sold pieces)" },
-        { "Still out (bags / AH)", money(t.open) },
-        { "Of them from loot", string.format("%d (vendor price as cost)", t.loot) },   -- decision 735
-    }
-    local rows = {}
-    for id, it in pairs(items()) do rows[#rows + 1] = { id = id, it = it } end
-    table.sort(rows, function(a, b) return (a.it.t or 0) > (b.it.t or 0) end)
     local out = {}
-    for _, r in ipairs(rows) do
-        local it = r.it
-        local done = (it.s + it.v + (it.d or 0)) > 0
-        out[#out + 1] = {
-            id = r.id, name = it.name or ("item " .. r.id),
-            text = string.format("bought %d, sold %d, unsold %d%s%s", it.b, it.s, it.u, (it.v > 0 and (", vendor " .. it.v) or "") .. ((it.d or 0) > 0 and (", disenchanted " .. it.d) or ""),
-                (it.fees or 0) > 0 and (", deposits " .. money(it.fees)) or ""),
-            result = done and signed((it.got or 0) - (it.cost or 0) - (it.fees or 0)) or ("spent " .. money(it.spent)),
-            gain = done and ((it.got or 0) - (it.cost or 0) - (it.fees or 0)) or nil,
-        }
-    end
-    return head, out
-end
-function F.History()
-    local head, rows = F.Rows()
-    local out = { "item flips:" }
-    for _, h in ipairs(head) do out[#out + 1] = "  " .. h[1] .. ": " .. h[2] end
-    for i = 1, math.min(15, #rows) do out[#out + 1] = "  " .. rows[i].name .. ": " .. rows[i].text .. ", " .. rows[i].result end
-    if #rows > 15 then out[#out + 1] = string.format("  ... and %d more items", #rows - 15) end
-    if #rows == 0 then out[#out + 1] = "  nothing bought with item flips yet" end
-    out[#out + 1] = "by level bracket:"                    -- decision 746
-    for _, r in ipairs(F.BracketRows()) do out[#out + 1] = "  " .. r.name .. ": " .. r.text .. ", " .. r.result end
-    local sr = F.SuffixRows()                              -- decision 743
-    if #sr > 0 then out[#out + 1] = "by suffix:" end
-    for _, r in ipairs(sr) do out[#out + 1] = "  " .. r.name .. (r.text ~= "" and (": " .. r.text) or "") .. (r.result ~= "" and (", " .. r.result) or "") end
+    for _, k in ipairs(F.TYPES) do out[#out + 1] = detail(F.TYPE_NAMES[k], by[k] or newRec(), k) end
     return out
 end
+F.STATS_VIEWS = { { "prof", "Profiles" }, { "sfx", "Suffixes" }, { "type", "Armor type" } }
+F.statsView = "prof"
+function F.DetailRows(view)
+    view = view or F.statsView
+    if view == "sfx" then return F.SuffixRows() elseif view == "type" then return F.TypeRows() end
+    return F.ProfileRows()
+end
 
-local hist
-F.HIST_ROWS = 14
-F.histOffset = 0
-local function histBuild()
-    local ok, f = pcall(CreateFrame, "Frame", "OneMoreQuestFlipHistory", UIParent, "BasicFrameTemplateWithInset")
-    if not ok or not f then return end
-    hist = f
-    f:SetSize(420, 212 + F.HIST_ROWS * 16)
-    f:SetPoint("CENTER")
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    f:SetFrameStrata("HIGH")
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOP", 0, -5)
-    title:SetText("One More Quest - flip history")
-    local view = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")   -- decision 743: items / suffixes
-    view:SetSize(90, 20)
-    view:SetPoint("TOPRIGHT", -12, -28)
-    view:SetScript("OnClick", function()
-        F.histView = (F.histView == "sfx") and "brk" or (F.histView == "brk") and "items" or "sfx"   -- decision 746
-        F.histOffset = 0
-        F.PaintHistory()
-    end)
-    f.view = view
-    f.head = {}
-    for i = 1, 8 do
-        local l = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        l:SetPoint("TOPLEFT", 16, -30 - (i - 1) * 16)
-        local v = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        v:SetPoint("TOPLEFT", 170, -30 - (i - 1) * 16)
-        v:SetWidth(234)
-        v:SetJustifyH("LEFT")
-        f.head[i] = { l = l, v = v }
+----------------------------------------------------------------------
+-- The Stats tab of the flip helper (fix 754): the numbers on top, below them the detailed stats by profile, suffix
+-- or armor type (bought, sold, back, vendor, gold). It replaces the history window of decision 732.
+----------------------------------------------------------------------
+F.STATS_ROWS = 10
+F.statsOffset = 0
+local stats
+local SGOLD = { 0.89, 0.71, 0.29 }
+local COLS = { { "b", 172 }, { "s", 214 }, { "u", 256 }, { "v", 298 } }
+local function statsBuild(panel)
+    stats = CreateFrame("Frame", "OneMoreQuestFlipStats", panel or UIParent)
+    if panel and panel.box and stats.SetFrameLevel then stats:SetFrameLevel(panel.box:GetFrameLevel() + 2) end
+    stats.head = {}
+    for i = 1, 9 do
+        local l = stats:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        l:SetPoint("TOPLEFT", 16, -4 - (i - 1) * 16); l:SetJustifyH("LEFT")
+        l:SetTextColor(0.95, 0.82, 0.48)
+        local v = stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        v:SetPoint("TOPLEFT", 176, -4 - (i - 1) * 16); v:SetWidth(188); v:SetJustifyH("LEFT")
+        stats.head[i] = { l = l, v = v }
     end
-    local box = CreateFrame("Frame", nil, f)
-    box:SetPoint("TOPLEFT", 14, -166)
-    box:SetSize(392, F.HIST_ROWS * 16)
-    box:EnableMouseWheel(true)
-    box:SetScript("OnMouseWheel", function(_, d)
-        F.histOffset = math.max(0, F.histOffset - d)
-        F.PaintHistory()
-    end)
-    f.rows = {}
-    for i = 1, F.HIST_ROWS do
-        local r = CreateFrame("Frame", nil, box)
-        r:SetSize(392, 16)
-        r:SetPoint("TOPLEFT", 0, -(i - 1) * 16)
+    local y = 4 + 9 * 16 + 10
+    stats.views = {}
+    for i, vw in ipairs(F.STATS_VIEWS) do
+        local b = F._button(stats, 112, 24, vw[2], function()
+            F.statsView = vw[1]
+            F.statsOffset = 0
+            F.PaintStats()
+        end)
+        b:SetPoint("TOPLEFT", 16 + (i - 1) * 118, -y)
+        b.view = vw[1]
+        stats.views[i] = b
+    end
+    y = y + 32
+    -- the column heads
+    local function col(parent, x, w, justify, font)
+        local t = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
+        t:SetPoint("TOPLEFT", x, 0); t:SetWidth(w); t:SetJustifyH(justify)
+        return t
+    end
+    local hd = CreateFrame("Frame", nil, stats)
+    hd:SetPoint("TOPLEFT", 0, -y); hd:SetSize(380, 16)
+    hd.name = col(hd, 16, 150, "LEFT", "GameFontDisableSmall")
+    for _, c in ipairs(COLS) do hd[c[1]] = col(hd, c[2], 40, "RIGHT", "GameFontDisableSmall") end
+    hd.g = col(hd, 300, 64, "RIGHT", "GameFontDisableSmall")
+    hd.b:SetText("bought"); hd.s:SetText("sold"); hd.u:SetText("back"); hd.v:SetText("vendor"); hd.g:SetText("gold")
+    stats.colHead = hd
+    y = y + 18
+    stats.listY = y
+    stats.rows = {}
+    for i = 1, F.STATS_ROWS do
+        local r = CreateFrame("Frame", nil, stats)
+        r:SetPoint("TOPLEFT", 0, -(y + (i - 1) * 18)); r:SetSize(380, 18)
         r:EnableMouse(true)
-        r.name = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        r.name:SetPoint("LEFT", 2, 0)
-        r.name:SetWidth(300)
-        r.name:SetJustifyH("LEFT")
-        r.res = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        r.res:SetPoint("RIGHT", -2, 0)
-        r.res:SetJustifyH("RIGHT")
+        r.bg = r:CreateTexture(nil, "BACKGROUND"); r.bg:SetPoint("TOPLEFT", 14, 0); r.bg:SetSize(352, 17)
+        r.bg:SetColorTexture(0.11, 0.122, 0.153, 1)
+        r.name = col(r, 18, 150, "LEFT")
+        r.name:SetPoint("TOPLEFT", 18, -3)
+        for _, c in ipairs(COLS) do r[c[1]] = col(r, c[2], 40, "RIGHT"); r[c[1]]:SetPoint("TOPLEFT", c[2], -3) end
+        r.g = col(r, 300, 64, "RIGHT"); r.g:SetPoint("TOPLEFT", 300, -3)
         r:SetScript("OnEnter", function(self)
-            if not (self.data and GameTooltip) then return end
+            local d = self.data
+            if not (d and GameTooltip) then return end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:AddLine(self.data.name)
-            if self.data.text ~= "" then GameTooltip:AddLine(self.data.text, 1, 1, 1, true) end
-            if self.data.result ~= "" then GameTooltip:AddLine(self.data.result, 1, 1, 1) end
-            for _, l in ipairs(self.data.tip or {}) do GameTooltip:AddLine(l, 0.8, 0.8, 0.8) end
+            GameTooltip:AddLine(d.name)
+            GameTooltip:AddLine(string.format("bought %d, sold %d, back %d, vendor/DE %d", d.b, d.s, d.u, d.v), 1, 1, 1)
+            if d.rate then GameTooltip:AddLine(d.rate .. "% of the finished ones sold", 0.8, 0.8, 0.8) end
+            for _, l in ipairs(d.tip or {}) do GameTooltip:AddLine(l, 0.8, 0.8, 0.8) end
             GameTooltip:Show()
         end)
         r:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-        f.rows[i] = r
+        stats.rows[i] = r
     end
-    f.empty = box:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    f.empty:SetPoint("TOPLEFT", 2, -2)
-    f.empty:SetText("nothing bought with item flips yet")
-    local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    hint:SetPoint("BOTTOMLEFT", 16, 12)
-    hint:SetText("Mouse wheel: scroll   Hover: details")
-    if UISpecialFrames then table.insert(UISpecialFrames, "OneMoreQuestFlipHistory") end
+    stats:EnableMouseWheel(true)
+    stats:SetScript("OnMouseWheel", function(_, d)
+        local n = #F.DetailRows()
+        F.statsOffset = math.max(0, math.min(math.max(0, n - F.STATS_ROWS), F.statsOffset - d))
+        F.PaintStats()
+    end)
+    stats.more = stats:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 end
-function F.PaintHistory()
-    if not hist then return end
-    local head, rows = F.Rows()
-    for i, h in ipairs(head) do hist.head[i].l:SetText(h[1]); hist.head[i].v:SetText(h[2]) end
-    local sfxView = F.histView == "sfx"
-    if sfxView then rows = F.SuffixRows() elseif F.histView == "brk" then rows = F.BracketRows() end
-    if hist.view then hist.view:SetText(sfxView and "Brackets" or (F.histView == "brk") and "Items" or "Suffixes") end
-    F.histOffset = math.max(0, math.min(F.histOffset, math.max(0, #rows - F.HIST_ROWS)))
-    for i, r in ipairs(hist.rows) do
-        local d = rows[i + F.histOffset]
+function F.PaintStats()
+    if not (stats and stats:IsShown()) then return 0 end
+    for i, h in ipairs(F.Rows()) do stats.head[i].l:SetText(h[1]); stats.head[i].v:SetText(h[2]) end
+    for _, b in ipairs(stats.views) do
+        local on = b.view == F.statsView
+        if on then b.bg:SetColorTexture(SGOLD[1], SGOLD[2], SGOLD[3], 1) else b.bg:SetColorTexture(0.2, 0.21, 0.25, 1) end
+        if on then b.text:SetTextColor(0.07, 0.07, 0.08) else b.text:SetTextColor(0.93, 0.93, 0.95) end
+    end
+    local rows = F.DetailRows()
+    stats.colHead.name:SetText(F.statsView == "sfx" and "suffix" or F.statsView == "type" and "armor type" or "search profile")
+    F.statsOffset = math.max(0, math.min(F.statsOffset, math.max(0, #rows - F.STATS_ROWS)))
+    local y = stats.listY
+    for i, r in ipairs(stats.rows) do
+        local d = rows[i + F.statsOffset]
         r.data = d
         if d then
-            r.name:SetText(d.name .. (d.text ~= "" and ("  |cffaaaaaa" .. d.text .. "|r") or ""))
-            r.res:SetText(d.result)
-            if d.low or (d.gain and d.gain < 0) then r.res:SetTextColor(1, 0.3, 0.3) elseif d.gain then r.res:SetTextColor(0.3, 1, 0.3) else r.res:SetTextColor(0.8, 0.8, 0.8) end
+            r.name:SetText(d.name)
+            r.b:SetText(d.b); r.s:SetText(d.s); r.u:SetText(d.u); r.v:SetText(d.v)
+            r.g:SetText(d.result)
+            if d.gain and d.gain < 0 then r.g:SetTextColor(1, 0.3, 0.3) elseif d.gain then r.g:SetTextColor(0.3, 1, 0.3) else r.g:SetTextColor(0.8, 0.8, 0.8) end
             r:Show()
+            y = y + 18
         else r:Hide() end
     end
-    hist.empty:SetShown(#rows == 0)
+    if #rows > F.STATS_ROWS then
+        stats.more:ClearAllPoints(); stats.more:SetPoint("TOPLEFT", 16, -(y + 2))
+        stats.more:SetText(string.format("Mouse wheel: %d more", #rows - F.STATS_ROWS)); stats.more:Show()
+        y = y + 16
+    else stats.more:Hide() end
+    return y + 8
 end
+function F.RenderStats(panel, top)
+    if not stats then statsBuild(panel) end
+    stats:ClearAllPoints(); stats:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -top); stats:SetPoint("RIGHT", panel, "RIGHT")
+    stats:Show()
+    local h = F.PaintStats()
+    stats:SetHeight(h)
+    return h
+end
+function F.HideStats() if stats then stats:Hide() end end
+F._Stats = function() return stats end
+-- /omq flip: the Stats tab when the flip helper can show it, else false (the numbers go to the chat)
 function F.ShowHistory()
-    if not hist then histBuild() end
-    if not hist then return false end
-    F.histOffset = 0
-    F.PaintHistory()
-    hist:Show()
-    return true
+    local h = H()
+    local p = _G.OneMoreQuestAuctionHelper
+    if not (F.Enabled() and h and h.open and h.SetView and p and p:IsShown()) then return false end
+    h.SetView("fstats")
+    return stats ~= nil and stats:IsShown()
 end
 ----------------------------------------------------------------------
 -- fix 752 (MadDadVibe): /omq flip mark lists green BoE gear in the bags that is no flip; a left click makes it one,
@@ -1320,10 +1419,10 @@ OMQ:RegisterCommand("flip", function(arg)
         end
         return
     end
-    if arg == "chat" or not F.ShowHistory() then
+    if arg == "chat" or not F.ShowHistory() then           -- fix 754: the Stats tab of the flip helper, else the chat
         for _, l in ipairs(F.History()) do OMQ:Print(l) end
     end
-end, "item flips: window with what was bought, sold, came back, deposits, gold spent and earned (chat = as text, mark = green bag items to mark as flip)")
+end, "item flips: the Stats tab of the flip helper (at the auction house) or the numbers in the chat (chat = always as text, mark = green bag items to mark as flip)")
 
 -- decision 726 (MadDadVibe): a flip is posted for 2 hours (short) by day, for 8 hours from 23:59 German time until
 -- 8:00 the next morning. German time = UTC+1, UTC+2 from the last Sunday of March to the last Sunday of October (1:00 UTC).
@@ -1502,6 +1601,7 @@ function F.Disenchanted(id, value)
     local paid = F.PaidAny(id) or 0
     F.Note(id, "d", value)
     F.Stat(id, "d", value, nil, paid)
+    F.Lost(paid - (tonumber(value) or 0))                  -- fix 754
     F.Release(id)                                          -- fix 750
     local it = items()[id]
     it.cost = (it.cost or 0) + paid
