@@ -340,6 +340,11 @@ function AH.Lists()
         return not a.keep and b.keep
     end)
     -- the whole round of the fast mode: still to post plus already posted since the auction house opened
+    local sp = AH.speed                                   -- fix 767: how long the sell list took (/omq ah speed)
+    if sp then
+        if not sp.firstAt and #fast > 0 then sp.firstAt = now() end
+        if not sp.doneAt and pending == 0 and #entries > 0 then sp.doneAt, sp.items = now(), #entries end
+    end
     local r = AH.round
     local count = 0
     for _, e in ipairs(entries) do if not e.keep then count = count + 1 end end
@@ -646,10 +651,13 @@ local tried = {}                                         -- keys a batch already
 AH._tried = tried
 local function onBatch(q)
     local A = CA()
-    if not q.answered then                               -- no answer: this client does not batch, one by one from now on
+    local st = AH.speed
+    if not (q.answered or q.heard) then                  -- never any answer, also not after asking again: one by one this visit
         AH.noBatch = true
+        if st then st.noBatch = true end
         return
     end
+    if st then st.batchAnswers = st.batchAnswers + 1 end
     local byKey, byId = {}, {}
     for _, res in ipairs(A.GetBrowseResults and A.GetBrowseResults() or {}) do
         local k = res.itemKey
@@ -664,6 +672,7 @@ local function onBatch(q)
     -- nothing is taken from it, every item is asked on its own
     local empty = q.lastN == 0                       -- the last answer was empty: nobody sells them
     local ours = empty or AH.BatchHits(q)
+    if st and not ours then st.foreignLeft = st.foreignLeft + 1 end
     for _, e in ipairs(q.batch) do
         tried[e.key] = true
         local res = ours and not empty and (byKey[keyString(e.itemKey)] or (e.commodity and byId[e.itemID])) or nil
@@ -672,8 +681,10 @@ local function onBatch(q)
             if (res or empty) and B and B.FromBatch then B.FromBatch(e, res) end
         elseif res then
             prices[e.key] = { price = res.minPrice, at = now() }
+            if st then st.fromBatch = st.fromBatch + 1 end
         elseif e.commodity then
             prices[e.key] = { price = false, at = now() }   -- nobody sells it
+            if st then st.fromBatch = st.fromBatch + 1 end
         end                                             -- a single item not found: asked on its own
     end
     if B and B.Build then B.Build() end
@@ -743,6 +754,7 @@ function AH._pump()
     if asking and asking.resend then
         if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
         local q = asking
+        q.heard = q.heard or q.answered
         q.resend, q.answered, q.lastN, askedAt = nil, nil, nil, now()
         AH.CountSearch()
         AH.Own(function()
@@ -756,7 +768,8 @@ function AH._pump()
         if now() - askedAt < AH.QUERY_TIMEOUT then return end
         local q = asking
         -- no answer in time: the same question again before "not on sale" (decision 402); a batch falls back as before
-        local retry = not q.batch and (q.timeouts or 0) < AH.RETRIES
+        -- fix 767: a batch is asked again too (was: 40 single searches, or none ever again after one lost answer)
+        local retry = (q.timeouts or 0) < AH.RETRIES
         if retry and q.browse then
             local n = #(A.GetBrowseResults and A.GetBrowseResults() or {})
             retry = not q.answered or (n > 0 and not AH.Fits(q))
@@ -764,9 +777,12 @@ function AH._pump()
         if retry then
             if A.IsThrottledMessageSystemReady and not A.IsThrottledMessageSystemReady() then return end
             q.timeouts, askedAt = (q.timeouts or 0) + 1, now()
+            if AH.speed then AH.speed.retries = AH.speed.retries + 1 end
             AH.CountSearch()
             AH.Own(function()
-                if q.browse then
+                if q.batch then
+                    A.SearchForItemKeys(q.keys, sorts())
+                elseif q.browse then
                     if A.SendBrowseQuery then A.SendBrowseQuery(q.query) end
                 else
                     A.SendSearchQuery(q.itemKey, sorts(), true)
@@ -791,12 +807,14 @@ function AH._pump()
     local bq = batchQuery()
     if bq then
         asking, askedAt = bq, now()
+        if AH.speed then AH.speed.batches = AH.speed.batches + 1 end
         AH.Own(A.SearchForItemKeys, bq.keys, sorts())
         return
     end
     for _, e in ipairs(entries) do
         if e.state == "price" then
             asking, askedAt = e, now()
+            if AH.speed then AH.speed.singles = AH.speed.singles + 1 end
             AH.Own(A.SendSearchQuery, e.itemKey, sorts(), true)
             return
         end
@@ -815,6 +833,18 @@ function AH._pump()
     end
 end
 AH._KeyString = function(k) return keyString(k) end
+-- fix 767: what the last visit did to price the sell list
+function AH.SpeedReport()
+    local s = AH.speed
+    if not s then return { "auction helper speed: the auction house was not open yet" } end
+    local function t(x) return x and string.format("%.1f s", x - s.at) or "not yet" end
+    return {
+        string.format("auction helper speed: first item to post after %s, all %s items priced after %s", t(s.firstAt), s.items or #entries, t(s.doneAt)),
+        string.format("  batches %d (answered %d, %d prices from them), foreign answers %d (asked again), %d taken as foreign, timeouts asked again %d",
+            s.batches, s.batchAnswers, s.fromBatch, s.foreign, s.foreignLeft, s.retries),
+        string.format("  single searches %d%s", s.singles, s.noBatch and " - batches got no answer at all this visit" or ""),
+    }
+end
 AH._Asking = function() return asking, asking and (now() - askedAt) or 0 end      -- for /omq ah bags (decision 322)
 
 ----------------------------------------------------------------------
@@ -1565,6 +1595,8 @@ function AH.Open()
     AH.MigrateUnsold()
     pendingConfirm, asking, posting = nil, nil, nil
     for k in pairs(tried) do tried[k] = nil end
+    AH.noBatch = nil                                  -- fix 767: every visit tries the batch again (was: once lost, never again)
+    AH.speed = { at = now(), batches = 0, batchAnswers = 0, fromBatch = 0, foreign = 0, foreignLeft = 0, retries = 0, singles = 0 }
     AH.quietUntil, AH.readyAt = nil, nil
     fastUI.posted = 0
     AH.round = { n = 0, income = 0 }
@@ -1639,7 +1671,14 @@ ev:SetScript("OnEvent", function(_, event, a1)
                 asking.answers[#asking.answers + 1] = string.format("%s %d%s after %.1fs", event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" and "added" or "updated",
                     n, (A.HasFullBrowseResults and not A.HasFullBrowseResults()) and " (not full)" or "", now() - askedAt)
                 -- an answer for somebody else (the game's own window) waits for ours or the timeout (decision 402)
-                if n > 0 and AH.Fits(asking) then gotPrice(asking) end
+                if n > 0 and AH.Fits(asking) then gotPrice(asking)
+                elseif n > 0 and asking.batch and (asking.foreign or 0) < AH.RETRIES then
+                    -- fix 767: a batch answered with a foreign list (the game's window searched right after ours, e.g.
+                    -- when it opens) is asked again at once instead of waiting 4 s and asking each item on its own
+                    asking.foreign = (asking.foreign or 0) + 1
+                    asking.resend = true
+                    if AH.speed then AH.speed.foreign = AH.speed.foreign + 1 end
+                end
             end
         elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then AH.Pump()
         elseif event == "AUCTION_HOUSE_AUCTION_CREATED" then
@@ -1709,6 +1748,10 @@ OMQ:RegisterCommand("ah", function(arg)
         F.Open()
         return
     end
+    if arg == "speed" then                               -- fix 767: how the sell list of this visit was priced
+        for _, l in ipairs(AH.SpeedReport()) do OMQ:Print(l) end
+        return
+    end
     if arg == "food" then                                -- which buff foods still give XP (decision 475)
         local B = OMQ.AuctionBuy
         for _, l in ipairs(B and B.FoodReport and B.FoodReport() or { "food: no buy mode" }) do OMQ:Print(l) end
@@ -1716,5 +1759,5 @@ OMQ:RegisterCommand("ah", function(arg)
     end
     local n = 0
     for _ in pairs(db().skip) do n = n + 1 end
-    OMQ:Print("auction helper: " .. AH.Mode() .. " mode, " .. n .. " skipped items. " .. AH.EarnedText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. ".  /omq ah fast | select | unskip | bags | food | flip")
+    OMQ:Print("auction helper: " .. AH.Mode() .. " mode, " .. n .. " skipped items. " .. AH.EarnedText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. ".  /omq ah fast | select | unskip | bags | food | flip | speed")
 end, "auction helper: fast or select mode, forget the skipped items")
