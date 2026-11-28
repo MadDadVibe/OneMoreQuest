@@ -22,7 +22,7 @@ OMQ.Flip = F
 
 F.CLASSES = { 4 }         -- armor only (fix 737, MadDadVibe: green weapons do not sell; was weapons + armor)
 F.WEAPONS = false         -- fix 737: weapons never looked at
-F.NO_SLOTS = { INVTYPE_HOLDABLE = true }   -- fix 749 (MadDadVibe): no off-hand items ("Held In Off-hand")
+F.NO_SLOTS = { INVTYPE_HOLDABLE = true, INVTYPE_SHIELD = true }   -- fixes 749, 750 (MadDadVibe): no off-hand items, no shields
 F.MIN_LEVEL, F.MAX_LEVEL = 30, 50
 F.NTH = 6                 -- the offer the cheapest is compared with
 F.RATIO = 1.5             -- the 6th cheapest at least this much times the cheapest
@@ -297,6 +297,18 @@ function F.Take(e, offers, check)
     r.level = e.level or r.level or reqLevelOf(e.id)
     r.vendor = e.vendor or r.vendor or vendorOf(e.id)
     local j = F.Judge(offers, F.method, r.level, r.vendor)
+    local room = F.MAX_HELD and (F.MAX_HELD - F.Held(e.id, r.name)) or nil   -- fix 750
+    if j and room then
+        if room <= 0 then j = nil
+        else
+            while #j.buy > room do table.remove(j.buy) end
+            j.cost, j.profit = 0, j.sell and 0 or nil
+            for _, o in ipairs(j.buy) do
+                j.cost = j.cost + o.buyout
+                if j.sell then j.profit = j.profit + math.floor(j.sell * (1 - F.CUT)) - o.buyout end
+            end
+        end
+    end
     r.offers, r.fresh, r.hold = nil, nil, nil
     if not j then
         r.kind = nil
@@ -643,6 +655,11 @@ function F.Buy(r)
     local b, h = B(), H()
     if not (type(r) == "table" and h.open) then return false end
     if r.bought or b.Busy() then return false end
+    if F.MAX_HELD and F.Held(r.itemID, r.name) >= F.MAX_HELD then   -- fix 750: already 2 of it
+        r.bought = true; F.Build()
+        OMQ:Print("item flips: you already have " .. F.MAX_HELD .. "x " .. (r.name or "this item"))
+        return false
+    end
     if fresh(r) then
         r.paid, r.paidLink = r.offers[1].buyout, r.offers[1].link
         r.hold = now() + (b.FRESH or 10)
@@ -682,6 +699,10 @@ function F.Remember(id, paid, sell, sfx)
     o[id] = x
     F.Note(id, "b", paid, F.lastName)
     x.sk = F.SuffixOf(F.lastName) or x.sk                  -- decision 743: the suffix of what I bought
+    if type(F.lastName) == "string" then                   -- fix 750: pieces held per name (item + suffix)
+        x.held = x.held or {}
+        x.held[F.lastName] = (x.held[F.lastName] or 0) + 1
+    end
     F.Stat(id, "b", paid, F.lastName)
 end
 
@@ -748,6 +769,7 @@ function F.Result(id, sold, got, name)
         x.dep = nil
         F.Note(id, "s", got, name)
         F.Stat(id, "s", got, name, paid)                   -- decision 743
+        F.Release(id, name)                                -- fix 750
         local it = items()[id]
         it.cost = (it.cost or 0) + paid                    -- what the sold pieces cost
         x.n = (x.n or 1) - 1
@@ -770,6 +792,7 @@ function F.Vendored(id, price)
     local it = items()[id]
     F.Note(id, "v", price)
     F.Stat(id, "v", price, nil, F.PaidAny(id) or 0)        -- decision 743
+    F.Release(id)                                          -- fix 750
     if x.released or F.Expired(x) then F.NoteVendored(id, price, x) end   -- 5x unsold or 48 hours (decision 745)
     it = items()[id]
     it.cost = (it.cost or 0) + (F.PaidAny(id) or 0)
@@ -1226,6 +1249,21 @@ function F.SellPrice(e, offers)
     if price and price < 1 then price = 1 end
     return price
 end
+-- fix 750 (MadDadVibe): at most F.MAX_HELD pieces of one item with its suffix, in the bags or on the auction house;
+-- one more only after one is sold (or gone to the vendor / the enchanter)
+F.MAX_HELD = 2
+function F.Held(id, name)
+    local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
+    if not (x and x.held and type(name) == "string") then return 0 end
+    return x.held[name] or 0
+end
+function F.Release(id, name)                               -- one piece less: by its name, else any of the item
+    local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
+    if not (x and x.held) then return end
+    local k = (type(name) == "string" and (x.held[name] or 0) > 0) and name or nil
+    if not k then for n, c in pairs(x.held) do if c > 0 then k = n; break end end end
+    if k then x.held[k] = x.held[k] - 1; if x.held[k] <= 0 then x.held[k] = nil end end
+end
 function F.Owns(id)
     if type(id) ~= "number" or isSecret(id) or not OMQDB or not OMQDB.flip or not OMQDB.flip.owned then return false end
     local x = OMQDB.flip.owned[id]
@@ -1294,6 +1332,7 @@ function F.Disenchanted(id, value)
     local paid = F.PaidAny(id) or 0
     F.Note(id, "d", value)
     F.Stat(id, "d", value, nil, paid)
+    F.Release(id)                                          -- fix 750
     local it = items()[id]
     it.cost = (it.cost or 0) + paid
     x.n = (x.n or 1) - 1
