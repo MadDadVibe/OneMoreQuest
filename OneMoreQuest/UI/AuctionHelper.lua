@@ -673,12 +673,33 @@ local function onBatch(q)
     local empty = q.lastN == 0                       -- the last answer was empty: nobody sells them
     local ours = empty or AH.BatchHits(q)
     if st and not ours then st.foreignLeft = st.foreignLeft + 1 end
+    -- fix 768: a flip missing in a filled answer has no offer of its suffix - but only when the keys of single items
+    -- match at all (another single item of this batch was found by its key); else it is asked on its own
+    local keysWork = empty
+    if ours and not empty then
+        for _, e in ipairs(q.batch) do
+            if not e.commodity and e.onResult == nil and not e.kind and byKey[keyString(e.itemKey)] then keysWork = true; break end
+        end
+    end
+    local F = OMQ.Flip
     for _, e in ipairs(q.batch) do
         tried[e.key] = true
         local res = ours and not empty and (byKey[keyString(e.itemKey)] or (e.commodity and byId[e.itemID])) or nil
         if not ours then                                -- asked on its own
         elseif e.onResult ~= nil or e.kind then         -- a stock row of the buy mode: one missing in a filled answer is asked on its own
             if (res or empty) and B and B.FromBatch then B.FromBatch(e, res) end
+        elseif e.flip and F and F.SellPrice then        -- a bought flip: its own price rule on the same-suffix offer (fix 768)
+            local sp
+            if res then
+                sp = F.SellPrice(e, { { unit = res.minPrice, link = e.link } })
+                if sp == nil then sp = res.minPrice end
+            elseif keysWork then
+                sp = F.SellPrice(e, {})                 -- nil: a looted green without an offer of its suffix - asked on its own
+            end
+            if sp ~= nil then
+                prices[e.key] = { price = sp, at = now() }
+                if st then st.fromBatch = st.fromBatch + 1 end
+            end
         elseif res then
             prices[e.key] = { price = res.minPrice, at = now() }
             if st then st.fromBatch = st.fromBatch + 1 end
@@ -717,7 +738,9 @@ local function batchQuery()
     local list, keys = {}, {}
     for _, e in ipairs(entries) do
         if #list >= AH.BATCH then break end
-        if e.state == "price" and not tried[e.key] and not e.keep and not e.flip then list[#list + 1] = e; keys[#keys + 1] = e.itemKey end   -- a flip: own search (725)
+        -- fix 768 (MadDadVibe): flips too - the browse keys carry the suffix, so the batch gives the cheapest offer of the
+        -- same suffix (own auctions can not be told apart there: at worst 1c under my own piece)
+        if e.state == "price" and not tried[e.key] and not e.keep then list[#list + 1] = e; keys[#keys + 1] = e.itemKey end
     end
     local B = OMQ.AuctionBuy
     if AH.view == "buy" and B and B.BatchRows then
