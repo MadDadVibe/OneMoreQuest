@@ -1002,6 +1002,10 @@ function AH.Skip(e)
     AH.Refresh()
 end
 
+function AH.WheelNext()                                  -- fix 769: never confirms a price warning
+    if pendingConfirm then return false end
+    return AH.PostNext()
+end
 function AH.PostNext()
     local L = AH.Lists()
     if pendingConfirm then return AH.Post(pendingConfirm.entry) end
@@ -1192,11 +1196,15 @@ local function build()
     post:SetScript("OnClick", function(_, button)
         if button == "RightButton" then AH.Skip(AH.Lists().fast[1]) else AH.PostNext() end
     end)
+    -- fix 769 (MadDadVibe): the mouse wheel down over the button posts the next item too - one wheel step per post,
+    -- a step while the last post is on its way does nothing; a price warning still needs a real click
+    if post.EnableMouseWheel then post:EnableMouseWheel(true) end
+    post:SetScript("OnMouseWheel", function(_, d) if d and d < 0 then AH.WheelNext() end end)
     post:SetScript("OnEnter", function(self) itemTip(self, AH.Lists().fast[1]) end)
     post:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     fastUI.post = post
     fastUI.hint = fs(fastUI, "GameFontDisableSmall"); fastUI.hint:SetPoint("TOPLEFT", 16, -158); fastUI.hint:SetWidth(348)
-    fastUI.hint:SetText("Left click: post (8 hours, current price) - right click: skip")
+    fastUI.hint:SetText("Left click or mouse wheel down: post (8 hours, current price) - right click: skip")
     fastUI.total = fs(fastUI, "GameFontHighlightSmall", 0.79, 0.8, 0.84); fastUI.total:SetWidth(348)
     fastUI.done = fs(fastUI, "GameFontNormalLarge", 0.95, 0.82, 0.48); fastUI.done:SetPoint("TOPLEFT", 16, -8); fastUI.done:SetWidth(348)
 

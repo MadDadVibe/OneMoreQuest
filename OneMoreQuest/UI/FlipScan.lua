@@ -1998,6 +1998,13 @@ local function build(parent)
         local ok2, err = pcall(function() F.BuyNext(); F.Paint() end)
         if not ok2 then OMQ:Error("item flips", err) end
     end)
+    -- fix 769 (MadDadVibe): mouse wheel down over Buy next does the same as a click (one step = one action)
+    if all.EnableMouseWheel then all:EnableMouseWheel(true) end
+    all:SetScript("OnMouseWheel", function(_, d)
+        if not (d and d < 0) then return end
+        local ok2, err = pcall(function() F.BuyNext(); F.Paint() end)
+        if not ok2 then OMQ:Error("item flips", err) end
+    end)
     f.all = all
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     hint:SetWidth(348)
