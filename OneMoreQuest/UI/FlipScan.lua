@@ -22,6 +22,7 @@ OMQ.Flip = F
 
 F.CLASSES = { 4 }         -- armor only (fix 737, MadDadVibe: green weapons do not sell; was weapons + armor)
 F.WEAPONS = false         -- fix 737: weapons never looked at
+F.NO_SLOTS = { INVTYPE_HOLDABLE = true }   -- fix 749 (MadDadVibe): no off-hand items ("Held In Off-hand")
 F.MIN_LEVEL, F.MAX_LEVEL = 30, 50
 F.NTH = 6                 -- the offer the cheapest is compared with
 F.RATIO = 1.5             -- the 6th cheapest at least this much times the cheapest
@@ -216,6 +217,7 @@ function F.Consider(e)
     local c, sc = classOf(e.id)
     if m.only and not (c == m.only.c and sc == m.only.s) then e.match = false; return false end   -- decision 731
     if c == 2 and not F.WEAPONS then e.match = false; return false end   -- fix 737
+    if F.NO_SLOTS and F.NO_SLOTS[select(4, ((C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant)(e.id))] then e.match = false; return false end   -- fix 749
     if e.suffix and F.OFF[e.suffix] then e.suffix = nil end                -- fix 739
     if e.suffix == "knight" and not F.KnightFits(c, sc, e.level) then e.suffix = nil end   -- fixes 739, 741
     if e.suffix and c == 2 and not (F.CASTER[e.suffix] and F.WEAPON_KINDS[sc]) then e.suffix = nil end   -- fixes 723, 729
