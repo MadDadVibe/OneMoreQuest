@@ -158,14 +158,29 @@ local function makeStep(parent, item)
     local minus = flat(row, 22, 20)
     minus:SetPoint("RIGHT", row.value, "LEFT", -6, 0)
     minus.label:SetText("-")
+    -- fix 759: a long label wraps in front of the buttons (smaller font) instead of running under them
+    row.label:SetPoint("RIGHT", minus, "LEFT", -4, 0)
+    row.label:SetJustifyH("LEFT")
+    if row.label.SetWordWrap then row.label:SetWordWrap(true) end
+    if #(item.label or "") > 26 and row.label.SetFontObject then row.label:SetFontObject("GameFontHighlightSmall") end
     local function bump(d)
         local v = math.max(item.min, math.min(item.max, (item.get() or item.min) + d * item.by))
         item.set(v); changed()
     end
     minus:SetScript("OnClick", function() bump(-1) end)
     plus:SetScript("OnClick", function() bump(1) end)
-    function row:Refresh() self.value:SetText(tostring(item.get()) .. " " .. (item.unit or "")) end
+    function row:Refresh()   -- fix 759: item.fmt shows money or factors
+        local v = item.get()
+        self.value:SetText(item.fmt and item.fmt(v) or (tostring(v) .. " " .. (item.unit or "")))
+    end
     row.minus, row.plus = minus, plus
+    if item.tip then          -- fix 759: the step's explanation on hover
+        if row.EnableMouse then row:EnableMouse(true) end
+        row:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(item.tip, 1, 1, 1, 1, true); GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
     return row
 end
 

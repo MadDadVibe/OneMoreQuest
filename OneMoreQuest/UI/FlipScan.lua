@@ -69,9 +69,13 @@ F.SUFFIXES = {
     { key = "elder",      "of the elder",      "des \195\132ltesten", "des \195\164ltesten" },
     { key = "channeler",  "of the channeler",  "des kanalisierers" },
     { key = "hierophant", "of the hierophant", "des hierophanten" },
+    -- fix 759 (MadDadVibe): three more, off until switched on in the options
+    { key = "champion",   "of the champion",   "des champions" },
+    { key = "defender",   "of the defender",   "des verteidigers" },
+    { key = "healer",     "of the healer",     "des heilers" },
 }
 -- fix 739 (MadDadVibe): Hierophant no longer looked for; Knight only on plate armor of required level 40 and up
-F.OFF = { hierophant = true, channeler = true }   -- fix 740: Channeler out too
+F.OFF = { hierophant = true, channeler = true, champion = true, defender = true, healer = true }   -- fix 740: Channeler out too; 759
 F.KNIGHT_PLATE = 40       -- false: Knight everywhere
 F.KNIGHT_MAIL = { 10, 39 } -- fix 741 (MadDadVibe): Knight also on mail ("Schwere Ruestung") of required level 10-39
 function F.KnightFits(c, sc, level)
@@ -262,6 +266,14 @@ function F.ReadOffers(key)
     return out
 end
 
+-- fix 759 (MadDadVibe): a flip is bought only when it is expected to bring at least F.MIN_PROFIT: the sell rule
+-- (F.SELL_FACTOR times the price, at least F.SELL_MIN_CAP, at most the 2nd offer - 1c when there is one) after the cut
+F.MIN_PROFIT = 5000
+function F.ExpectedProfit(price, sell)
+    local s = math.max(price * (F.SELL_FACTOR or 3), F.SELL_MIN_CAP or 0)
+    if sell then s = math.min(s, sell) end
+    return math.floor(s * (1 - F.CUT)) - price
+end
 -- the verdict of an item's offers: nil, or { kind = "gap" | "few", n, sell, maxBuy, buy = offers to buy, cost, profit }
 function F.Judge(offers, method, level, vendor)
     local m = F.METHODS[method or "flip"] or F.METHODS.flip
@@ -283,7 +295,7 @@ function F.Judge(offers, method, level, vendor)
     maxBuy = math.min(maxBuy, F.BuyLimit(m, vendor, level))   -- fixes 724, 733, 744, 747, 755
     local buy, cost, profit = {}, 0, 0
     for _, o in ipairs(offers) do
-        if not o.mine and o.qty == 1 and o.unit <= maxBuy then
+        if not o.mine and o.qty == 1 and o.unit <= maxBuy and (not F.MIN_PROFIT or F.ExpectedProfit(o.unit, sell) >= F.MIN_PROFIT) then
             buy[#buy + 1] = o
             cost = cost + o.buyout
             if sell then profit = profit + math.floor(sell * (1 - F.CUT)) - o.buyout end
@@ -351,6 +363,16 @@ function F.Build()
     if frame and frame:IsShown() then F.Paint() end
 end
 function F.List() return list end
+-- fix 760: what the found flips cost and what they should earn (single offers: the sell rule, 3x, at least 99s)
+function F.ListSums()
+    local cost, gain = 0, 0
+    for _, r in ipairs(list) do
+        cost = cost + (r.cost or 0)
+        if r.profit then gain = gain + r.profit
+        else for _, o in ipairs(r.offers or {}) do gain = gain + F.ExpectedProfit(o.unit or o.buyout or 0, r.sell) end end
+    end
+    return cost, gain
+end
 F._rows = function() return rows end
 
 ----------------------------------------------------------------------
@@ -379,7 +401,8 @@ local function progress()
     if run.qi < #run.queue or run.q and run.q.kind == "browse" then
         status(string.format("searching the auction house... %d of %d searches, %d items to look at", run.qi, #run.queue, #run.items))
     else
-        status(string.format("looking at the items... %d of %d, %d flips so far", run.ii, #run.items, #list))
+        local cost, gain = F.ListSums()       -- fix 760: cost and expected profit of the flips found so far
+        status(string.format("looking at the items... %d of %d, %d flips so far, cost %s, profit %s", run.ii, #run.items, #list, money(cost), money(gain)))
     end
 end
 
@@ -1466,17 +1489,18 @@ function F.BerlinClock(utc)
     local b = date("!*t", utc + (summer and 7200 or 3600))
     return b.hour, b.min
 end
+F.DAY_HOURS, F.NIGHT_HOURS = 2, 8                         -- fix 759: both can be chosen in the options
 function F.PostHours(utc)
     local h, m = F.BerlinClock(utc)
-    if (h == 23 and m >= 59) or h < 8 then return 8 end
-    return 2
+    if (h == 23 and m >= 59) or h < 8 then return F.NIGHT_HOURS end
+    return F.DAY_HOURS
 end
 -- the game's duration index for so many hours: read from its own names ("2 Hours", "8 Stunden"), else 1 = short, 2 = medium
 function F.DurationIndex(hours)
     for i, s in ipairs({ AUCTION_DURATION_ONE or false, AUCTION_DURATION_TWO or false, AUCTION_DURATION_THREE or false }) do
         if type(s) == "string" and tonumber(s:match("(%d+)")) == hours then return i end
     end
-    return hours == 8 and 2 or 1
+    return ({ [8] = 2, [24] = 3 })[hours] or 1
 end
 function F.PostDuration(utc) return F.DurationIndex(F.PostHours(utc)) end
 
@@ -2117,19 +2141,76 @@ end
 F._Black = function() return black end
 
 ----------------------------------------------------------------------
+-- fix 759 (MadDadVibe): the options tab "Flip Helper" - the rules above are its defaults; what the dad changed is in
+-- OMQDB.flip.cfg (for all characters), in whole numbers (tenths, percent, copper, hours) as the options show them
+----------------------------------------------------------------------
+F.CFG = {   -- key = { default in the options' unit, how it becomes the rule }
+    minProfit = { 5000, function(v) F.MIN_PROFIT = v end },
+    gap10 = { 20, function(v) for _, k in ipairs(F.BUTTONS) do if F.METHODS[k] then F.METHODS[k].ratio = v / 10 end end end },
+    vendorPct = { 125, function(v) F.VENDOR_FACTOR = v / 100 end },
+    maxBuy = { 10000, function(v) F.MAX_BUY = v end },
+    maxBuyHigh = { 15000, function(v) F.MAX_BUY_HIGH = v end },
+    snackPct = { 10, function(v) F.SNACK_PCT = 1 + v / 100 end },
+    snackAdd = { 500, function(v) F.SNACK_ADD = v end },
+    maxHeld = { 2, function(v) F.MAX_HELD = v end },
+    sell10 = { 30, function(v) F.SELL_FACTOR = v / 10 end },
+    sellMinCap = { 9900, function(v) F.SELL_MIN_CAP = v end },
+    jewelBonus = { 10000, function(v) F.JEWEL_BONUS = v end },
+    repostGain = { 20, function(v) F.REPOST_GAIN = 1 + v / 100 end },
+    reposts = { 5, function(v) F.REPOSTS = v end },
+    expireHours = { 48, function(v) F.EXPIRE_HOURS = v end },
+    dayHours = { 2, function(v) F.DAY_HOURS = v end },
+    nightHours = { 8, function(v) F.NIGHT_HOURS = v end },
+}
+F.SUFFIX_OFF = { channeler = true, hierophant = true, champion = true, defender = true, healer = true }   -- off by default
+local function cfg()
+    local d = db()
+    d.cfg = d.cfg or {}
+    return d.cfg
+end
+function F.Cfg(key)
+    local c = cfg()
+    if c[key] ~= nil then return c[key] end
+    return F.CFG[key] and F.CFG[key][1]
+end
+function F.SetCfg(key, v)
+    if not F.CFG[key] then return end
+    cfg()[key] = v
+    F.CFG[key][2](v)
+end
+function F.SuffixOn(key)
+    local c = cfg()
+    if c.sfx and c.sfx[key] ~= nil then return c.sfx[key] end
+    return not F.SUFFIX_OFF[key]
+end
+function F.SetSuffix(key, on)
+    local c = cfg()
+    c.sfx = c.sfx or {}
+    c.sfx[key] = on and true or false
+    F.OFF[key] = (not on) or nil
+end
+function F.ApplyCfg()
+    for key, def in pairs(F.CFG) do def[2](F.Cfg(key)) end
+    F.OFF = {}
+    for _, s in ipairs(F.SUFFIXES) do if not F.SuffixOn(s.key) then F.OFF[s.key] = true end end
+end
+
+----------------------------------------------------------------------
 -- Events
 ----------------------------------------------------------------------
 local ev = CreateFrame("Frame")
 for _, e in ipairs({ "AUCTION_HOUSE_CLOSED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED",
                      "AUCTION_HOUSE_BROWSE_FAILURE", "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED",
                      "AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED", "AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
-                     "ITEM_SEARCH_RESULTS_UPDATED", "GET_ITEM_INFO_RECEIVED", "ITEM_KEY_ITEM_INFO_RECEIVED", "BAG_UPDATE_DELAYED" }) do
+                     "ITEM_SEARCH_RESULTS_UPDATED", "GET_ITEM_INFO_RECEIVED", "ITEM_KEY_ITEM_INFO_RECEIVED", "BAG_UPDATE_DELAYED",
+                     "PLAYER_LOGIN" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 local considerAt = nil
 ev:SetScript("OnEvent", function(_, event, a1)
     local ok, err = pcall(function()
-        if event == "BAG_UPDATE_DELAYED" then F.CheckGone(); return   -- decision 745
+        if event == "PLAYER_LOGIN" then F.ApplyCfg(); return       -- fix 759: the options
+        elseif event == "BAG_UPDATE_DELAYED" then F.CheckGone(); return   -- decision 745
         elseif event == "AUCTION_HOUSE_CLOSED" then
             if run then F.Finish("the auction house closed") end
             if frame then frame:Hide() end

@@ -124,6 +124,84 @@ local function mark(classes, items)
 end
 
 -- decision 586: everything that only matters to some classes, in one tab
+-- fix 759 (MadDadVibe): the Flip Helper's own options; the values are kept for all characters in OMQDB.flip.cfg
+local FLIP_DEFAULT = { minProfit = 5000, gap10 = 20, vendorPct = 125, maxBuy = 10000, maxBuyHigh = 15000, snackPct = 10,
+    snackAdd = 500, maxHeld = 2, sell10 = 30, sellMinCap = 9900, jewelBonus = 10000, repostGain = 20, reposts = 5,
+    expireHours = 48, dayHours = 2, nightHours = 8 }
+local FLIP_SUFFIXES = {
+    { "sorcerer", "of the Sorcerer" }, { "bandit", "of the Bandit" }, { "knight", "of the Knight" }, { "beast", "of the Beast" },
+    { "elder", "of the Elder" }, { "channeler", "of the Channeler" }, { "hierophant", "of the Hierophant" },
+    { "champion", "of the Champion" }, { "defender", "of the Defender" }, { "healer", "of the Healer" },
+}
+local FLIP_SUFFIX_OFF = { channeler = true, hierophant = true, champion = true, defender = true, healer = true }
+local function flipCfg()
+    OMQDB = OMQDB or {}; OMQDB.flip = OMQDB.flip or {}; OMQDB.flip.cfg = OMQDB.flip.cfg or {}
+    return OMQDB.flip.cfg
+end
+local function flipGet(key)
+    if OMQ.Flip and OMQ.Flip.Cfg then return OMQ.Flip.Cfg(key) end
+    local v = flipCfg()[key]
+    if v == nil then return FLIP_DEFAULT[key] end
+    return v
+end
+local function flipSet(key, v)
+    if OMQ.Flip and OMQ.Flip.SetCfg then OMQ.Flip.SetCfg(key, v); return end
+    flipCfg()[key] = v
+end
+local function silver(c)
+    c = math.floor(c or 0)
+    local g, s = math.floor(c / 10000), math.floor((c % 10000) / 100)
+    if g > 0 then return s > 0 and (g .. "g " .. s .. "s") or (g .. "g") end
+    return s .. "s"
+end
+local function factor(v) return string.format("%.1fx", v / 10) end
+local HOURS = { 2, 8, 24 }
+local function flipItems(enabled)
+    local function step(key, label, min, max, by, tip, fmt, unit)
+        return { type = "step", label = label, min = min, max = max, by = by, unit = unit, fmt = fmt, tip = tip, unlock = "auction",
+                 get = function() return flipGet(key) end, set = function(v) flipSet(key, v) end }
+    end
+    local function hours(key, label, tip)
+        return { type = "segment", label = label, options = { "2 h", "8 h", "24 h" }, tip = tip, unlock = "auction",
+                 get = function() local h = flipGet(key); for i, x in ipairs(HOURS) do if x == h then return i end end; return 1 end,
+                 set = function(i) flipSet(key, HOURS[i]) end }
+    end
+    local out = { enabled,
+        step("minProfit", "Minimum profit per flip", 0, 50000, 500, "A flip is only bought when it should earn at least this much after the auction house cut. A single offer is reckoned with the sell limit.", silver),
+        step("gap10", "2nd offer at least x the cheapest", 12, 50, 1, "An item is a flip when its second cheapest offer costs at least this many times the cheapest.", factor),
+        step("vendorPct", "Buy at most x vendor price", 100, 300, 5, "No offer is bought for more than this share of the vendor price (unknown vendor price: no limit).", nil, "%"),
+        step("maxBuy", "Gold cap up to level 39", 1000, 100000, 1000, "No offer over this price is bought for items up to required level 39 (not for Snacks).", silver),
+        step("maxBuyHigh", "Gold cap from level 40", 1000, 100000, 1000, "No offer over this price is bought for items from required level 40 (not for Snacks).", silver),
+        step("snackPct", "Snacks: vendor price + %", 0, 100, 5, "Snacks buy an offer under the higher of vendor price + this share and vendor price + the silver below.", nil, "%"),
+        step("snackAdd", "Snacks: vendor price + silver", 0, 5000, 100, "Snacks buy an offer under the higher of vendor price + the share above and vendor price + this much.", silver),
+        step("maxHeld", "Pieces per item at most", 1, 10, 1, "At most this many pieces of one item with one suffix are held as flips at the same time."),
+        step("sell10", "Sell limit x buy price", 10, 100, 1, "A flip is never posted above this many times its buy price.", factor),
+        step("sellMinCap", "Minimum sell limit", 0, 50000, 100, "A sell limit under this is raised to it.", silver),
+        step("jewelBonus", "Limit surcharge rings / amulets", 0, 50000, 500, "Rings and amulets may be posted this much above the sell limit.", silver),
+        step("repostGain", "Relist when price x% more than buy in", 0, 200, 5, "A flip back unsold is posted again when it still brings this much more than it cost.", nil, "%"),
+        step("reposts", "Unsold rounds until the vendor", 1, 20, 1, "After this many rounds back unsold the flip goes to the vendor or is disenchanted."),
+        step("expireHours", "Expires after hours without relist", 6, 168, 6, "A flip not posted again for this many hours (real time) goes to the vendor or is disenchanted.", nil, "h"),
+        hours("dayHours", "Post duration day", "How long flips are posted during the day."),
+        hours("nightHours", "Post duration night", "How long flips are posted at night."),
+    }
+    for _, sx in ipairs(FLIP_SUFFIXES) do
+        local key = sx[1]
+        out[#out + 1] = { type = "check", label = "Buy " .. sx[2], unlock = "auction",
+            tip = "Items " .. sx[2] .. " are looked at in the flip searches.",
+            get = function()
+                if OMQ.Flip and OMQ.Flip.SuffixOn then return OMQ.Flip.SuffixOn(key) end
+                local c = flipCfg()
+                if c.sfx and c.sfx[key] ~= nil then return c.sfx[key] end
+                return not FLIP_SUFFIX_OFF[key]
+            end,
+            set = function(v)
+                if OMQ.Flip and OMQ.Flip.SetSuffix then OMQ.Flip.SetSuffix(key, v); return end
+                local c = flipCfg(); c.sfx = c.sfx or {}; c.sfx[key] = v and true or false
+            end }
+    end
+    return out
+end
+
 local function classItems()
     local out = {}
     local function add(list) append(out, list) end
@@ -549,8 +627,7 @@ local function allSections()
               click = function() OMQ.ChatWindow:Toggle() end },
         } },
         { title = "CLASS", col = 2, class = true, items = classItems() },
-        { title = "INTERFACE", col = 2, items = {
-            -- fix 753
+        { title = "FLIP", col = 2, items = flipItems(
             { type = "check", label = "Flip helper (this character only)", unlock = "auction",
               tip = "A Flip button in the auction helper turns it into the flip helper: Sell as always, Buy with the item flip search (choose a search profile, Search, left click buys, Buy next) and the Blacklist of dismissed items. The auction house opens with the helper it was closed with. Off by default, switched on for each character on its own.",
               get = function()
@@ -564,7 +641,9 @@ local function allSections()
                   local k = (UnitGUID and UnitGUID("player")) or "?"
                   OMQDB.flip.chars[k] = OMQDB.flip.chars[k] or {}
                   OMQDB.flip.chars[k].on = v and true or false
-              end },
+              end }
+        ) },
+        { title = "INTERFACE", col = 2, items = {
             { type = "check", label = "Minimap icon",
               tip = "If hidden: /omq options opens the quick options, /omq minimap brings the icon back.",
               get = function() return not OMQ.db.minimap.hidden end,
