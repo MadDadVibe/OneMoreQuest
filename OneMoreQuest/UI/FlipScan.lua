@@ -446,12 +446,6 @@ local function nextSearch()
         send()
         return
     end
-    if run.pi < #run.parked then                           -- decision 736: my parked flips first
-        run.pi = run.pi + 1
-        run.q = { kind = "item", e = run.parked[run.pi], tries = 1 }
-        send()
-        return
-    end
     if run.qi < #run.queue then
         run.qi = run.qi + 1
         local f = run.queue[run.qi]
@@ -560,39 +554,10 @@ end
 
 local function newRun(queue)
     run = { method = F.method, state = "start", t0 = now(), queue = queue, qi = 0, items = {}, ii = 0, checks = {}, lines = 0, searched = 0,
-            waiting = 0, log = {}, parked = {}, pi = 0 }
+            waiting = 0, log = {} }
 end
 
--- decision 736 (MadDadVibe): the flips in my bags that came back unsold and wait for their profit are searched first,
--- with the chosen method's rule (no level range, no suffix filter): maybe buying out the competition makes them pay again
-function F.Parked()
-    local out = {}
-    local C, api = C_Container, A()
-    if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo and api) then return out end
-    local seen = {}
-    for bag = 0, (OMQ.LastBag and OMQ.LastBag()) or 4 do
-        for slot = 1, C.GetContainerNumSlots(bag) or 0 do
-            local it = C.GetContainerItemInfo(bag, slot)
-            local id = it and it.itemID
-            local x = id and not isSecret(id) and OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
-            if x and F.Owns(id) and (x.unsold or 0) >= 1 and not x.released and not it.isBound then
-                local loc = ItemLocation and ItemLocation.CreateFromBagAndSlot and ItemLocation:CreateFromBagAndSlot(bag, slot)
-                local ok, k = false, nil
-                if api.GetItemKeyFromItem then ok, k = pcall(api.GetItemKeyFromItem, loc) end
-                if not (ok and k) and api.MakeItemKey then ok, k = pcall(api.MakeItemKey, id) end
-                if ok and k and k.itemID then
-                    local ks = keyString(k)
-                    if not seen[ks] then
-                        seen[ks] = true
-                        out[#out + 1] = { ks = ks, key = k, id = id, name = it.itemName or (db().items and db().items[id] and db().items[id].name),
-                                          icon = it.iconFileID, parked = true, level = reqLevelOf(id) }
-                    end
-                end
-            end
-        end
-    end
-    return out
-end
+-- decision 736 (parked flips searched first) was taken back in decision 745: expired flips go to the vendor or the enchanter
 
 function F.Start(method)
     if method then F.method = method end
@@ -610,12 +575,9 @@ function F.Start(method)
     for k in pairs(lines) do lines[k] = nil end
     for k in pairs(rows) do rows[k] = nil end              -- a new search: every offer is new
     newRun(queue)
-    run.parked = F.Parked()                                -- decision 736
-    for _, e in ipairs(run.parked) do e.queued = true; lines[e.ks] = e end
     F.Build()
     local m = F.METHODS[F.method]
-    status(string.format("%ssearching the auction house for green gear of level %d-%d (%s)...",
-        #run.parked > 0 and string.format("%d parked flips first, then ", #run.parked) or "", m.minLevel or F.MIN_LEVEL,
+    status(string.format("searching the auction house for green gear of level %d-%d (%s)...", m.minLevel or F.MIN_LEVEL,
         m.maxLevel or F.MAX_LEVEL, m.label))
     return true
 end
@@ -757,7 +719,8 @@ function F.Note(id, kind, c, name)
     if kind == "b" then it.b, it.spent = it.b + 1, it.spent + c
     elseif kind == "s" then it.s, it.got = it.s + 1, it.got + c
     elseif kind == "u" then it.u = it.u + 1
-    elseif kind == "v" then it.v, it.got = it.v + 1, it.got + c end
+    elseif kind == "v" then it.v, it.got = it.v + 1, it.got + c
+    elseif kind == "d" then it.d, it.got = (it.d or 0) + 1, it.got + c end   -- decision 745: disenchanted (its value)
     it.t = stamp()
 end
 -- the result mail of a flip auction (AH.ScanMail via AH.Result); true when the helper's own unsold rule must not count it
@@ -793,7 +756,7 @@ function F.Vendored(id, price)
     local it = items()[id]
     F.Note(id, "v", price)
     F.Stat(id, "v", price, nil, F.PaidAny(id) or 0)        -- decision 743
-    if x.released then F.NoteVendored(id, price, x) end
+    if x.released or F.Expired(x) then F.NoteVendored(id, price, x) end   -- 5x unsold or 48 hours (decision 745)
     it = items()[id]
     it.cost = (it.cost or 0) + (F.PaidAny(id) or 0)
     x.n = (x.n or 1) - 1
@@ -825,7 +788,8 @@ local function addRec(r, kind, c, cost, fee)
     if kind == "b" then r.b, r.spent = r.b + 1, r.spent + c
     elseif kind == "s" then r.s, r.got, r.cost = r.s + 1, r.got + c, r.cost + (cost or 0)
     elseif kind == "u" then r.u, r.fees = r.u + 1, r.fees + (tonumber(fee) or 0)
-    elseif kind == "v" then r.v, r.got, r.cost = r.v + 1, r.got + c, r.cost + (cost or 0) end
+    elseif kind == "v" then r.v, r.got, r.cost = r.v + 1, r.got + c, r.cost + (cost or 0)
+    elseif kind == "d" then r.d, r.got, r.cost = (r.d or 0) + 1, r.got + c, r.cost + (cost or 0) end
 end
 function F.KindOf(id)
     local c, sc = classOf(id)
@@ -881,7 +845,7 @@ local function label(key)
     return "of the " .. key:sub(1, 1):upper() .. key:sub(2)
 end
 local function rate(r)
-    local n = r.s + r.v
+    local n = r.s + r.v + (r.d or 0)
     if n == 0 then return nil end
     return math.floor(r.s * 100 / n + 0.5)
 end
@@ -907,8 +871,9 @@ function F.SuffixRows()
         local q = rate(r)
         local profit = r.got - r.cost - r.fees
         out[#out + 1] = { key = key, name = label(key), rate = q,
-            text = string.format("bought %d, sold %d, back %d, vendor %d", r.b, r.s, r.u, r.v),
-            result = (q and (q .. "% sold, ") or "") .. F.Signed(profit), gain = (r.s + r.v) > 0 and profit or nil,
+            text = string.format("bought %d, sold %d, back %d, vendor %d%s", r.b, r.s, r.u, r.v,
+                (r.d or 0) > 0 and (", disenchanted " .. r.d) or ""),
+            result = (q and (q .. "% sold, ") or "") .. F.Signed(profit), gain = (r.s + r.v + (r.d or 0)) > 0 and profit or nil,
             low = q and q < 50, tip = tip }
     end
     table.sort(out, function(a, b)
@@ -927,7 +892,7 @@ function F.SuffixRows()
 end
 
 function F.Totals()
-    local t = { b = 0, s = 0, u = 0, v = 0, spent = 0, got = 0, cost = 0, fees = 0, loot = 0 }
+    local t = { b = 0, s = 0, u = 0, v = 0, d = 0, spent = 0, got = 0, cost = 0, fees = 0, loot = 0 }
     for _, it in pairs(items()) do
         for k in pairs(t) do t[k] = t[k] + (it[k] or 0) end
     end
@@ -947,7 +912,7 @@ function F.Rows()
         { "Bought", string.format("%d for %s", t.b, money(t.spent)) },
         { "Sold", string.format("%d for %s", t.s, money(t.got)) },
         { "Came back unsold", tostring(t.u) },
-        { "To the vendor", tostring(t.v) },
+        { "To the vendor / disenchanted", t.v .. " / " .. t.d },   -- decision 745
         { "Deposits lost (unsold)", money(t.fees) },
         { "Earned with flips", signed(t.profit) .. " (on " .. money(t.cost) .. " of sold pieces)" },
         { "Still out (bags / AH)", money(t.open) },
@@ -959,10 +924,10 @@ function F.Rows()
     local out = {}
     for _, r in ipairs(rows) do
         local it = r.it
-        local done = (it.s + it.v) > 0
+        local done = (it.s + it.v + (it.d or 0)) > 0
         out[#out + 1] = {
             id = r.id, name = it.name or ("item " .. r.id),
-            text = string.format("bought %d, sold %d, unsold %d%s%s", it.b, it.s, it.u, it.v > 0 and (", vendor " .. it.v) or "",
+            text = string.format("bought %d, sold %d, unsold %d%s%s", it.b, it.s, it.u, (it.v > 0 and (", vendor " .. it.v) or "") .. ((it.d or 0) > 0 and (", disenchanted " .. it.d) or ""),
                 (it.fees or 0) > 0 and (", deposits " .. money(it.fees)) or ""),
             result = done and signed((it.got or 0) - (it.cost or 0) - (it.fees or 0)) or ("spent " .. money(it.spent)),
             gain = done and ((it.got or 0) - (it.cost or 0) - (it.fees or 0)) or nil,
@@ -1194,7 +1159,72 @@ function F.Owns(id)
     if not x then return false end
     if stamp() - (x.t or 0) > F.KEEP_DAYS * 86400 then OMQDB.flip.owned[id] = nil; return false end
     if x.released then return false end                     -- came back unsold REPOSTS times: to the vendor (728)
+    if F.Expired(x) then return false end                   -- decision 745: not posted for 48 hours
     return true
+end
+----------------------------------------------------------------------
+-- decision 745 (MadDadVibe): a flip not posted for 48 hours (real time, from the purchase or the last post) is done,
+-- like one that came back unsold 5 times: it goes to the vendor or is disenchanted, whichever is worth more.
+-- Disenchanting only with an enchanter of mine on the realm (the disenchant category, UI/DisenchantSell.lua).
+----------------------------------------------------------------------
+F.EXPIRE_HOURS = 48
+function F.Expired(x)
+    return x and not x.released and (stamp() - (x.t or 0)) > F.EXPIRE_HOURS * 3600 or false
+end
+function F.Left(id)                                         -- seconds until it expires, nil when it is no flip of mine
+    local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
+    if not x or x.released then return nil end
+    return math.max(0, F.EXPIRE_HOURS * 3600 - (stamp() - (x.t or 0)))
+end
+-- a flip that is done: still in the records, no protection any more
+function F.Gone(id)
+    if type(id) ~= "number" or isSecret(id) then return false end
+    local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
+    if not x then return false end
+    if stamp() - (x.t or 0) > F.KEEP_DAYS * 86400 then return false end
+    return (x.released or F.Expired(x)) and true or false
+end
+-- "vendor" or "disenchant": what brings more, and disenchanting only when the disenchant category is on
+function F.ExitWay(id)
+    local vendor = vendorOf(id) or 0
+    local D, DS = OMQ.Disenchant, OMQ.DESell
+    local way = "vendor"
+    if D and D.Value and DS and DS.Mode and DS.Mode() then
+        local ok, v, _, _, priced = pcall(D.Value, id)
+        if ok and type(v) == "number" and priced and priced > 0 and v > vendor then way = "disenchant" end
+    end
+    local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[id]
+    if x then x.exit = way end
+    return way
+end
+-- a done flip that left the bags another way than the vendor (disenchanted, or mailed to the enchanter): counted once
+function F.CheckGone()
+    local d = OMQDB and OMQDB.flip
+    local count = C_Item and C_Item.GetItemCount
+    if not (d and d.owned and count) then return end
+    for id, x in pairs(d.owned) do
+        if x.exit == "disenchant" and F.Gone(id) then
+            local ok, n = pcall(count, id)
+            n = ok and tonumber(n) or nil
+            if n and n < (x.n or 1) then
+                local D = OMQ.Disenchant
+                local okV, v = pcall(function() return D and D.Value and D.Value(id) end)
+                v = okV and tonumber(v) or 0
+                for _ = 1, (x.n or 1) - n do F.Disenchanted(id, v) end
+            end
+        end
+    end
+end
+function F.Disenchanted(id, value)
+    local x = db().owned[id]
+    if not x then return end
+    local paid = F.PaidAny(id) or 0
+    F.Note(id, "d", value)
+    F.Stat(id, "d", value, nil, paid)
+    local it = items()[id]
+    it.cost = (it.cost or 0) + paid
+    x.n = (x.n or 1) - 1
+    if x.n <= 0 then db().owned[id] = nil end
 end
 -- the lowest price a bought flip is posted at: what it cost plus the house's cut
 function F.Floor(id)
@@ -1427,13 +1457,14 @@ local ev = CreateFrame("Frame")
 for _, e in ipairs({ "AUCTION_HOUSE_CLOSED", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED",
                      "AUCTION_HOUSE_BROWSE_FAILURE", "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED",
                      "AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED", "AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
-                     "ITEM_SEARCH_RESULTS_UPDATED", "GET_ITEM_INFO_RECEIVED", "ITEM_KEY_ITEM_INFO_RECEIVED" }) do
+                     "ITEM_SEARCH_RESULTS_UPDATED", "GET_ITEM_INFO_RECEIVED", "ITEM_KEY_ITEM_INFO_RECEIVED", "BAG_UPDATE_DELAYED" }) do
     pcall(ev.RegisterEvent, ev, e)
 end
 local considerAt = nil
 ev:SetScript("OnEvent", function(_, event, a1)
     local ok, err = pcall(function()
-        if event == "AUCTION_HOUSE_CLOSED" then
+        if event == "BAG_UPDATE_DELAYED" then F.CheckGone(); return   -- decision 745
+        elseif event == "AUCTION_HOUSE_CLOSED" then
             if run then F.Finish("the auction house closed") end
             if frame then frame:Hide() end
             for k in pairs(lines) do lines[k] = nil end

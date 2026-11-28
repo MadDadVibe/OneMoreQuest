@@ -199,6 +199,8 @@ function AH.Scan()
                         local deNotYet = deMode and DS.UpgradeNotYet and DS.UpgradeNotYet(link, equipLoc)
                         local flip = OMQ.Flip and OMQ.Flip.Owns(it.itemID)   -- a bought flip is for sale (decision 721)
                         if flip then e.flip = true
+                        elseif OMQ.Flip and OMQ.Flip.Gone and OMQ.Flip.Gone(it.itemID) then
+                            e.out = "flipdone"                           -- decision 745: done, vendor or disenchant
                         elseif upgradeForMe(link, equipLoc) and not deNotYet then e.out = "upgrade"
                         -- worth more disenchanted (decision 675): stays in the bags for the enchanter
                         elseif deMode and DS.HideFromAH(DS.Takes(it, { vendor = vendor, equipLoc = equipLoc, classID = classID, link = link }, nil, deMode)) then
@@ -307,7 +309,9 @@ function AH.FlipWhy(e)
     local x = OMQDB and OMQDB.flip and OMQDB.flip.owned and OMQDB.flip.owned[e.itemID]
     local need = paid and math.ceil(paid * (F.REPOST_GAIN or 1.2) / (1 - (F.CUT or 0.05))) or nil
     local back = x and x.unsold or 0
-    return string.format("|cffff9a6aflip back %dx: +20%% needs %s|r, now %s", back, need and money(need) or "?", money(e.price or 0))
+    local left = F and F.Left and F.Left(e.itemID)
+    local exp = left and string.format(", expires in %dh", math.ceil(left / 3600)) or ""   -- decision 745
+    return string.format("|cffff9a6aflip back %dx: +20%% needs %s|r, now %s%s", back, need and money(need) or "?", money(e.price or 0), exp)
 end
 
 -- the lists the panel shows
@@ -409,6 +413,7 @@ function AH.VendorIt(itemID)
     if OMQ.BuyKind and OMQ.BuyKind(itemID) then return false end
     if AH.Crafted(itemID) then return false end
     if OMQ.Flip and OMQ.Flip.Owns(itemID) then return false end    -- a bought flip (decision 721)
+    if OMQ.Flip and OMQ.Flip.Gone and OMQ.Flip.Gone(itemID) then return OMQ.Flip.ExitWay(itemID) == "vendor" end   -- decision 745
     if OMQ.Vendor and OMQ.Vendor.BoughtBack and OMQ.Vendor.BoughtBack(itemID) then return false end   -- fix 559
     if ah.lowDay and ah.lowDay[itemID] and ah.lowDay[itemID] == AH.Today() then return true end
     local t = ah.low and ah.low[itemID]
@@ -1177,7 +1182,7 @@ local function outText(L)
     for i = 1, math.min(3, #L.out) do
         local e = L.out[i]
         local low = e.lowGain and "under 3s more" or string.format("under +%d%%", math.floor(((e.margin or AH.MARGIN) - 1) * 100 + 0.5))
-        local why = ({ low = low, noprice = "no price yet", upgrade = "upgrade for you", disenchant = "worth more disenchanted", needed = "a dad needs it", flipwait = "flip waits for +20%" })[e.state] or e.state
+        local why = ({ low = low, noprice = "no price yet", upgrade = "upgrade for you", disenchant = "worth more disenchanted", needed = "a dad needs it", flipwait = "flip waits for +20%", flipdone = "flip done: vendor or disenchant" })[e.state] or e.state
         names[#names + 1] = e.name .. " (" .. why .. ")"
     end
     local more = #L.out > 3 and (" and " .. (#L.out - 3) .. " more") or ""

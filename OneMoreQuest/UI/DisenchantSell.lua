@@ -209,6 +209,13 @@ function DS.Takes(it, extra, ctx, mode)
     local V, AH = OMQ.Vendor, OMQ.AuctionHelper
     if V and V.BoughtBack and V.BoughtBack(id) then return nil end
     if OMQ.Flip and OMQ.Flip.Owns(id) then return nil end        -- a bought flip is sold again (decision 721)
+    if OMQ.Flip and OMQ.Flip.Gone and OMQ.Flip.Gone(id) then         -- decision 745: a done flip worth more disenchanted
+        if OMQ.Flip.ExitWay(id) ~= "disenchant" then return nil end
+        local v = D.Value(id)
+        local vend = extra.vendor
+        if vend == nil then vend = select(11, info(extra.link or it.hyperlink or id)) end
+        return v, tonumber(vend) or 0, nil
+    end
     if V and V.Kept and V.Kept(id) then return nil end
     local link = extra.link or it.hyperlink
     local equipLoc = extra.equipLoc
