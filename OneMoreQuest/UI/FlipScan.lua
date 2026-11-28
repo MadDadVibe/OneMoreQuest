@@ -1231,6 +1231,7 @@ local function markBuild()
     local box = CreateFrame("Frame", nil, f)
     box:SetPoint("TOPLEFT", 12, -30)
     box:SetSize(356, F.MARK_ROWS * 20)
+    f.box = box
     box:EnableMouseWheel(true)
     box:SetScript("OnMouseWheel", function(_, d)
         F.markOffset = math.max(0, F.markOffset - d)
