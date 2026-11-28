@@ -112,7 +112,8 @@ local function db()
     OMQDB.deBargain = nil                                  -- the old disenchant bargains (decision 710) are gone
     OMQDB.flip = OMQDB.flip or {}
     local d = OMQDB.flip
-    d.skip = d.skip or {}
+    d.skip = nil                                           -- fix 753: the 24 h discards are gone, a dismissed item is on the blacklist
+    d.black = d.black or {}
     d.owned = d.owned or {}
     return d
 end
@@ -278,12 +279,9 @@ function F.Judge(offers, method, level, vendor)
     return { kind = kind, n = n, sell = sell, maxBuy = maxBuy, buy = buy, cost = cost, profit = sell and profit or nil }
 end
 
-local function skipped(ks, price)
-    local s = db().skip[ks]
-    if not s then return false end
-    if stamp() - (s.t or 0) > F.SKIP_TIME or price < (s.p or 0) then db().skip[ks] = nil; return false end
-    return true
-end
+-- fix 753 (MadDadVibe): a dismissed item (item + suffix) never comes back in the flip searches
+function F.Blocked(ks) return ks ~= nil and db().black[ks] ~= nil end
+local function skipped(ks) return F.Blocked(ks) end
 
 -- the answer of one item search: the row of the item, judged
 function F.Take(e, offers, check)
@@ -414,6 +412,7 @@ local function consider()
         if not e.queued then
             local m = F.Consider(e)
             if m == "wait" then waiting = waiting + 1
+            elseif m and F.Blocked(e.ks) then e.queued = true                  -- fix 753: on the blacklist
             elseif m then e.queued = true; run.items[#run.items + 1] = e end
         end
     end
@@ -676,9 +675,9 @@ function F.OnDone(r, ok)
         F.bought.n = F.bought.n + 1
         F.bought.spent = F.bought.spent + (r.paid or 0)
         F.bought.worth = F.bought.worth + (r.sell and math.floor(r.sell * (1 - F.CUT)) or 0)
-        F.lastName = r.name
+        F.lastName, F.lastKey = r.name, r.itemKey
         F.Remember(r.itemID, r.paid, r.sell, F.LinkSuffix(r.paidLink))
-        F.lastName = nil
+        F.lastName, F.lastKey = nil, nil
         if not (r.offers and #r.offers > 0) then r.bought = true end
     else
         r.fresh, r.hold = nil, nil
@@ -702,6 +701,10 @@ function F.Remember(id, paid, sell, sfx)
     if type(F.lastName) == "string" then                   -- fix 750: pieces held per name (item + suffix)
         x.held = x.held or {}
         x.held[F.lastName] = (x.held[F.lastName] or 0) + 1
+        if type(F.lastKey) == "table" then                 -- fix 753: for the search from the blacklist
+            x.keys = x.keys or {}
+            x.keys[F.lastName] = { itemID = F.lastKey.itemID, itemLevel = F.lastKey.itemLevel, itemSuffix = F.lastKey.itemSuffix }
+        end
     end
     F.Stat(id, "b", paid, F.lastName)
 end
@@ -1523,24 +1526,112 @@ function F.ShowInGame(r)
 end
 
 function F.Discard(r)
-    if type(r) ~= "table" then return end
-    db().skip[r.ks] = { p = r.offers and r.offers[1] and r.offers[1].unit or r.price, t = stamp() }
+    if type(r) ~= "table" or not r.ks then return end
+    local k = r.itemKey
+    db().black[r.ks] = { id = r.itemID, name = r.name, icon = r.icon, link = r.link, t = stamp(),
+                         key = type(k) == "table" and { itemID = k.itemID, itemLevel = k.itemLevel, itemSuffix = k.itemSuffix } or nil }
     r.hold = nil
     F.Build()
+    F.RepaintBlack()
 end
-function F.ResetSkip()
-    local n = 0
-    for k in pairs(db().skip) do db().skip[k] = nil; n = n + 1 end
+function F.Unblock(ks)
+    if not (ks and db().black[ks]) then return false end
+    db().black[ks] = nil
     F.Build()
+    F.RepaintBlack()
+    return true
+end
+function F.ResetSkip()                                     -- /omq ah flip reset: the whole blacklist (not the temp lines)
+    local n = 0
+    for k in pairs(db().black) do db().black[k] = nil; n = n + 1 end
+    F.Build()
+    F.RepaintBlack()
     return n
+end
+-- the blacklist: the temp lines first (2 of them held, fix 750; they go by themselves once one is sold), then the
+-- dismissed ones, the newest first
+function F.BlackRows()
+    local out = {}
+    local d = db()
+    if F.MAX_HELD then
+        for id, x in pairs(d.owned) do
+            if x.held and F.Owns(id) then
+                for name, c in pairs(x.held) do
+                    if c >= F.MAX_HELD then
+                        local key = x.keys and x.keys[name]
+                        out[#out + 1] = { temp = true, id = id, name = name, n = c, ks = "temp:" .. id .. ":" .. name,
+                                          itemKey = key or { itemID = id, itemLevel = 0, itemSuffix = 0 } }
+                    end
+                end
+            end
+        end
+    end
+    table.sort(out, function(a, b) return tostring(a.name) < tostring(b.name) end)
+    local perm = {}
+    for ks, b in pairs(d.black) do
+        perm[#perm + 1] = { id = b.id, name = b.name, icon = b.icon, link = b.link, t = b.t or 0, ks = ks,
+                            itemKey = b.key or { itemID = b.id, itemLevel = 0, itemSuffix = 0 } }
+    end
+    table.sort(perm, function(a, b) if a.t ~= b.t then return a.t > b.t end return a.ks < b.ks end)
+    for _, r in ipairs(perm) do out[#out + 1] = r end
+    return out
 end
 
 ----------------------------------------------------------------------
--- The window
+-- The Flip Helper (fix 753, MadDadVibe): the auction helper turns into it with the Flip button. Its tabs are
+-- Sell | Buy | Blacklist; Buy (this part) holds the search profile, the Search button, the found flips and Buy next,
+-- drawn like the auction helper's own tabs. Switched on per character in the options (Interface).
 ----------------------------------------------------------------------
 F.offset = 0
 local rowFrames = {}
 F._rowFrames = function() return rowFrames end
+local GOLD = { 0.89, 0.71, 0.29 }
+
+-- per character: on/off, the helper the auction house opens with, the last search profile
+local function charKey() return (UnitGUID and UnitGUID("player")) or "?" end
+function F.Char()
+    local d = db()
+    d.chars = d.chars or {}
+    local k = charKey()
+    d.chars[k] = d.chars[k] or {}
+    return d.chars[k]
+end
+function F.Enabled() return F.Char().on == true end
+function F.SetEnabled(v)
+    local c = F.Char()
+    c.on = v and true or false
+    if not v then c.helper = nil end
+    local h = H()
+    if h and h.FlipChanged then pcall(h.FlipChanged) end
+end
+function F.SavedHelper() return (F.Enabled() and F.Char().helper == "flip") and "flip" or "ah" end
+function F.SaveHelper(which) F.Char().helper = (which == "flip") and "flip" or "ah" end
+function F.Pick(key)                                       -- a profile from the box: chosen, not yet searched
+    if not F.METHODS[key or ""] then return false end
+    if run and not run.checkOnly then F.Cancel() end
+    F.method = key
+    F.Char().method = key
+    status("search profile: " .. F.METHODS[key].label .. " - press Search")
+    return true
+end
+
+-- the small buttons of our own look (as the auction helper's Reset button)
+local function button(parent, w, h, label, onClick)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(w, h)
+    b.edge = b:CreateTexture(nil, "BACKGROUND"); b.edge:SetPoint("TOPLEFT", -1, 1); b.edge:SetPoint("BOTTOMRIGHT", 1, -1)
+    b.edge:SetColorTexture(0.45, 0.37, 0.18, 1)
+    b.bg = b:CreateTexture(nil, "BORDER"); b.bg:SetAllPoints(); b.bg:SetColorTexture(0.2, 0.21, 0.25, 1)
+    b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormal"); b.text:SetPoint("CENTER"); b.text:SetText(label)
+    b.text:SetTextColor(0.93, 0.93, 0.95)
+    b.hl = b:CreateTexture(nil, "HIGHLIGHT"); b.hl:SetAllPoints(); b.hl:SetColorTexture(1, 1, 1, 0.08)
+    function b:SetText(t) self.text:SetText(t) end
+    function b:GetText() return self.text:GetText() end
+    b:SetScript("OnClick", onClick)
+    b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    return b
+end
+F._button = button
 
 local function rowState(r)
     if run and run.q and run.q.kind == "item" and run.q.check and run.q.e.ks == r.ks then return "searching the auction..." end
@@ -1554,7 +1645,7 @@ local function makeRow(i)
     r:SetPoint("TOPLEFT", frame.list, "TOPLEFT", 0, -(i - 1) * (F.ROW_H + 2))
     r:SetScript("OnClick", function(self, mouse)
         local ok, err = pcall(function()
-            if mouse == "RightButton" then F.Discard(self.omq)
+            if mouse == "RightButton" then F.Discard(self.omq)                   -- fix 753: to the blacklist for good
             elseif IsShiftKeyDown and IsShiftKeyDown() then F.ShowInGame(self.omq)    -- fix 724
             else F.Buy(self.omq) end
             F.Paint()
@@ -1576,7 +1667,7 @@ local function makeRow(i)
         end
         GameTooltip:AddLine("Left click: buy the next cheap one (the first click looks for the auctions)", 0.6, 0.6, 0.6)
         GameTooltip:AddLine("Shift + left click: show it in the auction house window", 0.6, 0.6, 0.6)
-        GameTooltip:AddLine("Right click: discard (back when it is offered cheaper)", 0.6, 0.6, 0.6)
+        GameTooltip:AddLine("Right click: dismiss for good (to the blacklist)", 0.6, 0.6, 0.6)
         GameTooltip:Show()
     end)
     r:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -1584,36 +1675,39 @@ local function makeRow(i)
     return r
 end
 
-local function build()
-    local ok, f = pcall(CreateFrame, "Frame", "OneMoreQuestFlip", UIParent, "BasicFrameTemplateWithInset")
-    if not ok or not f then return end
+local function build(parent)
+    local f = CreateFrame("Frame", "OneMoreQuestFlip", parent or UIParent)
     frame = f
-    f:SetSize(380, 180 + 24 * (math.ceil(#F.BUTTONS / 2) - 2) + F.ROWS * (F.ROW_H + 2))
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    f:SetFrameStrata("HIGH")
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOP", 0, -5)
-    title:SetText("One More Quest - item flips")
-    local st = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    st:SetPoint("TOPLEFT", 14, -32)
-    st:SetWidth(352)
-    st:SetJustifyH("LEFT")
-    f.status = st
-    local again = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    again:SetSize(110, 22)
-    local extra = 24 * (math.ceil(#F.BUTTONS / 2) - 2)    -- decision 746: three rows of buttons
-    again:SetPoint("TOPLEFT", 12, -112 - extra)
-    -- fix 724: the two methods; a click starts the search with it
+    f:SetSize(380, 100 + F.ROWS * (F.ROW_H + 2))
+    if parent and parent.box and f.SetFrameLevel then f:SetFrameLevel(parent.box:GetFrameLevel() + 8) end
+    -- the search profile box and the Search button, in the row of the auction helper's mode switch
+    local pick = button(f, 230, 26, "Choose a search profile", function()
+        if frame.drop:IsShown() then frame.drop:Hide() else frame.drop:Show() end
+    end)
+    pick:SetPoint("TOPLEFT", 22, -6)
+    pick.text:ClearAllPoints(); pick.text:SetPoint("LEFT", 10, 0)
+    pick.arrow = pick:CreateFontString(nil, "OVERLAY", "GameFontNormal"); pick.arrow:SetPoint("RIGHT", -8, 0); pick.arrow:SetText("v")
+    pick.arrow:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+    f.pick = pick
+    local drop = CreateFrame("Frame", nil, f)
+    drop:SetPoint("TOPLEFT", pick, "BOTTOMLEFT", 0, -2)
+    drop:SetSize(230, #F.BUTTONS * 24 + 4)
+    if drop.SetFrameLevel then drop:SetFrameLevel(f:GetFrameLevel() + 20) end
+    drop.bg = drop:CreateTexture(nil, "BACKGROUND"); drop.bg:SetAllPoints(); drop.bg:SetColorTexture(0.05, 0.055, 0.075, 0.98)
+    drop:EnableMouse(true)
+    drop:Hide()
+    f.drop = drop
     f.methods = {}
     for i, key in ipairs(F.BUTTONS) do
-        local mb = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        mb:SetSize(173, 22)                                 -- two rows of two (decision 731)
-        mb:SetPoint("TOPLEFT", 12 + ((i - 1) % 2) * 179, -60 - math.floor((i - 1) / 2) * 24)
-        mb:SetText(F.METHODS[key].label)
+        local mb = button(drop, 222, 22, F.METHODS[key].label, function()
+            local ok2, err = pcall(function()
+                F.Pick(key)
+                frame.drop:Hide()
+                F.Paint()
+            end)
+            if not ok2 then OMQ:Error("item flips", err) end
+        end)
+        mb:SetPoint("TOPLEFT", 4, -2 - (i - 1) * 24)
         mb:SetScript("OnEnter", function(self)                 -- decision 746: the track record of this bracket
             if not GameTooltip then return end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -1623,39 +1717,31 @@ local function build()
             GameTooltip:AddLine(b, 0.8, 0.8, 0.8)
             GameTooltip:Show()
         end)
-        mb:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-        mb:SetScript("OnClick", function()
-            local ok2, err = pcall(function()
-                if run then F.Cancel() end
-                local started, why = F.Start(key)
-                if not started then OMQ:Print("item flips: " .. tostring(why)) end
-                F.Paint()
-            end)
-            if not ok2 then OMQ:Error("item flips", err) end
-        end)
         mb.key = key
         f.methods[i] = mb
     end
-    again:SetText("Search again")
-    again:SetScript("OnClick", function()
-        if run and not run.checkOnly then F.Cancel() else
-            if run then F.Cancel() end
-            local started, why = F.Start()
-            if not started then OMQ:Print("item flips: " .. tostring(why)) end
-        end
-        F.Paint()
-    end)
-    f.again = again
-    local all = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    all:SetSize(236, 22)
-    all:SetPoint("LEFT", again, "RIGHT", 6, 0)
-    all:SetScript("OnClick", function()
-        local ok2, err = pcall(function() F.BuyNext(); F.Paint() end)
+    local again = button(f, 100, 26, "Search", function()
+        local ok2, err = pcall(function()
+            frame.drop:Hide()
+            if run and not run.checkOnly then F.Cancel() else
+                if run then F.Cancel() end
+                local started, why = F.Start()
+                if not started then OMQ:Print("item flips: " .. tostring(why)) end
+            end
+            F.Paint()
+        end)
         if not ok2 then OMQ:Error("item flips", err) end
     end)
-    f.all = all
+    again:SetPoint("TOPLEFT", 258, -6)
+    f.again = again
+    local st = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    st:SetPoint("TOPLEFT", 16, -42)
+    st:SetWidth(348)
+    st:SetJustifyH("LEFT")
+    st:SetTextColor(0.79, 0.8, 0.84)
+    f.status = st
     local listFrame = CreateFrame("Frame", nil, f)
-    listFrame:SetPoint("TOPLEFT", 14, -140 - extra)
+    listFrame:SetPoint("TOPLEFT", 16, -72)
     listFrame:SetSize(348, F.ROWS * (F.ROW_H + 2))
     listFrame:EnableMouseWheel(true)
     listFrame:SetScript("OnMouseWheel", function(_, d)
@@ -1663,39 +1749,54 @@ local function build()
         F.Paint()
     end)
     f.list = listFrame
+    -- Buy next: the gold button of the auction helper's Buy tab
+    local all = CreateFrame("Button", "OneMoreQuestFlipBuyNext", f)
+    all:SetSize(348, 44)
+    all.bg = all:CreateTexture(nil, "BACKGROUND"); all.bg:SetAllPoints(); all.bg:SetColorTexture(0.165, 0.141, 0.086, 1)
+    all.edge = all:CreateTexture(nil, "BORDER"); all.edge:SetPoint("TOPLEFT", -1, 1); all.edge:SetPoint("BOTTOMRIGHT", 1, -1)
+    all.edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.9)
+    all.bg:SetDrawLayer("BACKGROUND", 1); all.edge:SetDrawLayer("BACKGROUND", 0)
+    all.price = all:CreateFontString(nil, "OVERLAY", "GameFontNormal"); all.price:SetPoint("RIGHT", -10, 0); all.price:SetJustifyH("RIGHT")
+    all.price:SetTextColor(0.95, 0.82, 0.48)
+    all.title = all:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge"); all.title:SetPoint("LEFT", 10, 0); all.title:SetJustifyH("LEFT")
+    all.title:SetTextColor(0.95, 0.82, 0.48)
+    all.hl = all:CreateTexture(nil, "HIGHLIGHT"); all.hl:SetAllPoints(); all.hl:SetColorTexture(1, 1, 1, 0.06)
+    function all:SetText(t) self.title:SetText(t) end
+    function all:GetText() return self.title:GetText() end
+    all:SetScript("OnClick", function()
+        local ok2, err = pcall(function() F.BuyNext(); F.Paint() end)
+        if not ok2 then OMQ:Error("item flips", err) end
+    end)
+    f.all = all
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    hint:SetPoint("BOTTOMLEFT", 14, 12)
-    hint:SetWidth(352)
+    hint:SetWidth(348)
     hint:SetJustifyH("LEFT")
-    hint:SetText("Left click: buy   Right click: discard   Mouse wheel: scroll")
+    hint:SetText("Left click: buy - Shift + left click: show in the auction house - right click: dismiss for good")
     f.hint = hint
-    f:SetScript("OnHide", function() if run then F.Cancel() end end)
-    if UISpecialFrames then table.insert(UISpecialFrames, "OneMoreQuestFlip") end
-end
-
-local function anchor()
-    frame:ClearAllPoints()
-    frame:SetPoint("TOPLEFT", _G.OneMoreQuestAuctionHelper or UIParent, "TOPRIGHT", 6, 0)   -- right of the auction helper
+    f:SetScript("OnHide", function() if run then F.Cancel() end; if frame.drop then frame.drop:Hide() end end)
 end
 
 function F.Paint()
-    if not frame or not frame:IsShown() then return end
+    if not frame or not frame:IsShown() then return 0 end
     local text = F.statusText or ""
     if F.bought.n > 0 then
         text = text .. string.format("\nbought: %d for %s, sells for about %s", F.bought.n, money(F.bought.spent), money(F.bought.worth))
     end
     frame.status:SetText(text)
-    frame.again:SetText((run and not run.checkOnly) and "Cancel" or "Search again")
-    if frame.again.SetEnabled then frame.again:SetEnabled(F.method ~= nil) end
+    frame.again:SetText((run and not run.checkOnly) and "Cancel" or "Search")
+    frame.again.text:SetTextColor(F.method and 0.93 or 0.5, F.method and 0.93 or 0.5, F.method and 0.95 or 0.5)
+    frame.pick:SetText(F.method and F.METHODS[F.method] and F.METHODS[F.method].label or "Choose a search profile")
     for _, mb in ipairs(frame.methods) do
-        if mb.SetButtonState then mb:SetButtonState(mb.key == F.method and "PUSHED" or "NORMAL", mb.key == F.method) end
+        local on = mb.key == F.method
+        if on then mb.bg:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1) else mb.bg:SetColorTexture(0.2, 0.21, 0.25, 1) end
+        if on then mb.text:SetTextColor(0.07, 0.07, 0.08) else mb.text:SetTextColor(0.93, 0.93, 0.95) end
     end
     local nx = list[1]
-    if not nx then frame.all:SetText("Buy next: nothing to buy")
+    if not nx then frame.all:SetText("Buy next: nothing to buy"); frame.all.price:SetText("")
     else
         local st = rowState(nx)
-        frame.all:SetText(string.format("Buy next: %s%s", money(nx.offers[1].buyout),
-            st == "ready - click to buy" and "" or (st and " (searching)" or "")))
+        frame.all:SetText("Buy next" .. (st == "ready - click to buy" and "" or (st and " (searching)" or "")))
+        frame.all.price:SetText(money(nx.offers[1].buyout))
     end
     if frame.all.SetEnabled then frame.all:SetEnabled(nx ~= nil) end
     F.offset = math.max(0, math.min(F.offset, math.max(0, #list - F.ROWS)))
@@ -1726,24 +1827,171 @@ function F.Paint()
             r:Hide()
         end
     end
+    -- the list (always F.ROWS rows high: the panel keeps its size), Buy next and the hint below it
+    local rowsH = F.ROWS * (F.ROW_H + 2)
+    frame.list:SetHeight(rowsH)
+    local y = 72 + rowsH + 6
+    frame.all:ClearAllPoints(); frame.all:SetPoint("TOPLEFT", 16, -y)
+    frame.hint:ClearAllPoints(); frame.hint:SetPoint("TOPLEFT", 16, -(y + 50))
+    return y + 66
 end
 
-function F.Show()
-    if not frame then build() end
-    if not frame then return false end
-    anchor()
+-- the Buy tab of the flip helper inside the auction helper: drawn below the tabs, returns the height it needs
+-- (counted from `top`, the frame starts 38 higher in the row of the mode switch)
+function F.Render(panel, top)
+    if not frame then build(panel) end
+    if frame.GetParent and frame:GetParent() ~= panel and frame.SetParent then frame:SetParent(panel) end
+    if not F.method and F.METHODS[F.Char().method or ""] then F.method = F.Char().method end
+    frame:ClearAllPoints()
+    frame:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -(top - 38))
+    frame:SetPoint("RIGHT", panel, "RIGHT")
+    if not frame:IsShown() then
+        frame:Show()
+        if not run and not F.method then status("choose a search profile above, then press Search") end
+    end
+    local h = F.Paint()
+    frame:SetHeight(h)
+    return h - 38
+end
+function F.Hide() if frame and frame:IsShown() then frame:Hide() end end
+function F.Show()                                          -- without the auction helper's panel (it is off): on its own
+    local h = H()
+    local p = _G.OneMoreQuestAuctionHelper
+    if h and h.SetView and p and p:IsShown() then h.SetView("fbuy"); return frame ~= nil end
+    if not frame then build(UIParent) end
+    frame:ClearAllPoints()
+    frame:SetPoint("CENTER")
     frame:Show()
+    if not run and not F.method then status("choose a search profile above, then press Search") end
     F.Paint()
     return true
 end
 function F.Frame() return frame end
 function F.Open()
     local h = H()
+    if not F.Enabled() then OMQ:Print("item flips: switch the flip helper on first (options, Interface: Flip helper)"); return false end
     if not (h and h.open) then OMQ:Print("item flips: open the auction house first (with the auction helper on)"); return false end
+    if not F.method and F.METHODS[F.Char().method or ""] then F.method = F.Char().method end
     F.Show()
-    if not run and not F.method then status("choose a method above - the search starts then") end   -- fix 724
+    if not run and not F.method then status("choose a search profile above, then press Search") end   -- fix 724
     return true
 end
+
+----------------------------------------------------------------------
+-- The Blacklist tab (fix 753): dismissed items for good (right click: off the list again), and the "temp" lines of
+-- items held twice, which go by themselves once one is sold. Shift + left click searches it in the game's window.
+----------------------------------------------------------------------
+F.BLACK_ROWS = 10
+F.blackOffset = 0
+local black
+local blackRows = {}
+F._blackRows = function() return blackRows end
+local function blackBuild(panel)
+    black = CreateFrame("Frame", "OneMoreQuestFlipBlack", panel or UIParent)
+    if panel and panel.box and black.SetFrameLevel then black:SetFrameLevel(panel.box:GetFrameLevel() + 2) end
+    black.head = black:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    black.head:SetPoint("TOPLEFT", 16, -4); black.head:SetWidth(348); black.head:SetJustifyH("LEFT")
+    black.head:SetTextColor(0.79, 0.8, 0.84)
+    black:EnableMouseWheel(true)
+    black:SetScript("OnMouseWheel", function(_, d)
+        local n = #F.BlackRows()
+        F.blackOffset = math.max(0, math.min(math.max(0, n - F.BLACK_ROWS), F.blackOffset - d))
+        F.RepaintBlack()
+    end)
+    for i = 1, F.BLACK_ROWS do
+        local r = B()._makeRow(black, F.ROW_H)
+        r:SetPoint("TOPLEFT", 16, -26 - (i - 1) * (F.ROW_H + 2))
+        r:SetScript("OnClick", function(self, mouse)
+            local ok, err = pcall(function()
+                local x = self.omq
+                if not x then return end
+                if mouse == "RightButton" then
+                    if x.temp then OMQ:Print("item flips: " .. tostring(x.name) .. " comes back by itself once one of the two is sold")
+                    else F.Unblock(x.ks) end
+                elseif IsShiftKeyDown and IsShiftKeyDown() then F.ShowInGame(x) end
+            end)
+            if not ok then OMQ:Error("item flips", err) end
+        end)
+        r:SetScript("OnEnter", function(self)
+            local x = self.omq
+            if not (x and GameTooltip) then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            if x.link and GameTooltip.SetHyperlink then GameTooltip:SetHyperlink(x.link)
+            elseif GameTooltip.SetItemByID then GameTooltip:SetItemByID(x.id) end
+            if x.temp then
+                GameTooltip:AddLine("temp: you hold " .. (x.n or 2) .. " - back once one is sold", 1, 0.6, 0.2)
+            else
+                GameTooltip:AddLine("Right click: off the blacklist", 0.6, 0.6, 0.6)
+            end
+            GameTooltip:AddLine("Shift + left click: search it in the auction house window", 0.6, 0.6, 0.6)
+            GameTooltip:Show()
+        end)
+        blackRows[i] = r
+    end
+    black.more = black:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    black.hint = black:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    black.hint:SetWidth(348); black.hint:SetJustifyH("LEFT")
+    black.hint:SetText("Right click: off the blacklist (not temp) - Shift + left click: search in the auction house")
+end
+function F.PaintBlack()
+    if not (black and black:IsShown()) then return 0 end
+    local all = F.BlackRows()
+    local temp = 0
+    for _, x in ipairs(all) do if x.temp then temp = temp + 1 end end
+    black.head:SetText(#all == 0 and "Nothing on the blacklist - right click in Buy dismisses an item for good"
+        or string.format("%d dismissed for good, %d temp (%d held)", #all - temp, temp, F.MAX_HELD or 2))
+    F.blackOffset = math.max(0, math.min(F.blackOffset, math.max(0, #all - F.BLACK_ROWS)))
+    local qc = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[2]
+    local y = 26
+    for i, r in ipairs(blackRows) do
+        local x = all[F.blackOffset + i]
+        r.omq = x
+        if x then
+            local icon = x.icon
+            if not icon then
+                local inst = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+                if inst then local ok, _, _, _, _, ic = pcall(inst, x.id); if ok then icon = ic end end
+            end
+            r.icon:SetTexture(icon)
+            r.name:SetText(x.name or ("item " .. tostring(x.id)))
+            if qc then r.name:SetTextColor(qc.r, qc.g, qc.b) else r.name:SetTextColor(0.12, 1, 0) end
+            if x.temp then
+                r.top:SetText("|cffff9933temp|r")
+                r.sub:SetText("you hold " .. (x.n or 2) .. " - back once one is sold")
+                r.bottom:SetText("")
+            else
+                r.top:SetText("")
+                r.sub:SetText(x.t and x.t > 0 and date and ("dismissed " .. date("%d.%m. %H:%M", x.t)) or "dismissed")
+                r.bottom:SetText("right click: remove")
+            end
+            r.bg:SetColorTexture(0.11, 0.122, 0.153, 1)
+            r:Show()
+            y = y + F.ROW_H + 2
+        else r:Hide() end
+    end
+    if #all > F.BLACK_ROWS then
+        black.more:ClearAllPoints(); black.more:SetPoint("TOPLEFT", 16, -y)
+        black.more:SetText(string.format("Mouse wheel: %d more", #all - F.BLACK_ROWS)); black.more:Show()
+        y = y + 16
+    else black.more:Hide() end
+    black.hint:ClearAllPoints(); black.hint:SetPoint("TOPLEFT", 16, -(y + 4))
+    return y + 24
+end
+function F.RenderBlack(panel, top)
+    if not black then blackBuild(panel) end
+    black:ClearAllPoints(); black:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -top); black:SetPoint("RIGHT", panel, "RIGHT")
+    black:Show()
+    local h = F.PaintBlack()
+    black:SetHeight(h)
+    return h
+end
+function F.HideBlack() if black then black:Hide() end end
+function F.RepaintBlack()                                  -- a line more or less: the panel takes the new height
+    if not (black and black:IsShown()) then return end
+    local h = H()
+    if h and h.Refresh then h.Refresh() else F.PaintBlack() end
+end
+F._Black = function() return black end
 
 ----------------------------------------------------------------------
 -- Events

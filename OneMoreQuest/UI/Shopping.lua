@@ -508,7 +508,7 @@ function S.Render(panel, top)
         mail = any and ("  |cff9fdc8aBought for " .. who .. " - send it by mail|r") or ("  For " .. who)
     end
     ui.head:SetText(string.format("%d item%s - you carry |cfff2d27a%s|r", #l.items, #l.items == 1 and "" or "s", money(GetMoney and GetMoney() or 0))
-        .. mail .. (AH().Manual() and "  |cffff9933Paused - press Scan all to unpause|r" or ""))
+        .. mail .. (AH().Manual() and "  |cffff9933Paused - you use the game's window|r" or ""))
     y = y + 22
     -- everything in one scrolled list: the auction house rows, then the vendor title and the vendor rows
     local R = S.Rows()

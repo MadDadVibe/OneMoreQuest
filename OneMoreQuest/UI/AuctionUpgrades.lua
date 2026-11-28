@@ -228,7 +228,7 @@ function U.Render(panel, top)
     local class = SC and SC.MyClass() or select(2, UnitClass("player"))
     local cname = (LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[class]) or class or "?"
     ui.head:SetText(string.format("For your %s, level %d - you carry |cfff2d27a%s|r", cname, level(), money(GetMoney and GetMoney() or 0))
-        .. (AH().Manual() and "  |cffff9933Paused - press Scan all to unpause|r" or ""))
+        .. (AH().Manual() and "  |cffff9933Paused - you use the game's window|r" or ""))
     local y = 22
     local slots = b.GearSlots()
     local status = U.Status(slots)

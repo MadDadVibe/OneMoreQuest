@@ -550,6 +550,21 @@ local function allSections()
         } },
         { title = "CLASS", col = 2, class = true, items = classItems() },
         { title = "INTERFACE", col = 2, items = {
+            -- fix 753
+            { type = "check", label = "Flip helper (this character only)", unlock = "auction",
+              tip = "A Flip button in the auction helper turns it into the flip helper: Sell as always, Buy with the item flip search (choose a search profile, Search, left click buys, Buy next) and the Blacklist of dismissed items. The auction house opens with the helper it was closed with. Off by default, switched on for each character on its own.",
+              get = function()
+                  if OMQ.Flip and OMQ.Flip.Enabled then return OMQ.Flip.Enabled() end
+                  local c = OMQDB and OMQDB.flip and OMQDB.flip.chars and OMQDB.flip.chars[(UnitGUID and UnitGUID("player")) or "?"]
+                  return (c and c.on == true) and true or false
+              end,
+              set = function(v)
+                  if OMQ.Flip and OMQ.Flip.SetEnabled then OMQ.Flip.SetEnabled(v); return end
+                  OMQDB = OMQDB or {}; OMQDB.flip = OMQDB.flip or {}; OMQDB.flip.chars = OMQDB.flip.chars or {}
+                  local k = (UnitGUID and UnitGUID("player")) or "?"
+                  OMQDB.flip.chars[k] = OMQDB.flip.chars[k] or {}
+                  OMQDB.flip.chars[k].on = v and true or false
+              end },
             { type = "check", label = "Minimap icon",
               tip = "If hidden: /omq options opens the quick options, /omq minimap brings the icon back.",
               get = function() return not OMQ.db.minimap.hidden end,

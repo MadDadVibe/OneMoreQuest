@@ -993,6 +993,7 @@ local function build()
     edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
     local tag = fs(panel, "GameFontNormalSmall", GOLD[1], GOLD[2], GOLD[3])
     tag:SetPoint("TOPLEFT", 16, -14); tag:SetText("AUCTION HELPER")
+    panel.tag = tag
     panel.scan = fs(panel, "GameFontNormalSmall", 0.95, 0.62, 0.25)       -- a scan is running (decision 286)
     panel.scan:SetPoint("TOPRIGHT", -84, -14); panel.scan:SetText("Scanning - please wait..."); panel.scan:Hide()
     -- the cover while the whole house is read (decision 343)
@@ -1011,20 +1012,26 @@ local function build()
     veil:SetScript("OnUpdate", function(self) self.sub:SetText(AH.VeilText()) end)
     veil:Hide()
     panel.veil = veil
-    -- the small "Scan all" button and the header, which closes the helper on a right click (decision 290)
+    -- the small Flip / Auction Helper button (fix 753: was "Scan all", decision 290) and the header, which closes
+    -- the helper on a right click
     local sa = CreateFrame("Button", nil, panel)
     sa:SetSize(64, 18); sa:SetPoint("TOPRIGHT", -12, -10)
     sa:SetFrameLevel(panel:GetFrameLevel() + 5)
     sa.bg = sa:CreateTexture(nil, "BACKGROUND"); sa.bg:SetAllPoints(); sa.bg:SetColorTexture(0.165, 0.141, 0.086, 1)
     sa.hl = sa:CreateTexture(nil, "HIGHLIGHT"); sa.hl:SetAllPoints(); sa.hl:SetColorTexture(1, 1, 1, 0.08)
-    sa.text = sa:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); sa.text:SetPoint("CENTER"); sa.text:SetText("Scan all")
+    sa.text = sa:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); sa.text:SetPoint("CENTER"); sa.text:SetText("Flip")
     sa.text:SetTextColor(0.95, 0.82, 0.48)
-    sa:SetScript("OnClick", function() AH.ScanAll() end)
+    sa:SetScript("OnClick", function() AH.SwitchHelper(AH.helper == "flip" and "ah" or "flip") end)
     sa:SetScript("OnEnter", function(self)
-        if GameTooltip then GameTooltip:SetOwner(self, "ANCHOR_LEFT"); GameTooltip:SetText("Scan everything again: bags, stock up, weapons, bags to buy"); GameTooltip:Show() end
+        if GameTooltip then
+            GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+            GameTooltip:SetText(AH.helper == "flip" and "Back to the auction helper" or "To the flip helper: item flips to buy, the blacklist")
+            GameTooltip:Show()
+        end
     end)
     sa:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-    panel.scanAll = sa
+    sa:Hide()
+    panel.flipBtn = sa
     local head = CreateFrame("Button", nil, panel)
     head:SetSize(200, 26); head:SetPoint("TOPLEFT", 0, 0)
     head:SetFrameLevel(panel:GetFrameLevel() + 5)
@@ -1073,6 +1080,11 @@ local function build()
     panel.repBtn = tab("Rep", "rep", 10 + 4 * AH.TAB_W)     -- the trading company reputation, optional (decision 722)
     panel.sellBtn.mode, panel.buyBtn.mode, panel.upgBtn.mode, panel.shopBtn.mode = "sell", "buy", "upg", "shop"
     panel.repBtn.mode = "rep"
+    -- the flip helper's tabs (fix 753): Sell (the same as the auction helper's) | Buy | Blacklist
+    panel.fbuyBtn = tab("Buy", "fbuy", 10 + AH.TAB_W)
+    panel.fblackBtn = tab("Blacklist", "fblack", 10 + 2 * AH.TAB_W)
+    panel.fbuyBtn.mode, panel.fblackBtn.mode = "fbuy", "fblack"
+    panel.fbuyBtn:Hide(); panel.fblackBtn:Hide()
     panel.BOX = BOX
     local function segment(label, mode, x, onClick)
         local b = CreateFrame("Button", nil, panel)
@@ -1207,18 +1219,64 @@ AH.MODE_HINT = { fast = "one button, item after item", select = "pick item by it
 -- four tabs of 90, or five of 72 with the optional Rep tab (decision 722)
 function AH.LayoutTabs(repOn)
     if not panel then return end
-    local tabs = { panel.sellBtn, panel.buyBtn, panel.upgBtn, panel.shopBtn }
-    if repOn then tabs[5] = panel.repBtn end
+    local flip = AH.helper == "flip"
+    local tabs = flip and { panel.sellBtn, panel.fbuyBtn, panel.fblackBtn } or { panel.sellBtn, panel.buyBtn, panel.upgBtn, panel.shopBtn }
+    if repOn and not flip then tabs[5] = panel.repBtn end
+    local function shown(t, on) if on then t:Show() else t:Hide() end end
+    for _, t in ipairs({ panel.buyBtn, panel.upgBtn, panel.shopBtn }) do shown(t, not flip) end
+    shown(panel.fbuyBtn, flip); shown(panel.fblackBtn, flip)
     local w = math.floor(AH.TAB_W * 4 / #tabs)
     for i, t in ipairs(tabs) do
         t:SetWidth(w); t:ClearAllPoints(); t:SetPoint("TOPLEFT", 10 + (i - 1) * w, -30)
         t.text:SetFontObject(repOn and "GameFontNormalSmall" or "GameFontNormal")
     end
-    if repOn then panel.repBtn:Show() else panel.repBtn:Hide() end
+    if repOn and not flip then panel.repBtn:Show() else panel.repBtn:Hide() end
+end
+
+-- fix 753 (MadDadVibe): the auction helper or the flip helper; the auction house opens with the one it was closed
+-- with (per character). The flip helper only when it is switched on for this character (options, Interface).
+AH.helper = "ah"
+AH.FLIP_VIEWS = { sell = true, fbuy = true, fblack = true }
+local function flipOn() return OMQ.Flip and OMQ.Flip.Enabled and OMQ.Flip.Enabled() or false end
+function AH.SwitchHelper(which, keepView)
+    which = (which == "flip" and flipOn()) and "flip" or "ah"
+    AH.helper = which
+    if OMQ.Flip and OMQ.Flip.SaveHelper then OMQ.Flip.SaveHelper(which) end
+    if not keepView then AH.view = "sell" end
+    AH.Refresh()
+    AH.Pump()
+end
+function AH.FlipChanged()                                -- the option was switched
+    if not flipOn() and AH.helper == "flip" then AH.helper = "ah"; AH.view = "sell" end
+    AH.Refresh()
+end
+local function paintFlipButton()
+    local b = panel.flipBtn
+    local on = flipOn()
+    if on then b:Show() else b:Hide() end
+    local flip = AH.helper == "flip"
+    b.text:SetText(flip and "Auction Helper" or "Flip")
+    local w = flip and 96 or 64
+    b:SetWidth(w)
+    panel.tag:SetText(flip and "FLIP HELPER" or "AUCTION HELPER")
+    panel.scan:ClearAllPoints()
+    panel.scan:SetPoint("TOPRIGHT", on and -(w + 20) or -12, -14)
 end
 
 function AH.SetView(v, auto)
     local rep = v == "rep" and OMQ.TradeRep and OMQ.TradeRep.Enabled()
+    if (v == "fbuy" or v == "fblack") and flipOn() then          -- fix 753: a tab of the flip helper
+        if AH.helper ~= "flip" then AH.helper = "flip"; if OMQ.Flip.SaveHelper then OMQ.Flip.SaveHelper("flip") end end
+        AH.view = v
+        if not auto then AH.manualView = true end
+        AH.Refresh()
+        AH.Pump()
+        return
+    end
+    if AH.helper == "flip" and (v == "buy" or v == "shop" or v == "upg" or rep) then   -- a tab of the auction helper
+        AH.helper = "ah"
+        if OMQ.Flip and OMQ.Flip.SaveHelper then OMQ.Flip.SaveHelper("ah") end
+    end
     AH.view = (v == "buy" or v == "shop" or v == "upg" or rep) and v or "sell"
     if AH.view == "upg" and OMQ.AuctionBuy and OMQ.AuctionBuy.OpenUpgrades then OMQ.AuctionBuy.OpenUpgrades() end
     if not auto then AH.manualView = true end
@@ -1234,11 +1292,32 @@ function AH.Refresh()
     local T = OMQ.TradeRep
     local repOn = T and T.Enabled() or false
     if AH.view == "rep" and not repOn then AH.view = "sell" end
+    if AH.helper == "flip" and not flipOn() then AH.helper = "ah" end   -- fix 753
+    if AH.helper == "flip" and not AH.FLIP_VIEWS[AH.view] then AH.view = "sell" end
+    if AH.helper ~= "flip" and (AH.view == "fbuy" or AH.view == "fblack") then AH.view = "sell" end
+    paintFlipButton()
     AH.LayoutTabs(repOn)
     local buy, shop, upg, rep = AH.view == "buy", AH.view == "shop", AH.view == "upg", AH.view == "rep"
+    local fbuy, fblack = AH.view == "fbuy", AH.view == "fblack"
     local S, U = OMQ.Shopping, OMQ.AuctionUpgrades
-    paintTab(panel.sellBtn, not buy and not shop and not upg and not rep); paintTab(panel.buyBtn, buy)
+    local FL = OMQ.Flip
+    paintTab(panel.sellBtn, not buy and not shop and not upg and not rep and not fbuy and not fblack); paintTab(panel.buyBtn, buy)
     paintTab(panel.upgBtn, upg); paintTab(panel.shopBtn, shop); paintTab(panel.repBtn, rep)
+    paintTab(panel.fbuyBtn, fbuy); paintTab(panel.fblackBtn, fblack)
+    if not fbuy and FL and FL.Hide then FL.Hide() end
+    if not fblack and FL and FL.HideBlack then FL.HideBlack() end
+    if fbuy or fblack then                             -- the flip helper's Buy and Blacklist tabs (fix 753)
+        for _, b in ipairs({ panel.fastBtn, panel.selBtn, panel.fillBtn, panel.oneBtn }) do b:Hide() end
+        panel.modeHint:Hide()
+        if S then S.Hide() end
+        if U then U.Hide() end
+        if T then T.Hide() end
+        if OMQ.AuctionBuy then OMQ.AuctionBuy.Hide() end
+        fastUI:Hide(); selUI:Hide(); panel.out:SetText("")
+        local h = fbuy and FL.Render(panel, AH.HEAD) or FL.RenderBlack(panel, AH.HEAD)
+        panel:SetHeight(AH.HEAD + h + 16)
+        return
+    end
     local nLists = S and S.Count() or 0
     panel.shopBtn.text:SetText(nLists > 0 and string.format("Shopping |cff66d17a(%d)|r", nLists) or "Shopping")
     for _, b in ipairs({ panel.fastBtn, panel.selBtn }) do b:SetShown(not buy and not shop and not upg and not rep) end
@@ -1483,6 +1562,7 @@ function AH.Open()
     fastUI.posted = 0
     AH.round = { n = 0, income = 0 }
     AH.view, AH.manualView = "sell", false            -- always sell first (decision 264)
+    AH.helper = (OMQ.Flip and OMQ.Flip.SavedHelper and OMQ.Flip.SavedHelper()) or "ah"   -- fix 753: as it was closed
     if OMQ.AuctionBuy then OMQ.AuctionBuy.Open() end
     if OMQ.Shopping then OMQ.Shopping.Open() end
     anchor()
