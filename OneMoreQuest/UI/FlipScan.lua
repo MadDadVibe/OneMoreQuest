@@ -801,7 +801,16 @@ function F.Note(id, kind, c, name)
     it.t = stamp()
 end
 -- the result mail of a flip auction (AH.ScanMail via AH.Result); true when the helper's own unsold rule must not count it
-function F.Result(id, sold, got, name)
+-- decision 762 (MadDadVibe): every sale and every unsold return with its exact time (the mail's arrival), for the Time view
+F.TIMES_KEEP = 5000
+function F.NoteTime(id, sold, gain, at)
+    local d = db()
+    d.times = d.times or {}
+    local l = d.times
+    l[#l + 1] = { t = math.floor(tonumber(at) or stamp()), s = sold and 1 or 0, g = math.floor(tonumber(gain) or 0), id = id }
+    while #l > F.TIMES_KEEP do table.remove(l, 1) end
+end
+function F.Result(id, sold, got, name, at)
     local x = db().owned[id]
     if not x then return false end
     if sold then
@@ -809,6 +818,7 @@ function F.Result(id, sold, got, name)
         got = tonumber(got) or 0
         if x.dep and got > x.dep then got = got - x.dep end   -- decision 732: the mail gives the deposit back, not earned
         x.dep = nil
+        F.NoteTime(id, true, got - paid, at)               -- decision 762
         F.Note(id, "s", got, name)
         F.Stat(id, "s", got, name, paid)                   -- decision 743
         F.Release(id, name)                                -- fix 750
@@ -820,6 +830,7 @@ function F.Result(id, sold, got, name)
         return false
     end
     F.Note(id, "u", 0, name)
+    F.NoteTime(id, false, -(x.dep or 0), at)               -- decision 762: the lost deposit
     F.Stat(id, "u", 0, name, nil, x.dep)                   -- decision 743
     local it = items()[id]
     it.fees = (it.fees or 0) + (x.dep or 0)                -- decision 732: the deposit of an unsold auction is lost
@@ -1181,11 +1192,37 @@ function F.TypeRows()
     for _, k in ipairs(F.TYPES) do out[#out + 1] = detail(F.TYPE_NAMES[k], by[k] or newRec(), k) end
     return out
 end
-F.STATS_VIEWS = { { "prof", "Profiles" }, { "sfx", "Suffixes" }, { "type", "Armor type" } }
+-- decision 762 (MadDadVibe): when flips sell - four times of day, then the weekdays (Berlin time, the mail's arrival)
+F.DAY_PARTS = { { 0, 6, "Night 0-6" }, { 6, 12, "Morning 6-12" }, { 12, 18, "Midday 12-18" }, { 18, 24, "Evening 18-24" } }
+F.WEEKDAYS = { { 2, "Monday" }, { 3, "Tuesday" }, { 4, "Wednesday" }, { 5, "Thursday" }, { 6, "Friday" }, { 7, "Saturday" }, { 1, "Sunday" } }
+function F.TimeRows()
+    local parts, days = {}, {}
+    for i = 1, #F.DAY_PARTS do parts[i] = { s = 0, u = 0, g = 0 } end
+    for i = 1, 7 do days[i] = { s = 0, u = 0, g = 0 } end
+    for _, e in ipairs(db().times or {}) do
+        local h, _, wd = F.BerlinClock(e.t)
+        local function add(r)
+            if e.s == 1 then r.s = r.s + 1 else r.u = r.u + 1 end
+            r.g = r.g + (e.g or 0)
+        end
+        for i, p in ipairs(F.DAY_PARTS) do if h >= p[1] and h < p[2] then add(parts[i]) end end
+        if wd and days[wd] then add(days[wd]) end
+    end
+    local out = {}
+    local function row(name, r, key)
+        local any = r.s + r.u > 0
+        out[#out + 1] = { key = key, name = name, b = "", s = r.s, u = r.u, v = "", gain = any and r.g or nil, result = any and signed(r.g) or "-",
+                          rate = any and math.floor(r.s * 100 / (r.s + r.u) + 0.5) or nil }
+    end
+    for i, p in ipairs(F.DAY_PARTS) do row(p[3], parts[i], "p" .. i) end
+    for _, w in ipairs(F.WEEKDAYS) do row(w[2], days[w[1]], "d" .. w[1]) end
+    return out
+end
+F.STATS_VIEWS = { { "prof", "Profiles" }, { "sfx", "Suffixes" }, { "type", "Armor type" }, { "time", "Time" } }
 F.statsView = "prof"
 function F.DetailRows(view)
     view = view or F.statsView
-    if view == "sfx" then return F.SuffixRows() elseif view == "type" then return F.TypeRows() end
+    if view == "sfx" then return F.SuffixRows() elseif view == "type" then return F.TypeRows() elseif view == "time" then return F.TimeRows() end
     return F.ProfileRows()
 end
 
@@ -1214,12 +1251,12 @@ local function statsBuild(panel)
     local y = 4 + 9 * 16 + 10
     stats.views = {}
     for i, vw in ipairs(F.STATS_VIEWS) do
-        local b = F._button(stats, 112, 24, vw[2], function()
+        local b = F._button(stats, 84, 24, vw[2], function()   -- decision 762: four buttons
             F.statsView = vw[1]
             F.statsOffset = 0
             F.PaintStats()
         end)
-        b:SetPoint("TOPLEFT", 16 + (i - 1) * 118, -y)
+        b:SetPoint("TOPLEFT", 16 + (i - 1) * 88, -y)
         b.view = vw[1]
         stats.views[i] = b
     end
@@ -1256,7 +1293,8 @@ local function statsBuild(panel)
             if not (d and GameTooltip) then return end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:AddLine(d.name)
-            GameTooltip:AddLine(string.format("bought %d, sold %d, back %d, vendor/DE %d", d.b, d.s, d.u, d.v), 1, 1, 1)
+            if d.b == "" then GameTooltip:AddLine(string.format("sold %d, back unsold %d", d.s, d.u), 1, 1, 1)   -- decision 762
+            else GameTooltip:AddLine(string.format("bought %d, sold %d, back %d, vendor/DE %d", d.b, d.s, d.u, d.v), 1, 1, 1) end
             if d.rate then GameTooltip:AddLine(d.rate .. "% of the finished ones sold", 0.8, 0.8, 0.8) end
             for _, l in ipairs(d.tip or {}) do GameTooltip:AddLine(l, 0.8, 0.8, 0.8) end
             GameTooltip:Show()
@@ -1281,7 +1319,10 @@ function F.PaintStats()
         if on then b.text:SetTextColor(0.07, 0.07, 0.08) else b.text:SetTextColor(0.93, 0.93, 0.95) end
     end
     local rows = F.DetailRows()
-    stats.colHead.name:SetText(F.statsView == "sfx" and "suffix" or F.statsView == "type" and "armor type" or "search profile")
+    local tv = F.statsView == "time"
+    stats.colHead.name:SetText(F.statsView == "sfx" and "suffix" or F.statsView == "type" and "armor type" or tv and "time (sold)" or "search profile")
+    stats.colHead.b:SetText(tv and "" or "bought"); stats.colHead.v:SetText(tv and "" or "vendor")
+    stats.colHead.g:SetText(tv and "profit" or "gold")
     F.statsOffset = math.max(0, math.min(F.statsOffset, math.max(0, #rows - F.STATS_ROWS)))
     local y = stats.listY
     for i, r in ipairs(stats.rows) do
@@ -1509,7 +1550,7 @@ function F.BerlinClock(utc)
     elseif u.month == 3 then summer = u.day > lastSunday(u.year, 3) or (u.day == lastSunday(u.year, 3) and u.hour >= 1)
     elseif u.month == 10 then summer = u.day < lastSunday(u.year, 10) or (u.day == lastSunday(u.year, 10) and u.hour < 1) end
     local b = date("!*t", utc + (summer and 7200 or 3600))
-    return b.hour, b.min
+    return b.hour, b.min, b.wday                           -- decision 762: the weekday too (1 = Sunday)
 end
 F.DAY_HOURS, F.NIGHT_HOURS = 2, 8                         -- fix 759: both can be chosen in the options
 function F.PostHours(utc)

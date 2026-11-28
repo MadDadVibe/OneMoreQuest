@@ -1500,11 +1500,11 @@ function AH.MigrateUnsold()
         if n >= AH.UNSOLD_LIMIT and not d.skip[id] then d.skip[id] = "unsold" end
     end
 end
-function AH.Result(itemID, sold, got, name)
+function AH.Result(itemID, sold, got, name, at)
     if not itemID then return end
     local d = db()
     -- a flip (decision 728): counted in its history; one that came back fewer than 5 times is posted again
-    if OMQ.Flip and OMQ.Flip.Result and OMQ.Flip.Result(itemID, sold, got, name) then return end
+    if OMQ.Flip and OMQ.Flip.Result and OMQ.Flip.Result(itemID, sold, got, name, at) then return end
     if sold then d.fails[itemID] = nil; return end
     d.fails[itemID] = (d.fails[itemID] or 0) + 1
     if d.fails[itemID] >= AH.UNSOLD_LIMIT and not d.skip[itemID] then d.skip[itemID] = "unsold" end
@@ -1530,7 +1530,9 @@ function AH.ScanMail()
                     d.mails[key] = t
                     local id = d.names[name]
                     if not id and not sold and GetInboxItem then id = select(2, GetInboxItem(i, 1)) end
-                    if type(id) == "number" then AH.Result(id, sold, (type(money_) == "number" and not isSecret(money_)) and money_ or 0, name) end
+                    -- decision 762: when the mail came (it lives 30 days): the time of the sale / the return
+                    local at = (type(daysLeft) == "number" and not isSecret(daysLeft)) and math.max(t - 30 * 86400, math.min(t, t + daysLeft * 86400 - 30 * 86400)) or t
+                    if type(id) == "number" then AH.Result(id, sold, (type(money_) == "number" and not isSecret(money_)) and money_ or 0, name, at) end
                     -- what the helper's auctions brought in, per character (decision 262)
                     if sold and id and type(money_) == "number" and not isSecret(money_) and money_ > 0 then
                         local e = AH.Earned()
