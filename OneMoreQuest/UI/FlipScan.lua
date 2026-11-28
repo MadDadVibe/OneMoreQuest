@@ -54,8 +54,11 @@ F.METHODS = {
     b50 = { nth = 2, ratio = 2, single = true, label = "lvl 50-59", minLevel = 50, maxLevel = 59 },
     plate = { nth = 2, ratio = 2, single = true, label = "plate 40-42", minLevel = 40, maxLevel = 42,
               only = { c = 4, s = 4 } },
+    -- fix 755 (MadDadVibe): "Snacks" - the same rules, but only offers close to the vendor price (F.SnackLimit), no gold cap
+    snackLow = { nth = 2, ratio = 2, single = true, snack = true, label = "Snacks Low Level", minLevel = 7, maxLevel = 30 },
+    snackHigh = { nth = 2, ratio = 2, single = true, snack = true, label = "Snacks High Level", minLevel = 31, maxLevel = 55 },
 }
-F.BUTTONS = { "b10", "b20", "b30", "b40", "b50", "plate" }   -- decision 746: the six buttons (the older methods stay for the tests)
+F.BUTTONS = { "b10", "b20", "b30", "b40", "b50", "plate", "snackLow", "snackHigh" }   -- decision 746: the six buttons (the older methods stay for the tests)
 F.CUT = 0.05              -- the auction house's cut of a sale
 -- the suffixes as the game names them, lower case ("Ä" stays as it is: string.lower leaves non-ASCII bytes alone)
 F.SUFFIXES = {
@@ -139,6 +142,19 @@ local function vendorOf(id)
     if ok and type(v) == "number" and not isSecret(v) and v > 0 then return v end
 end
 F.VendorOf = vendorOf
+-- fix 755: a snack costs less than the higher of vendor price + 10 % and vendor price + 5 silver (no vendor price: none)
+F.SNACK_PCT, F.SNACK_ADD = 1.1, 500
+function F.SnackLimit(vendor)
+    if type(vendor) ~= "number" or vendor <= 0 then return nil end
+    return math.ceil(math.max(vendor * F.SNACK_PCT, vendor + F.SNACK_ADD)) - 1   -- the highest price still under it
+end
+-- the highest price an offer may have with this method
+function F.BuyLimit(m, vendor, level)
+    if m and m.snack then return F.SnackLimit(vendor) or -1 end
+    local l = F.MaxBuy(level)                              -- fix 724, 733: 1.50 gold from level 40
+    if vendor and F.VENDOR_FACTOR then l = math.min(l, math.floor(vendor * F.VENDOR_FACTOR)) end   -- fixes 744, 747
+    return l
+end
 local function classOf(id)
     local f = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
     if not f then return nil end
@@ -198,7 +214,7 @@ end
 function F.Consider(e)
     if e.match ~= nil then return e.match end
     local m = F.METHODS[(run and run.method) or "flip"]
-    if (e.price or 0) > F.MAX_BUY_HIGH or not ((e.qty or 0) >= m.nth or (m.few and (e.price or 0) < F.CHEAP) or (m.single and (e.qty or 0) >= 1)) then e.match = false; return false end
+    if (not m.snack and (e.price or 0) > F.MAX_BUY_HIGH) or not ((e.qty or 0) >= m.nth or (m.few and (e.price or 0) < F.CHEAP) or (m.single and (e.qty or 0) >= 1)) then e.match = false; return false end
     local name, q = nameOf(e)
     if not name then
         if not e.askedAt then
@@ -211,9 +227,8 @@ function F.Consider(e)
     end
     e.name = name
     e.level = reqLevelOf(e.id)
-    if (e.price or 0) > F.MaxBuy(e.level) then e.match = false; return false end   -- fix 733
     e.vendor = vendorOf(e.id)
-    if e.vendor and F.VENDOR_FACTOR and (e.price or 0) > e.vendor * F.VENDOR_FACTOR then e.match = false; return false end   -- fix 744
+    if (e.price or 0) > F.BuyLimit(m, e.vendor, e.level) then e.match = false; return false end   -- fixes 733, 744, 755
     e.suffix = F.SuffixOf(name)
     local c, sc = classOf(e.id)
     if m.only and not (c == m.only.c and sc == m.only.s) then e.match = false; return false end   -- decision 731
@@ -261,12 +276,11 @@ function F.Judge(offers, method, level, vendor)
     elseif m.few then
         kind, maxBuy = "few", F.CHEAP - 1
     elseif m.single and n == 1 and vendor then             -- decision 746: the only offer, at most 2x the vendor price
-        kind, maxBuy = "single", math.floor(vendor * (F.VENDOR_FACTOR or 1.25))   -- fixes 747, 748
+        kind, maxBuy = "single", m.snack and (F.SnackLimit(vendor) or -1) or math.floor(vendor * (F.VENDOR_FACTOR or 1.25))   -- fixes 747, 748, 755
     else
         return nil
     end
-    maxBuy = math.min(maxBuy, F.MaxBuy(level))            -- fix 724, 733: 1.50 gold from level 40
-    if vendor and F.VENDOR_FACTOR then maxBuy = math.min(maxBuy, math.floor(vendor * F.VENDOR_FACTOR)) end   -- fixes 744, 747
+    maxBuy = math.min(maxBuy, F.BuyLimit(m, vendor, level))   -- fixes 724, 733, 744, 747, 755
     local buy, cost, profit = {}, 0, 0
     for _, o in ipairs(offers) do
         if not o.mine and o.qty == 1 and o.unit <= maxBuy then
@@ -954,14 +968,19 @@ end
 function F.CleanLoot()
     local d = db()
     if d.lootClean then return true end
-    local todo = {}
+    local todo, missing = {}, false
     for id, it in pairs(items()) do
         if (it.loot or 0) > 0 then
-            local per = vendorOf(id) or ((it.b or 0) > 0 and math.floor((it.spent or 0) / it.b) or nil)
-            if not per or not reqLevelOf(id) then return false end   -- not loaded yet: next time
-            todo[#todo + 1] = { id = id, it = it, n = it.loot, per = per }
+            local per = vendorOf(id)
+            if not per or not reqLevelOf(id) then
+                missing = true                              -- fix 756: not in the game's cache (no longer in the bags): load it
+                if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, id) end
+            else
+                todo[#todo + 1] = { id = id, it = it, n = it.loot, per = per }
+            end
         end
     end
+    if missing then d.lootWait = true; return false end    -- GET_ITEM_INFO_RECEIVED tries again
     F.MigrateStats(); F.MigrateBrackets()                  -- the old history is in the records before it is cleaned
     local function sub(r, n, c)
         if not r then return end
@@ -979,7 +998,9 @@ function F.CleanLoot()
         for _, b in ipairs(F.BracketsOf(t.id)) do sub(d.brk and d.brk[b], n, c) end
     end
     for _, x in pairs(d.owned) do x.loot = nil end
-    d.lootClean = true
+    d.lootClean, d.lootWait = true, nil
+    local st = F._Stats and F._Stats()
+    if st and st:IsShown() then F.PaintStats() end
     return true
 end
 
@@ -1131,7 +1152,7 @@ F.STATS_ROWS = 10
 F.statsOffset = 0
 local stats
 local SGOLD = { 0.89, 0.71, 0.29 }
-local COLS = { { "b", 172 }, { "s", 214 }, { "u", 256 }, { "v", 298 } }
+local COLS = { { "b", 112 }, { "s", 150 }, { "u", 188 }, { "v", 226 } }   -- fix 757: room for the gold on the right
 local function statsBuild(panel)
     stats = CreateFrame("Frame", "OneMoreQuestFlipStats", panel or UIParent)
     if panel and panel.box and stats.SetFrameLevel then stats:SetFrameLevel(panel.box:GetFrameLevel() + 2) end
@@ -1165,9 +1186,9 @@ local function statsBuild(panel)
     end
     local hd = CreateFrame("Frame", nil, stats)
     hd:SetPoint("TOPLEFT", 0, -y); hd:SetSize(380, 16)
-    hd.name = col(hd, 16, 150, "LEFT", "GameFontDisableSmall")
+    hd.name = col(hd, 16, 100, "LEFT", "GameFontDisableSmall")
     for _, c in ipairs(COLS) do hd[c[1]] = col(hd, c[2], 40, "RIGHT", "GameFontDisableSmall") end
-    hd.g = col(hd, 300, 64, "RIGHT", "GameFontDisableSmall")
+    hd.g = col(hd, 266, 98, "RIGHT", "GameFontDisableSmall")
     hd.b:SetText("bought"); hd.s:SetText("sold"); hd.u:SetText("back"); hd.v:SetText("vendor"); hd.g:SetText("gold")
     stats.colHead = hd
     y = y + 18
@@ -1179,10 +1200,11 @@ local function statsBuild(panel)
         r:EnableMouse(true)
         r.bg = r:CreateTexture(nil, "BACKGROUND"); r.bg:SetPoint("TOPLEFT", 14, 0); r.bg:SetSize(352, 17)
         r.bg:SetColorTexture(0.11, 0.122, 0.153, 1)
-        r.name = col(r, 18, 150, "LEFT")
+        r.name = col(r, 18, 96, "LEFT")
+        if r.name.SetWordWrap then r.name:SetWordWrap(false) end
         r.name:SetPoint("TOPLEFT", 18, -3)
         for _, c in ipairs(COLS) do r[c[1]] = col(r, c[2], 40, "RIGHT"); r[c[1]]:SetPoint("TOPLEFT", c[2], -3) end
-        r.g = col(r, 300, 64, "RIGHT"); r.g:SetPoint("TOPLEFT", 300, -3)
+        r.g = col(r, 266, 96, "RIGHT"); r.g:SetPoint("TOPLEFT", 266, -3)
         r:SetScript("OnEnter", function(self)
             local d = self.data
             if not (d and GameTooltip) then return end
@@ -1761,7 +1783,7 @@ local function makeRow(i)
         if x.kind == "gap" then
             GameTooltip:AddLine(string.format("%d offers; %d under %s, sell at %s", x.n or 0, #(x.offers or {}), money(x.maxBuy or 0), money(x.sell or 0)), 1, 0.82, 0)
         elseif x.kind == "single" then
-            GameTooltip:AddLine(string.format("the only offer, at most " .. (F.VENDOR_FACTOR or 1.25) .. "x the vendor price (%s)", money(x.maxBuy or 0)), 1, 0.82, 0)
+            GameTooltip:AddLine(string.format("the only offer, at most %s", money(x.maxBuy or 0)), 1, 0.82, 0)
         else
             GameTooltip:AddLine(string.format("only %d offers, %d of them under 1 gold", x.n or 0, #(x.offers or {})), 1, 0.82, 0)
         end
@@ -1914,7 +1936,7 @@ function F.Paint()
                 r.bottom:SetText("+" .. money(x.profit or 0))
             elseif x.kind == "single" then
                 r.sub:SetText(st or "the only offer")
-                r.bottom:SetText("<= " .. (F.VENDOR_FACTOR or 1.25) .. "x vendor")
+                r.bottom:SetText("<= " .. money(x.maxBuy or 0))
             else
                 r.sub:SetText(st or string.format("only %d on offer", x.n or 0))
                 r.bottom:SetText("under 1g")
@@ -2115,6 +2137,7 @@ ev:SetScript("OnEvent", function(_, event, a1)
             for i = #list, 1, -1 do list[i] = nil end
             F.bought = { n = 0, spent = 0, worth = 0 }
         elseif event == "GET_ITEM_INFO_RECEIVED" or event == "ITEM_KEY_ITEM_INFO_RECEIVED" then
+            if event == "GET_ITEM_INFO_RECEIVED" and OMQDB and OMQDB.flip and OMQDB.flip.lootWait then F.CleanLoot() end   -- fix 756
             if run and (run.waiting or 0) > 0 and not considerAt then considerAt = now() + F.REBUILD_GAP end
         elseif not run then return
         elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then F.OnBrowse()
