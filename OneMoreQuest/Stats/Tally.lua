@@ -1373,10 +1373,28 @@ function T.CitySecs(b)
     return n
 end
 
+-- played seconds split into AFK, capital city time and the rest (decision 763: also used by the XP bar table)
+-- AFK is capped at the played time, city time at what is left, so the rest never goes below 0
+function T.PlayedSplit(total, b)
+    total = math.max(0, total or 0)
+    b = type(b) == "table" and b or {}
+    local afk = math.min(num(b.afk) and b.afk or 0, total)
+    local city = math.min(T.CitySecs(b), total - afk)
+    return afk, city, total - afk - city
+end
+
+-- the tally of any character of this account (nil when it has none); never creates one
+function T.BookOf(guid)
+    if guid and guid == myGuid() then return book() end
+    local all = type(OMQDB) == "table" and OMQDB.tally
+    local b = type(all) == "table" and all[guid]
+    if type(b) == "table" and b.v == VERSION then return b end
+    return nil
+end
+
 -- the lines for /omq played; total = the game's played seconds
 function T.PlayedLines(total, b)
-    local afk = math.min(b.afk or 0, total)
-    local city = math.min(T.CitySecs(b), total - afk)
+    local afk, city = T.PlayedSplit(total, b)
     local function pct(v) return total > 0 and math.floor(v / total * 100 + 0.5) or 0 end
     local lines = { string.format("played %s - AFK %s (%d %%) - cities %s (%d %%) = playing %s",
         T.Dur(total), T.Dur(afk), pct(afk), T.Dur(city), pct(city), T.Dur(total - afk - city)) }
