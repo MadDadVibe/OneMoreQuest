@@ -1074,8 +1074,25 @@ function F.Lost(c)
     return d.lost or 0
 end
 
+-- fix 764: once after the loot cleanup, no record holds more pieces than were bought and not sold, vendored or
+-- disenchanted (the loot adoptions left 181 pieces of one item in the records)
+function F.FixOwned()
+    local d = db()
+    if d.ownedFixed or not d.lootClean then return end
+    d.ownedFixed = true
+    local its = items()
+    for id, x in pairs(d.owned) do
+        local it = its[id]
+        if it and (x.n or 1) > 2 * (F.MAX_HELD or 2) then   -- only the impossible ones (old loot flips stay, decision 742)
+            local left = (it.b or 0) - (it.s or 0) - (it.v or 0) - (it.d or 0)
+            if left <= 0 then d.owned[id] = nil
+            elseif (x.n or 1) > left then x.n = left end
+        end
+    end
+end
 -- what is still out (bags and auction house): the price paid and the vendor price of every open piece
 function F.OpenPieces()
+    F.FixOwned()
     local spent, vend, n = 0, 0, 0
     for id, x in pairs(db().owned) do
         if stamp() - (x.t or 0) <= F.KEEP_DAYS * 86400 then
@@ -1110,7 +1127,7 @@ function F.Rows()
     return {
         { "Bought", string.format("%d for %s", t.b, money(t.spent)) },
         { "Sold", string.format("%d for %s", t.s, money(t.got)) },
-        { "Profit", signed(t.profit) .. " (on " .. money(t.cost) .. " sold)" },   -- fix 758: the three main numbers first, one line
+        { "Profit", signed(t.profit) .. " (paid " .. money(t.cost) .. ")" },   -- fix 758; fix 764: what the sold ones cost
         { "Came back unsold", tostring(t.u) },
         { "To the vendor / disenchanted", t.v .. " / " .. t.d },   -- decision 745
         { "Lost to vendor / disenchant", money(math.max(0, t.lost)) .. (t.lost < 0 and (" (" .. signed(-t.lost) .. ")") or "") },
@@ -2258,6 +2275,55 @@ function F.ApplyCfg()
     for _, s in ipairs(F.SUFFIXES) do if not F.SuffixOn(s.key) then F.OFF[s.key] = true end end
 end
 
+-- decision 763 (MadDadVibe): an alert card when done flips in the bags should go to the vendor (not posted for the
+-- hours, or unsold too long, and worth more at the vendor); gone while a merchant is open (the vendor helper sells them)
+F.KEY_VENDOR = "flip:vendor"
+function F.VendorDue()
+    local out, total = {}, 0
+    local C = C_Container
+    if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return out, 0 end
+    for bag = 0, (OMQ.LastBag and OMQ.LastBag()) or 4 do
+        for slot = 1, C.GetContainerNumSlots(bag) or 0 do
+            local it = C.GetContainerItemInfo(bag, slot)
+            local id = it and it.itemID
+            if id and not isSecret(id) and F.Gone(id) and F.ExitWay(id) == "vendor" then
+                local v = (vendorOf(id) or 0) * (tonumber(it.stackCount) or 1)
+                out[#out + 1] = { id = id, link = it.hyperlink, name = it.itemName, value = v }
+                total = total + v
+            end
+        end
+    end
+    return out, total
+end
+function F.VendorCard()
+    if _G.MerchantFrame and _G.MerchantFrame.IsShown and _G.MerchantFrame:IsShown() then return nil end
+    local list, total = F.VendorDue()
+    if #list == 0 then return nil end
+    local lines = {}
+    for i, e in ipairs(list) do
+        if i > 10 then lines[#lines + 1] = string.format("... and %d more", #list - 10); break end
+        lines[#lines + 1] = (e.link or e.name or ("item " .. e.id)) .. "  " .. money(e.value)
+    end
+    lines[#lines + 1] = "Done flips (unsold too long or not posted again in time) - worth more at the vendor."
+    return {
+        key = F.KEY_VENDOR, tag = "FLIPS", icon = "Interface\\Icons\\INV_Misc_Coin_02", color = { 0.89, 0.71, 0.29 },
+        title = string.format("Vendor: %d done flip%s", #list, #list == 1 and "" or "s"),
+        text = string.format("Vendor: %d done flip%s", #list, #list == 1 and "" or "s"),
+        sub = money(total) .. " at the vendor - sell them at a merchant",
+        tipLines = lines,
+        open = function() return "keep" end,
+    }
+end
+function F.VendorCheck()
+    if InCombatLockdown and InCombatLockdown() then return "keep" end
+    return { F.VendorCard() }
+end
+function F.RegisterAlert()
+    if F.alertDone or not (OMQ.Alerts and OMQ.Alerts.Register) then return end
+    F.alertDone = true
+    OMQ.Alerts:Register({ id = "flipvendor", name = "Flips: done flips to sell at the vendor", check = F.VendorCheck })
+end
+
 ----------------------------------------------------------------------
 -- Events
 ----------------------------------------------------------------------
@@ -2272,7 +2338,7 @@ end
 local considerAt = nil
 ev:SetScript("OnEvent", function(_, event, a1)
     local ok, err = pcall(function()
-        if event == "PLAYER_LOGIN" then F.ApplyCfg(); F.MigrateHours(); return       -- fix 759: the options
+        if event == "PLAYER_LOGIN" then F.ApplyCfg(); F.MigrateHours(); F.RegisterAlert(); return       -- fix 759: the options
         elseif event == "BAG_UPDATE_DELAYED" then F.CheckGone(); return   -- decision 745
         elseif event == "AUCTION_HOUSE_CLOSED" then
             if run then F.Finish("the auction house closed") end
