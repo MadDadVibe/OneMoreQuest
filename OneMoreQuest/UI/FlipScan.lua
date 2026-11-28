@@ -737,6 +737,7 @@ end
 -- that brings at least REPOST_GAIN over what it cost, after the cut - else it waits in the bags.
 ----------------------------------------------------------------------
 F.SELL_FACTOR = 3        -- fix 730 (MadDadVibe): a flip is posted at up to 3 times its price (decision 725: 2)
+F.SELL_MIN_CAP = 9900    -- fix 751 (MadDadVibe): a cap under 1 gold is raised to 99 silver (cheap cloth not sold for a few silver)
 F.REPOSTS = 5
 F.REPOST_GAIN = 1.2
 local function items()
@@ -1242,6 +1243,7 @@ function F.SellPrice(e, offers)
         price = nextP - 1
     elseif paid and paid > 0 then
         price = paid * F.SELL_FACTOR + F.JewelBonus(e.itemID)   -- fix 734: rings and amulets 1 gold more
+        if F.SELL_MIN_CAP and price < F.SELL_MIN_CAP then price = F.SELL_MIN_CAP end   -- fix 751: cap never under 99s
         if nextP and nextP - 1 < price then price = nextP - 1 end
     else
         price = nextP or false
