@@ -1151,11 +1151,175 @@ function F.ShowHistory()
     hist:Show()
     return true
 end
+----------------------------------------------------------------------
+-- fix 752 (MadDadVibe): /omq flip mark lists green BoE gear in the bags that is no flip; a left click makes it one,
+-- its vendor price is what it cost. Then the rules of bought flips: 3x sell cap (at least 99s), 48 h, history, stats.
+-- A flip is kept per item, so a click marks every piece of that item in the bags (one record per piece).
+----------------------------------------------------------------------
+function F.Unmarked()
+    local C = C_Container
+    local out, byId = {}, {}
+    if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return out end
+    local instant = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    local last = (OMQ.LastBag and OMQ.LastBag()) or 4
+    for bag = 0, last do
+        for slot = 1, C.GetContainerNumSlots(bag) or 0 do
+            local it = C.GetContainerItemInfo(bag, slot)
+            local id = it and it.itemID
+            if id and not isSecret(id) and not isSecret(it.quality) and not F.Owns(id) and not F.Gone(id) then
+                local classID, equipLoc
+                if instant then
+                    local ok, _, _, _, el, _, cid = pcall(instant, id)
+                    if ok then classID, equipLoc = cid, el end
+                end
+                if F.LootGreen(it, classID, equipLoc, false) then
+                    local e = byId[id]
+                    if e then e.n = e.n + 1
+                    else
+                        local f = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+                        local name, lvl
+                        if f then
+                            local ok, n, _, _, _, l = pcall(f, it.hyperlink or id)
+                            if ok then name, lvl = n, l end
+                        end
+                        e = { id = id, bag = bag, slot = slot, link = it.hyperlink, icon = it.iconFileID, n = 1,
+                              name = name or it.itemName or ("item " .. id), level = lvl, vendor = vendorOf(id) or 0 }
+                        byId[id] = e
+                        out[#out + 1] = e
+                    end
+                end
+            end
+        end
+    end
+    table.sort(out, function(a, b)
+        if (a.level or 0) ~= (b.level or 0) then return (a.level or 0) > (b.level or 0) end
+        return tostring(a.name) < tostring(b.name)
+    end)
+    return out
+end
+function F.Mark(e)
+    if not (e and type(e.id) == "number") or F.Owns(e.id) then return 0 end
+    local o = db().owned
+    if o[e.id] and F.Gone(e.id) then o[e.id] = nil end      -- a done flip of before starts again
+    for _ = 1, e.n or 1 do
+        F.lastName = e.name
+        F.Remember(e.id, e.vendor or 0, nil, F.LinkSuffix(e.link))
+        F.lastName = nil
+    end
+    if o[e.id] then o[e.id].manual = true end
+    return e.n or 1
+end
+
+local mark
+F.MARK_ROWS = 14
+F.markOffset = 0
+local function markBuild()
+    local ok, f = pcall(CreateFrame, "Frame", "OneMoreQuestFlipMark", UIParent, "BasicFrameTemplateWithInset")
+    if not ok or not f then return end
+    mark = f
+    f:SetSize(380, 70 + F.MARK_ROWS * 20)
+    f:SetPoint("CENTER", 60, 0)
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:SetFrameStrata("HIGH")
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOP", 0, -5)
+    title:SetText("One More Quest - mark as flip")
+    local box = CreateFrame("Frame", nil, f)
+    box:SetPoint("TOPLEFT", 12, -30)
+    box:SetSize(356, F.MARK_ROWS * 20)
+    box:EnableMouseWheel(true)
+    box:SetScript("OnMouseWheel", function(_, d)
+        F.markOffset = math.max(0, F.markOffset - d)
+        F.PaintMark()
+    end)
+    f.rows = {}
+    for i = 1, F.MARK_ROWS do
+        local r = CreateFrame("Button", nil, box)
+        r:SetSize(356, 20)
+        r:SetPoint("TOPLEFT", 0, -(i - 1) * 20)
+        r:RegisterForClicks("LeftButtonUp")
+        r:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        r.icon = r:CreateTexture(nil, "ARTWORK")
+        r.icon:SetSize(18, 18)
+        r.icon:SetPoint("LEFT", 1, 0)
+        r.name = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.name:SetPoint("LEFT", 24, 0)
+        r.name:SetWidth(230)
+        r.name:SetJustifyH("LEFT")
+        r.res = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.res:SetPoint("RIGHT", -2, 0)
+        r.res:SetJustifyH("RIGHT")
+        r:SetScript("OnClick", function(self)
+            local d = self.data
+            if not d then return end
+            local n = F.Mark(d)
+            if n > 0 then OMQ:Print(string.format("%s%s is a flip now (cost %s each).", d.link or d.name, n > 1 and (" x" .. n) or "", money(d.vendor or 0))) end
+            if GameTooltip then GameTooltip:Hide() end
+            F.PaintMark()
+        end)
+        r:SetScript("OnEnter", function(self)
+            local d = self.data
+            if not (d and GameTooltip) then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            local shown = false
+            if GameTooltip.SetBagItem then shown = pcall(GameTooltip.SetBagItem, GameTooltip, d.bag, d.slot) end
+            if not shown and d.link and GameTooltip.SetHyperlink then pcall(GameTooltip.SetHyperlink, GameTooltip, d.link) end
+            GameTooltip:AddLine("Left click: mark as flip (cost = vendor price)", 0.3, 1, 0.3)
+            GameTooltip:Show()
+        end)
+        r:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+        f.rows[i] = r
+    end
+    f.empty = box:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    f.empty:SetPoint("TOPLEFT", 2, -2)
+    f.empty:SetText("no green BoE gear in the bags that is not a flip")
+    local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    hint:SetPoint("BOTTOMLEFT", 16, 12)
+    hint:SetText("Left click: mark as flip   Mouse wheel: scroll")
+    f:SetScript("OnEvent", function() if f:IsShown() then F.PaintMark() end end)
+    pcall(f.RegisterEvent, f, "BAG_UPDATE_DELAYED")
+    if UISpecialFrames then table.insert(UISpecialFrames, "OneMoreQuestFlipMark") end
+end
+function F.PaintMark()
+    if not mark then return end
+    local rows = F.Unmarked()
+    F.markOffset = math.max(0, math.min(F.markOffset, math.max(0, #rows - F.MARK_ROWS)))
+    for i, r in ipairs(mark.rows) do
+        local d = rows[i + F.markOffset]
+        r.data = d
+        if d then
+            r.icon:SetTexture(d.icon)
+            r.name:SetText("|cff1eff00" .. tostring(d.name) .. "|r" .. ((d.n or 1) > 1 and (" x" .. d.n) or "") .. (d.level and ("  |cffaaaaaalvl " .. d.level .. "|r") or ""))
+            r.res:SetText(money(d.vendor or 0))
+            r:Show()
+        else r:Hide() end
+    end
+    mark.empty:SetShown(#rows == 0)
+    return rows
+end
+function F.ShowMark()
+    if not mark then markBuild() end
+    if not mark then return false end
+    F.markOffset = 0
+    F.PaintMark()
+    mark:Show()
+    return true
+end
 OMQ:RegisterCommand("flip", function(arg)
+    if arg == "mark" then                                  -- fix 752
+        if not F.ShowMark() then
+            for _, e in ipairs(F.Unmarked()) do OMQ:Print("  " .. tostring(e.name) .. " (" .. money(e.vendor or 0) .. ")") end
+        end
+        return
+    end
     if arg == "chat" or not F.ShowHistory() then
         for _, l in ipairs(F.History()) do OMQ:Print(l) end
     end
-end, "item flips: window with what was bought, sold, came back, deposits, gold spent and earned (chat = as text)")
+end, "item flips: window with what was bought, sold, came back, deposits, gold spent and earned (chat = as text, mark = green bag items to mark as flip)")
 
 -- decision 726 (MadDadVibe): a flip is posted for 2 hours (short) by day, for 8 hours from 23:59 German time until
 -- 8:00 the next morning. German time = UTC+1, UTC+2 from the last Sunday of March to the last Sunday of October (1:00 UTC).
