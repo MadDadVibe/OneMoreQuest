@@ -129,7 +129,7 @@ local function reqLevelOf(id)
     if ok and type(lvl) == "number" and not isSecret(lvl) then return lvl end
 end
 -- fix 744 (MadDadVibe): never buy a flip for more than twice its vendor price
-F.VENDOR_FACTOR = 2
+F.VENDOR_FACTOR = 1.5     -- fix 747 (MadDadVibe): at most 1.5x the vendor price (fix 744: 2x)
 local function vendorOf(id)
     local f = (C_Item and C_Item.GetItemInfo) or GetItemInfo
     if not f then return nil end
@@ -258,12 +258,12 @@ function F.Judge(offers, method, level, vendor)
     elseif m.few then
         kind, maxBuy = "few", F.CHEAP - 1
     elseif m.single and n == 1 and vendor then             -- decision 746: the only offer, at most 2x the vendor price
-        kind, maxBuy = "single", vendor * 2
+        kind, maxBuy = "single", math.floor(vendor * (F.VENDOR_FACTOR or 1.5))   -- fix 747: 1.5x
     else
         return nil
     end
     maxBuy = math.min(maxBuy, F.MaxBuy(level))            -- fix 724, 733: 1.50 gold from level 40
-    if vendor and F.VENDOR_FACTOR then maxBuy = math.min(maxBuy, vendor * F.VENDOR_FACTOR) end   -- fix 744
+    if vendor and F.VENDOR_FACTOR then maxBuy = math.min(maxBuy, math.floor(vendor * F.VENDOR_FACTOR)) end   -- fixes 744, 747
     local buy, cost, profit = {}, 0, 0
     for _, o in ipairs(offers) do
         if not o.mine and o.qty == 1 and o.unit <= maxBuy then
@@ -1362,7 +1362,7 @@ local function makeRow(i)
         if x.kind == "gap" then
             GameTooltip:AddLine(string.format("%d offers; %d under %s, sell at %s", x.n or 0, #(x.offers or {}), money(x.maxBuy or 0), money(x.sell or 0)), 1, 0.82, 0)
         elseif x.kind == "single" then
-            GameTooltip:AddLine(string.format("the only offer, at most 2x the vendor price (%s)", money(x.maxBuy or 0)), 1, 0.82, 0)
+            GameTooltip:AddLine(string.format("the only offer, at most 1.5x the vendor price (%s)", money(x.maxBuy or 0)), 1, 0.82, 0)
         else
             GameTooltip:AddLine(string.format("only %d offers, %d of them under 1 gold", x.n or 0, #(x.offers or {})), 1, 0.82, 0)
         end
@@ -1505,7 +1505,7 @@ function F.Paint()
                 r.bottom:SetText("+" .. money(x.profit or 0))
             elseif x.kind == "single" then
                 r.sub:SetText(st or "the only offer")
-                r.bottom:SetText("<= 2x vendor")
+                r.bottom:SetText("<= 1.5x vendor")
             else
                 r.sub:SetText(st or string.format("only %d on offer", x.n or 0))
                 r.bottom:SetText("under 1g")
