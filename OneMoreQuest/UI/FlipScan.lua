@@ -44,7 +44,17 @@ F.METHODS = {
     -- decision 731: the same for plate armor of level 40-42 only (one browse: armor, subcategory plate)
     gap3plate = { nth = 3, ratio = 2, few = false, label = "3rd 2x, plate 40-42", minLevel = 40, maxLevel = 42,
                   only = { c = 4, s = 4 } },
+    -- decision 746 (MadDadVibe): always the 2nd cheapest (>= 2x the cheapest; only the cheapest is bought); a single
+    -- offer is bought when it costs at most twice the vendor price ("the perfect flip"); six level brackets
+    b10 = { nth = 2, ratio = 2, single = true, label = "2nd 2x, lvl 10-19", minLevel = 10, maxLevel = 19 },
+    b20 = { nth = 2, ratio = 2, single = true, label = "2nd 2x, lvl 20-29", minLevel = 20, maxLevel = 29 },
+    b30 = { nth = 2, ratio = 2, single = true, label = "2nd 2x, lvl 30-39", minLevel = 30, maxLevel = 39 },
+    b40 = { nth = 2, ratio = 2, single = true, label = "2nd 2x, lvl 40-49", minLevel = 40, maxLevel = 49 },
+    b50 = { nth = 2, ratio = 2, single = true, label = "2nd 2x, lvl 50-59", minLevel = 50, maxLevel = 59 },
+    plate = { nth = 2, ratio = 2, single = true, label = "2nd 2x, plate 40-42", minLevel = 40, maxLevel = 42,
+              only = { c = 4, s = 4 } },
 }
+F.BUTTONS = { "b10", "b20", "b30", "b40", "b50", "plate" }   -- decision 746: the six buttons (the older methods stay for the tests)
 F.CUT = 0.05              -- the auction house's cut of a sale
 -- the suffixes as the game names them, lower case ("Ä" stays as it is: string.lower leaves non-ASCII bytes alone)
 F.SUFFIXES = {
@@ -186,7 +196,7 @@ end
 function F.Consider(e)
     if e.match ~= nil then return e.match end
     local m = F.METHODS[(run and run.method) or "flip"]
-    if (e.price or 0) > F.MAX_BUY_HIGH or not ((e.qty or 0) >= m.nth or (m.few and (e.price or 0) < F.CHEAP)) then e.match = false; return false end
+    if (e.price or 0) > F.MAX_BUY_HIGH or not ((e.qty or 0) >= m.nth or (m.few and (e.price or 0) < F.CHEAP) or (m.single and (e.qty or 0) >= 1)) then e.match = false; return false end
     local name, q = nameOf(e)
     if not name then
         if not e.askedAt then
@@ -247,6 +257,8 @@ function F.Judge(offers, method, level, vendor)
         maxBuy = math.floor(sell / m.ratio)
     elseif m.few then
         kind, maxBuy = "few", F.CHEAP - 1
+    elseif m.single and n == 1 and vendor then             -- decision 746: the only offer, at most 2x the vendor price
+        kind, maxBuy = "single", vendor * 2
     else
         return nil
     end
@@ -786,7 +798,7 @@ local function newRec() return { b = 0, s = 0, u = 0, v = 0, spent = 0, got = 0,
 local function addRec(r, kind, c, cost, fee)
     c = tonumber(c) or 0
     if kind == "b" then r.b, r.spent = r.b + 1, r.spent + c
-    elseif kind == "s" then r.s, r.got, r.cost = r.s + 1, r.got + c, r.cost + (cost or 0)
+    elseif kind == "s" then r.s, r.got, r.cost, r.rev = r.s + 1, r.got + c, r.cost + (cost or 0), (r.rev or 0) + c
     elseif kind == "u" then r.u, r.fees = r.u + 1, r.fees + (tonumber(fee) or 0)
     elseif kind == "v" then r.v, r.got, r.cost = r.v + 1, r.got + c, r.cost + (cost or 0)
     elseif kind == "d" then r.d, r.got, r.cost = (r.d or 0) + 1, r.got + c, r.cost + (cost or 0) end
@@ -809,6 +821,63 @@ function F.Stat(id, kind, c, name, cost, fee)
     e[k] = e[k] or newRec()
     addRec(e.all, kind, c, cost, fee)
     addRec(e[k], kind, c, cost, fee)
+    F.MigrateBrackets()                                    -- decision 746: per level bracket of the buttons
+    d.brk = d.brk or {}
+    for _, b in ipairs(F.BracketsOf(id)) do
+        d.brk[b] = d.brk[b] or newRec()
+        addRec(d.brk[b], kind, c, cost, fee)
+    end
+end
+-- decision 746: the buttons an item belongs to by its required level (plate 40-42 counts in both of its brackets)
+function F.BracketsOf(id)
+    local out = {}
+    local lvl = reqLevelOf(id)
+    if type(lvl) ~= "number" then return out end
+    local c, sc = classOf(id)
+    for _, key in ipairs(F.BUTTONS) do
+        local m = F.METHODS[key]
+        if m and lvl >= (m.minLevel or 0) and lvl <= (m.maxLevel or 999)
+           and (not m.only or (c == m.only.c and sc == m.only.s)) then out[#out + 1] = key end
+    end
+    return out
+end
+-- once: the whole per-item history from before into the brackets (the level is known per item)
+function F.MigrateBrackets()
+    local d = db()
+    if d.brkDone then return end
+    d.brkDone = true
+    d.brk = d.brk or {}
+    for id, it in pairs(items()) do
+        for _, b in ipairs(F.BracketsOf(id)) do
+            local r = d.brk[b] or newRec()
+            d.brk[b] = r
+            for _, f in ipairs({ "b", "s", "u", "v", "d", "spent", "got", "cost", "fees" }) do r[f] = (r[f] or 0) + (it[f] or 0) end
+            r.rev = (r.rev or 0) + ((it.s or 0) > 0 and (it.got or 0) or 0)   -- before: the sold pieces' money (vendor included)
+        end
+    end
+end
+function F.BracketRec(key)
+    F.MigrateBrackets()
+    local d = db()
+    return (d.brk and d.brk[key]) or newRec()
+end
+-- the track record of one button, for its tooltip
+function F.BracketTip(key)
+    local r = F.BracketRec(key)
+    return string.format("bought %d, sold %d, revenue %s", r.b, r.s, money(r.rev or 0)),
+        string.format("back unsold %d, vendor %d, disenchanted %d, profit %s", r.u, r.v, r.d or 0, F.Signed(r.got - r.cost - r.fees))
+end
+function F.BracketRows()
+    local out = {}
+    for _, key in ipairs(F.BUTTONS) do
+        local r = F.BracketRec(key)
+        local profit = r.got - r.cost - r.fees
+        local done = r.s + r.v + (r.d or 0)
+        out[#out + 1] = { key = key, name = F.METHODS[key].label,
+            text = string.format("bought %d, sold %d, back %d, vendor/DE %d", r.b, r.s, r.u, r.v + (r.d or 0)),
+            result = "revenue " .. money(r.rev or 0) .. ", " .. F.Signed(profit), gain = done > 0 and profit or nil }
+    end
+    return out
 end
 -- the last flips that came back too often and went to the vendor
 F.VENDOR_LOG = 10
@@ -942,6 +1011,8 @@ function F.History()
     for i = 1, math.min(15, #rows) do out[#out + 1] = "  " .. rows[i].name .. ": " .. rows[i].text .. ", " .. rows[i].result end
     if #rows > 15 then out[#out + 1] = string.format("  ... and %d more items", #rows - 15) end
     if #rows == 0 then out[#out + 1] = "  nothing bought with item flips yet" end
+    out[#out + 1] = "by level bracket:"                    -- decision 746
+    for _, r in ipairs(F.BracketRows()) do out[#out + 1] = "  " .. r.name .. ": " .. r.text .. ", " .. r.result end
     local sr = F.SuffixRows()                              -- decision 743
     if #sr > 0 then out[#out + 1] = "by suffix:" end
     for _, r in ipairs(sr) do out[#out + 1] = "  " .. r.name .. (r.text ~= "" and (": " .. r.text) or "") .. (r.result ~= "" and (", " .. r.result) or "") end
@@ -970,7 +1041,7 @@ local function histBuild()
     view:SetSize(90, 20)
     view:SetPoint("TOPRIGHT", -12, -28)
     view:SetScript("OnClick", function()
-        F.histView = (F.histView == "sfx") and "items" or "sfx"
+        F.histView = (F.histView == "sfx") and "brk" or (F.histView == "brk") and "items" or "sfx"   -- decision 746
         F.histOffset = 0
         F.PaintHistory()
     end)
@@ -1031,8 +1102,8 @@ function F.PaintHistory()
     local head, rows = F.Rows()
     for i, h in ipairs(head) do hist.head[i].l:SetText(h[1]); hist.head[i].v:SetText(h[2]) end
     local sfxView = F.histView == "sfx"
-    if sfxView then rows = F.SuffixRows() end
-    if hist.view then hist.view:SetText(sfxView and "Items" or "Suffixes") end
+    if sfxView then rows = F.SuffixRows() elseif F.histView == "brk" then rows = F.BracketRows() end
+    if hist.view then hist.view:SetText(sfxView and "Brackets" or (F.histView == "brk") and "Items" or "Suffixes") end
     F.histOffset = math.max(0, math.min(F.histOffset, math.max(0, #rows - F.HIST_ROWS)))
     for i, r in ipairs(hist.rows) do
         local d = rows[i + F.histOffset]
@@ -1290,6 +1361,8 @@ local function makeRow(i)
         elseif GameTooltip.SetItemByID then GameTooltip:SetItemByID(x.itemID) end
         if x.kind == "gap" then
             GameTooltip:AddLine(string.format("%d offers; %d under %s, sell at %s", x.n or 0, #(x.offers or {}), money(x.maxBuy or 0), money(x.sell or 0)), 1, 0.82, 0)
+        elseif x.kind == "single" then
+            GameTooltip:AddLine(string.format("the only offer, at most 2x the vendor price (%s)", money(x.maxBuy or 0)), 1, 0.82, 0)
         else
             GameTooltip:AddLine(string.format("only %d offers, %d of them under 1 gold", x.n or 0, #(x.offers or {})), 1, 0.82, 0)
         end
@@ -1307,7 +1380,7 @@ local function build()
     local ok, f = pcall(CreateFrame, "Frame", "OneMoreQuestFlip", UIParent, "BasicFrameTemplateWithInset")
     if not ok or not f then return end
     frame = f
-    f:SetSize(380, 180 + F.ROWS * (F.ROW_H + 2))
+    f:SetSize(380, 180 + 24 * (math.ceil(#F.BUTTONS / 2) - 2) + F.ROWS * (F.ROW_H + 2))
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
@@ -1324,14 +1397,25 @@ local function build()
     f.status = st
     local again = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     again:SetSize(110, 22)
-    again:SetPoint("TOPLEFT", 12, -112)
+    local extra = 24 * (math.ceil(#F.BUTTONS / 2) - 2)    -- decision 746: three rows of buttons
+    again:SetPoint("TOPLEFT", 12, -112 - extra)
     -- fix 724: the two methods; a click starts the search with it
     f.methods = {}
-    for i, key in ipairs({ "flip", "gap3", "gap3low", "gap3plate" }) do
+    for i, key in ipairs(F.BUTTONS) do
         local mb = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
         mb:SetSize(173, 22)                                 -- two rows of two (decision 731)
         mb:SetPoint("TOPLEFT", 12 + ((i - 1) % 2) * 179, -60 - math.floor((i - 1) / 2) * 24)
         mb:SetText(F.METHODS[key].label)
+        mb:SetScript("OnEnter", function(self)                 -- decision 746: the track record of this bracket
+            if not GameTooltip then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(F.METHODS[key].label)
+            local a, b = F.BracketTip(key)
+            GameTooltip:AddLine(a, 1, 1, 1)
+            GameTooltip:AddLine(b, 0.8, 0.8, 0.8)
+            GameTooltip:Show()
+        end)
+        mb:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
         mb:SetScript("OnClick", function()
             local ok2, err = pcall(function()
                 if run then F.Cancel() end
@@ -1363,7 +1447,7 @@ local function build()
     end)
     f.all = all
     local listFrame = CreateFrame("Frame", nil, f)
-    listFrame:SetPoint("TOPLEFT", 14, -140)
+    listFrame:SetPoint("TOPLEFT", 14, -140 - extra)
     listFrame:SetSize(348, F.ROWS * (F.ROW_H + 2))
     listFrame:EnableMouseWheel(true)
     listFrame:SetScript("OnMouseWheel", function(_, d)
@@ -1419,6 +1503,9 @@ function F.Paint()
             if x.kind == "gap" then
                 r.sub:SetText(st or string.format("%d cheap, sell at %s", #x.offers, money(x.sell or 0)))
                 r.bottom:SetText("+" .. money(x.profit or 0))
+            elseif x.kind == "single" then
+                r.sub:SetText(st or "the only offer")
+                r.bottom:SetText("<= 2x vendor")
             else
                 r.sub:SetText(st or string.format("only %d on offer", x.n or 0))
                 r.bottom:SetText("under 1g")
