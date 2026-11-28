@@ -126,7 +126,7 @@ end
 -- decision 586: everything that only matters to some classes, in one tab
 -- fix 759 (MadDadVibe): the Flip Helper's own options; the values are kept for all characters in OMQDB.flip.cfg
 local FLIP_DEFAULT = { minProfit = 5000, gap10 = 20, vendorPct = 125, maxBuy = 10000, maxBuyHigh = 15000, snackPct = 10,
-    snackAdd = 500, maxHeld = 2, sell10 = 30, sellMinCap = 9900, jewelBonus = 10000, repostGain = 20, reposts = 5,
+    snackAdd = 500, maxHeld = 2, sell10 = 30, sellMinCap = 9900, jewelBonus = 10000, repostGain = 20, unsoldHours = 16,
     expireHours = 48, dayHours = 2, nightHours = 8 }
 local FLIP_SUFFIXES = {
     { "sorcerer", "of the Sorcerer" }, { "bandit", "of the Bandit" }, { "knight", "of the Knight" }, { "beast", "of the Beast" },
@@ -179,7 +179,7 @@ local function flipItems(enabled)
         step("sellMinCap", "Minimum sell limit", 0, 50000, 100, "A sell limit under this is raised to it.", silver),
         step("jewelBonus", "Limit surcharge rings / amulets", 0, 50000, 500, "Rings and amulets may be posted this much above the sell limit.", silver),
         step("repostGain", "Relist when price x% more than buy in", 0, 200, 5, "A flip back unsold is posted again when it still brings this much more than it cost.", nil, "%"),
-        step("reposts", "Unsold rounds until the vendor", 1, 20, 1, "After this many rounds back unsold the flip goes to the vendor or is disenchanted."),
+        step("unsoldHours", "Unsold auction hours until vendor", 2, 96, 2, "The hours of all auctions of a flip that came back unsold are added up; at this many it goes to the vendor or is disenchanted (whichever brings more).", nil, "h"),
         step("expireHours", "Expires after hours without relist", 6, 168, 6, "A flip not posted again for this many hours (real time) goes to the vendor or is disenchanted.", nil, "h"),
         hours("dayHours", "Post duration day", "How long flips are posted during the day."),
         hours("nightHours", "Post duration night", "How long flips are posted at night."),

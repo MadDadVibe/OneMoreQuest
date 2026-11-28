@@ -779,6 +779,7 @@ end
 F.SELL_FACTOR = 3        -- fix 730 (MadDadVibe): a flip is posted at up to 3 times its price (decision 725: 2)
 F.SELL_MIN_CAP = 9900    -- fix 751 (MadDadVibe): a cap under 1 gold is raised to 99 silver (cheap cloth not sold for a few silver)
 F.REPOSTS = 5
+F.UNSOLD_HOURS = 16      -- decision 761 (MadDadVibe): the summed auction house hours of the unsold auctions, not the rounds
 F.REPOST_GAIN = 1.2
 local function items()
     local d = db()
@@ -813,6 +814,7 @@ function F.Result(id, sold, got, name)
         F.Release(id, name)                                -- fix 750
         local it = items()[id]
         it.cost = (it.cost or 0) + paid                    -- what the sold pieces cost
+        if x.durs then table.remove(x.durs, 1) end         -- decision 761
         x.n = (x.n or 1) - 1
         if x.n <= 0 then db().owned[id] = nil end
         return false
@@ -823,7 +825,11 @@ function F.Result(id, sold, got, name)
     it.fees = (it.fees or 0) + (x.dep or 0)                -- decision 732: the deposit of an unsold auction is lost
     x.dep = nil
     x.unsold = (x.unsold or 0) + 1
-    if x.unsold >= F.REPOSTS then x.released = true; return false end   -- to the vendor now
+    local h = x.durs and table.remove(x.durs, 1) or F.DAY_HOURS   -- decision 761: the hours this auction ran
+    x.ahHours = (x.ahHours or 0) + (tonumber(h) or 0)
+    if F.UNSOLD_HOURS then
+        if x.ahHours >= F.UNSOLD_HOURS then x.released = true; return false end   -- to the vendor now
+    elseif x.unsold >= F.REPOSTS then x.released = true; return false end
     return true
 end
 -- sold at the vendor (UI/Vendor.lua): a flip that came back too often, or one sold by hand there
@@ -843,7 +849,23 @@ function F.Vendored(id, price)
 end
 function F.Posted(id, deposit)
     local x = db().owned[id]
-    if x then x.posts, x.t, x.dep = (x.posts or 0) + 1, stamp(), tonumber(deposit) or 0 end
+    if x then
+        x.posts, x.t, x.dep = (x.posts or 0) + 1, stamp(), tonumber(deposit) or 0
+        x.durs = x.durs or {}                               -- decision 761: how long each auction runs, oldest first
+        x.durs[#x.durs + 1] = F.PostHours()
+    end
+end
+-- decision 761: once, the old records get hours for their unsold rounds (2 h each); released early ones come back
+function F.MigrateHours()
+    local d = db()
+    if d.hoursDone or not F.UNSOLD_HOURS then return end
+    d.hoursDone = true
+    for _, x in pairs(d.owned) do
+        if type(x) == "table" then
+            x.ahHours = x.ahHours or (x.unsold or 0) * 2
+            if x.released and x.ahHours < F.UNSOLD_HOURS and (x.n or 1) < 100 then x.released = nil end
+        end
+    end
 end
 -- a flip that came back: posted again only when it brings at least REPOST_GAIN times its price after the cut
 function F.Waits(id, price)
@@ -2157,7 +2179,7 @@ F.CFG = {   -- key = { default in the options' unit, how it becomes the rule }
     sellMinCap = { 9900, function(v) F.SELL_MIN_CAP = v end },
     jewelBonus = { 10000, function(v) F.JEWEL_BONUS = v end },
     repostGain = { 20, function(v) F.REPOST_GAIN = 1 + v / 100 end },
-    reposts = { 5, function(v) F.REPOSTS = v end },
+    unsoldHours = { 16, function(v) F.UNSOLD_HOURS = v end },   -- decision 761 (was: reposts, 5 rounds)
     expireHours = { 48, function(v) F.EXPIRE_HOURS = v end },
     dayHours = { 2, function(v) F.DAY_HOURS = v end },
     nightHours = { 8, function(v) F.NIGHT_HOURS = v end },
@@ -2209,7 +2231,7 @@ end
 local considerAt = nil
 ev:SetScript("OnEvent", function(_, event, a1)
     local ok, err = pcall(function()
-        if event == "PLAYER_LOGIN" then F.ApplyCfg(); return       -- fix 759: the options
+        if event == "PLAYER_LOGIN" then F.ApplyCfg(); F.MigrateHours(); return       -- fix 759: the options
         elseif event == "BAG_UPDATE_DELAYED" then F.CheckGone(); return   -- decision 745
         elseif event == "AUCTION_HOUSE_CLOSED" then
             if run then F.Finish("the auction house closed") end

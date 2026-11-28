@@ -1522,8 +1522,11 @@ function AH.ScanMail()
             local name, sold = expired and subject:match(expired), false
             if not name and soldP then name = subject:match(soldP); sold = name ~= nil end
             if name then
-                local key = subject .. "@" .. math.floor((t + (daysLeft or 0) * 86400) / 3600)
-                if not d.mails[key] then
+                local hour = math.floor((t + (daysLeft or 0) * 86400) / 3600)
+                local key = subject .. "@" .. hour
+                -- decision 761: an expired mail seen again a moment later can land in the next hour; counted once
+                local seen = d.mails[key] or (not sold and (d.mails[subject .. "@" .. (hour - 1)] or d.mails[subject .. "@" .. (hour + 1)]))
+                if not seen then
                     d.mails[key] = t
                     local id = d.names[name]
                     if not id and not sold and GetInboxItem then id = select(2, GetInboxItem(i, 1)) end
