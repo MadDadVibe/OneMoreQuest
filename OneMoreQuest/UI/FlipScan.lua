@@ -54,11 +54,13 @@ F.METHODS = {
     b50 = { nth = 2, ratio = 2, single = true, label = "lvl 50-59", minLevel = 50, maxLevel = 59 },
     plate = { nth = 2, ratio = 2, single = true, label = "plate 40-42", minLevel = 40, maxLevel = 42,
               only = { c = 4, s = 4 } },
+    -- decision 760 (MadDadVibe): "Dual Spec" - levels 38-40, Champion / Defender / Healer always looked for, Knight on plate from 38
+    dual = { nth = 2, ratio = 2, single = true, dual = true, label = "Dual Spec", minLevel = 38, maxLevel = 40 },
     -- fix 755 (MadDadVibe): "Snacks" - the same rules, but only offers close to the vendor price (F.SnackLimit), no gold cap
     snackLow = { nth = 2, ratio = 2, single = true, snack = true, label = "Snacks Low Level", minLevel = 7, maxLevel = 30 },
     snackHigh = { nth = 2, ratio = 2, single = true, snack = true, label = "Snacks High Level", minLevel = 31, maxLevel = 55 },
 }
-F.BUTTONS = { "b10", "b20", "b30", "b40", "b50", "plate", "snackLow", "snackHigh" }   -- decision 746: the six buttons (the older methods stay for the tests)
+F.BUTTONS = { "b10", "b20", "b30", "b40", "b50", "plate", "dual", "snackLow", "snackHigh" }   -- decision 746: the six buttons (the older methods stay for the tests)
 F.CUT = 0.05              -- the auction house's cut of a sale
 -- the suffixes as the game names them, lower case ("Ä" stays as it is: string.lower leaves non-ASCII bytes alone)
 F.SUFFIXES = {
@@ -77,6 +79,8 @@ F.SUFFIXES = {
 -- fix 739 (MadDadVibe): Hierophant no longer looked for; Knight only on plate armor of required level 40 and up
 F.OFF = { hierophant = true, channeler = true, champion = true, defender = true, healer = true }   -- fix 740: Channeler out too; 759
 F.KNIGHT_PLATE = 40       -- false: Knight everywhere
+F.DUAL_SUFFIX = { champion = true, defender = true, healer = true }   -- decision 760: always on in the Dual Spec profile
+F.DUAL_KNIGHT = 38        -- decision 760: Knight on plate from level 38 in Dual Spec
 F.KNIGHT_MAIL = { 10, 39 } -- fix 741 (MadDadVibe): Knight also on mail ("Schwere Ruestung") of required level 10-39
 function F.KnightFits(c, sc, level)
     if not F.KNIGHT_PLATE then return true end
@@ -238,8 +242,8 @@ function F.Consider(e)
     if m.only and not (c == m.only.c and sc == m.only.s) then e.match = false; return false end   -- decision 731
     if c == 2 and not F.WEAPONS then e.match = false; return false end   -- fix 737
     if F.NO_SLOTS and F.NO_SLOTS[select(4, ((C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant)(e.id))] then e.match = false; return false end   -- fix 749
-    if e.suffix and F.OFF[e.suffix] then e.suffix = nil end                -- fix 739
-    if e.suffix == "knight" and not F.KnightFits(c, sc, e.level) then e.suffix = nil end   -- fixes 739, 741
+    if e.suffix and F.OFF[e.suffix] and not (m.dual and F.DUAL_SUFFIX[e.suffix]) then e.suffix = nil end   -- fix 739, decision 760
+    if e.suffix == "knight" and not F.KnightFits(c, sc, e.level) and not (m.dual and c == 4 and sc == 4 and (e.level or 0) >= F.DUAL_KNIGHT) then e.suffix = nil end   -- fixes 739, 741, decision 760
     if e.suffix and c == 2 and not (F.CASTER[e.suffix] and F.WEAPON_KINDS[sc]) then e.suffix = nil end   -- fixes 723, 729
     e.match = (e.suffix ~= nil and (q == nil or q == 2)) and true or false
     return e.match
