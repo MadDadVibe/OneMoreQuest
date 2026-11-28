@@ -1054,11 +1054,11 @@ function F.Rows()
     return {
         { "Bought", string.format("%d for %s", t.b, money(t.spent)) },
         { "Sold", string.format("%d for %s", t.s, money(t.got)) },
+        { "Profit", signed(t.profit) .. " (on " .. money(t.cost) .. " sold)" },   -- fix 758: the three main numbers first, one line
         { "Came back unsold", tostring(t.u) },
         { "To the vendor / disenchanted", t.v .. " / " .. t.d },   -- decision 745
         { "Lost to vendor / disenchant", money(math.max(0, t.lost)) .. (t.lost < 0 and (" (" .. signed(-t.lost) .. ")") or "") },
         { "Deposits lost (unsold)", money(t.fees) },
-        { "Earned with flips", signed(t.profit) .. " (on " .. money(t.cost) .. " of sold pieces)" },
         { "Still out (bags / AH)", string.format("%s (%d pieces)", money(t.open), t.openN) },
         { "Still out at the vendor", money(t.openVendor) },
     }
@@ -1163,6 +1163,7 @@ local function statsBuild(panel)
         l:SetTextColor(0.95, 0.82, 0.48)
         local v = stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         v:SetPoint("TOPLEFT", 176, -4 - (i - 1) * 16); v:SetWidth(188); v:SetJustifyH("LEFT")
+        if v.SetWordWrap then v:SetWordWrap(false) end      -- fix 758: never into the next line
         stats.head[i] = { l = l, v = v }
     end
     local y = 4 + 9 * 16 + 10
